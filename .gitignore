@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+.venv/
+venv/
+.DS_Store
+
+index/
+logos/
+*.faiss
+*.jsonl
+.idea/
+.vscode/
