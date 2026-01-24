@@ -1,6 +1,6 @@
 .env
 index/
-logos/
+logos_test/
 __pycache__/
 *.pyc
 *.DS_Store

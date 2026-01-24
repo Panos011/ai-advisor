@@ -142,7 +142,7 @@ for path in PATHS:
 
     print("TOTAL TOOL LINKS FOUND:", len(toollinks))
 
-with open(OUTPUT_CSV, "a", newline="", encoding="utf-8") as csvfile:
+with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as csvfile:
     fieldnames = [
         "Name",
         "Source_URL",
