@@ -1,0 +1,52 @@
+name: Weekly data refresh
+
+on:
+  schedule:
+    - cron: "0 5 * * MON"  # every Monday at 05:00
+  workflow_dispatch: # allow manual run
+
+permissions: 
+  contents: write # needed so the action can commit back
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+      steps:
+        - name: Checkout
+          uses: actions/checkout@v4
+
+        - name: Set up Python
+          uses: actions/setup-python@v5
+          with:
+            python-version: "3.11"
+
+        - name: Cache pip 
+          uses: actions/cache@v4
+          with:
+            path: ~/.cache/pip
+            key: ${{runner.os}}-pip-${{ hashFiles('**/requirements.txt') }}
+            restore-keys: |
+             ${{ runner.os }}-pip-
+        - name: Install deps
+         run: |
+           pip install -r requirements.txt
+
+        - name: Run scraper ->AI_tools.csv
+          run: | 
+           python Data_Collection.py
+        - name: Clean and build embeddings CSV
+          run: | 
+           python Data_Cleaning.py 
+        - name: Build FAISS index (OpenAI embeddings)
+          run: |
+            python Index.py
+        - name: Commit and push updated data
+          run: |
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add AI_tools.csv Clean_AI_tools.csv Embeddings_AI_tools.csv index/
+            git commit -m "Weekly data refresh" || echo "No changes to commit"
+            git push
