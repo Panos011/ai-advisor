@@ -64,8 +64,6 @@ def fetch(url, tries=4):
 def get_category_slugs() -> list[str]:
     try:
         r = fetch(f"{URL}/ai-tools")
-        r = session.get(f"{URL}/ai-tools", timeout=30)
-        r.raise_for_status()
         soup = BeautifulSoup(r.content, "lxml")
         slugs = set()
         for a in soup.find_all("a", href=True):
@@ -130,8 +128,6 @@ for path in PATHS:
     page = 1
     while True:
         r = fetch(f"{URL}/ai-tools/{path}?page={page}")
-        r = session.get(f"{URL}/ai-tools/{path}?page={page}", timeout=30)
-        r.raise_for_status()
         soup = BeautifulSoup(r.content, "lxml")
 
         new_on_page = 0
@@ -194,8 +190,6 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as csvfile:
 
     for url in toollinks:
         r = fetch(url)
-        r = session.get(url, timeout=30)
-        r.raise_for_status()
         soup = BeautifulSoup(r.content, "lxml")
         # ToolName
         title_el = soup.find("h1", class_="mb-0 text-2xl font-semibold text-darkBlue sm:text-[2.5rem]")
