@@ -1,6 +1,7 @@
 import json, re
 import os
 import csv
+import random
 import certifi
 import time
 import requests
@@ -14,9 +15,22 @@ URL = "https://www.futurepedia.io"
 LOGO_DIR = "logos"
 os.makedirs(LOGO_DIR, exist_ok=True)
 
+UA_POOL = [
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.1 Safari/605.1.15",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", ]
+
 headers = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.1 Safari/605.1.15",
-    "Accept-Language": "en",
+    "User-Agent": random.choice(UA_POOL),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Referer": "https://www.futurepedia.io/ai-tools",
+
 }
 session = requests.Session()
 session.verify = certifi.where()
@@ -32,8 +46,24 @@ adapter = HTTPAdapter(max_retries=retries)
 session.mount("https://", adapter)
 session.mount("http://", adapter)
 
+def fetch(url, tries=4):
+    last_err =None
+    for i in range(tries):
+        try:
+            r = session.get(url, timeout=30, allow_redirects=True)
+            if r.status_code == 403:
+                session.headers["User-Agent"] = random.coice(UA_POOL)
+                time.sleep(1.5 + i)
+                continue
+            r.raise_for_status()
+            return r
+        except requests.RequestException as e:
+            last_err = e
+            time.sleep(1.5 + i)
+    raise last_err if last_err else RuntimeError("fetch failed")
 def get_category_slugs() -> list[str]:
     try:
+        r = fetch(f"{URL}/ai-tools")
         r = session.get(f"{URL}/ai-tools", timeout=30)
         r.raise_for_status()
         soup = BeautifulSoup(r.content, "lxml")
@@ -99,6 +129,7 @@ toollinks, seen = [], set()
 for path in PATHS:
     page = 1
     while True:
+        r = fetch(f"{URL}/ai-tools/{path}?page={page}")
         r = session.get(f"{URL}/ai-tools/{path}?page={page}", timeout=30)
         r.raise_for_status()
         soup = BeautifulSoup(r.content, "lxml")
@@ -162,6 +193,7 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as csvfile:
         writer.writeheader()
 
     for url in toollinks:
+        r = fetch(url)
         r = session.get(url, timeout=30)
         r.raise_for_status()
         soup = BeautifulSoup(r.content, "lxml")
