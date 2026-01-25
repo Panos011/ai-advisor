@@ -25,6 +25,7 @@ headers = {
     "User-Agent": random.choice(UA_POOL),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
     "Cache-Control": "no-cache",
     "Pragma": "no-cache",
     "Connection": "keep-alive",
@@ -52,7 +53,7 @@ def fetch(url, tries=4):
         try:
             r = session.get(url, timeout=30, allow_redirects=True)
             if r.status_code == 403:
-                session.headers["User-Agent"] = random.coice(UA_POOL)
+                session.headers["User-Agent"] = random.choiceoice(UA_POOL)
                 time.sleep(1.5 + i)
                 continue
             r.raise_for_status()
