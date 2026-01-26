@@ -1,5 +1,4 @@
 .env
-
 logos_test/
 __pycache__/
 *.pyc
