@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      SCRAPERAPI_KEY: ${{ secrets.SCRAPERAPI_KEY }}
 
     steps:
       - name: Checkout
