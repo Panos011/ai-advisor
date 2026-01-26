@@ -1,5 +1,5 @@
 .env
-index/
+
 logos_test/
 __pycache__/
 *.pyc
