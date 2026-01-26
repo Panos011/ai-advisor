@@ -6,10 +6,11 @@ import certifi
 import time
 import requests
 from requests.adapters import HTTPAdapter
+from urllib.parse import quote_plus
 from urllib3.util.retry import Retry
 from urllib.parse import urljoin, urlsplit, urlunsplit
 from bs4 import BeautifulSoup
-
+SCRAPER_KEY = os.getenv("SCRAPERAPI_KEY")
 OUTPUT_CSV = "AI_tools.csv"
 URL = "https://www.futurepedia.io"
 LOGO_DIR = "logos"
@@ -47,20 +48,42 @@ adapter = HTTPAdapter(max_retries=retries)
 session.mount("https://", adapter)
 session.mount("http://", adapter)
 
-def fetch(url, tries=4):
-    last_err =None
+def fetch(url: str, tries: int = 4):
+    """
+    Fetch a URL via ScraperAPI if SCRAPERAPI_KEY is set, otherwise direct.
+    Retries on 403/5xx with small backoff and UA rotation.
+    """
+    last_err = None
     for i in range(tries):
         try:
-            r = session.get(url, timeout=30, allow_redirects=True)
-            if r.status_code == 403:
-                session.headers["User-Agent"] = random.choiceoice(UA_POOL)
+            # rotate UA a bit across retries
+            session.headers["User-Agent"] = random.choice(UA_POOL)
+
+            if SCRAPER_KEY:
+                # API mode (recommended). JS rendering is OFF by default.
+                # Turn it on by adding &render=true if needed.
+                wrapped = (
+                    "https://api.scraperapi.com/"
+                    f"?api_key={SCRAPER_KEY}"
+                    "&keep_headers=true"
+                    "&country_code=us"
+                    f"&url={quote_plus(url)}"
+                )
+                r = session.get(wrapped, timeout=40, allow_redirects=True)
+            else:
+                r = session.get(url, timeout=30, allow_redirects=True)
+
+            if r.status_code in (403, 429, 502, 503, 504):
                 time.sleep(1.5 + i)
                 continue
+
             r.raise_for_status()
             return r
+
         except requests.RequestException as e:
             last_err = e
             time.sleep(1.5 + i)
+
     raise last_err if last_err else RuntimeError("fetch failed")
 def get_category_slugs() -> list[str]:
     try:
