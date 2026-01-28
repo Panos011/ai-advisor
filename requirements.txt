@@ -8,3 +8,6 @@ numpy
 faiss-cpu==1.8.0.post1
 python-dotenv
 openai
+fastapi
+faiss
+pydantic
