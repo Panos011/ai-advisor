@@ -13,10 +13,6 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Copy the repository (we want .git included so LFS works)
-# If you already have a .dockerignore, make sure it does NOT ignore .git
-COPY . .
-
 # Pull LFS assets (FAISS index). If .git isn’t present, don’t fail.
 RUN [ -d .git ] && git lfs pull || echo "No .git dir; skipping git lfs pull"
 
