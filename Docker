@@ -16,6 +16,8 @@ WORKDIR /app
 # Pull LFS assets (FAISS index). If .git isn’t present, don’t fail.
 RUN [ -d .git ] && git lfs pull || echo "No .git dir; skipping git lfs pull"
 
+COPY requirements.txt .
+
 # Python deps (keep your pins: faiss-cpu==1.9.0.post1 and numpy<2)
 RUN pip install --upgrade pip \
  && pip install -r requirements.txt
