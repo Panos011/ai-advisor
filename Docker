@@ -5,24 +5,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
-# System deps: git + git-lfs so we can fetch LFS files (your FAISS index)
-RUN apt-get update \
- && apt-get install -y --no-install-recommends git git-lfs ca-certificates \
- && git lfs install \
- && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
-
-# Pull LFS assets (FAISS index). If .git isn’t present, don’t fail.
-RUN [ -d .git ] && git lfs pull || echo "No .git dir; skipping git lfs pull"
 
 COPY requirements.txt .
 
-# Python deps (keep your pins: faiss-cpu==1.9.0.post1 and numpy<2)
+# Python deps (keep the pins: faiss-cpu==1.9.0.post1 and numpy<2)
 RUN pip install --upgrade pip \
  && pip install -r requirements.txt
 
+# Copy application code (api.py, index/, etc.)
+COPY . .
+
 # Uvicorn server
-EXPOSE 8080
-ENV PORT=8080
-CMD uvicorn api:app --host 0.0.0.0 --port ${PORT}
+EXPOSE 10000
+CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "10000"]
