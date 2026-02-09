@@ -9,7 +9,7 @@ from openai import OpenAI
 # INDEX_PATH contains the veector for each tool, META_PATH contains the metadata for each tool
 INDEX_PATH = "index/tools.faiss"
 META_PATH = "index/meta.jsonl"
-EMB_MODEL = os.getenv("EMB_MODEL", "text-embedding-3-large")
+EMB_MODEL = os.getenv("EMB_MODEL", "text-embedding-3-small")
 
 # Tiny app with two doors /health and /search
 app = FastAPI(title="AI Tools Search API")
