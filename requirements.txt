@@ -1,4 +1,5 @@
 beautifulsoup4
+httpx>=0.25.2
 lxml
 requests
 certifi
@@ -8,7 +9,7 @@ numpy<2
 uvicorn[standard]
 faiss-cpu==1.9.0.post1
 python-dotenv
-openai>=1.57.0
+openai>=1.12.0
 fastapi==0.115.6
 pydantic==2.7.4
 streamlit

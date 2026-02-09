@@ -13,7 +13,7 @@ API_BASE = os.getenv("API_BASE_URL", "https://comai-recommender-1.onrender.com")
 
 @st.cache_data
 def get_toolcount():
-    r = requests.get(f"{API_BASE}/health", timeout=20)
+    r = requests.get(f"{API_BASE}/health", timeout=45)
     r.raise_for_status()
     return r.json().get("items", 0)
 
