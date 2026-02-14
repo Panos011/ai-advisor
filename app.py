@@ -8,7 +8,7 @@ def parse_categories(raw):
     return [c.strip() for c in re.split(r"[|,/]", str(raw)) if c.strip()]
 
 
-API_BASE = os.getenv("API_BASE_URL", "https://comai-recommender-1.onrender.com")
+API_BASE = os.getenv("API_BASE_URL", "https://comai-recommender-api.onrender.com")
 
 
 @st.cache_data

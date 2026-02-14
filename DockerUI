@@ -1,0 +1,21 @@
+# Dockerfile
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+# Python deps (keep the pins: faiss-cpu==1.9.0.post1 and numpy<2)
+RUN pip install --upgrade pip \
+ && pip install -r requirements.txt
+
+# Copy application code (api.py, index/, etc.)
+COPY . .
+
+# Uvicorn server
+EXPOSE 10000
+CMD streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.enableCORS false --server.enableXsrfProtection false
