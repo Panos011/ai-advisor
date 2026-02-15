@@ -1,5 +1,7 @@
 import os
 import re
+import time
+
 import requests
 import streamlit as st
 
@@ -11,14 +13,27 @@ def parse_categories(raw):
 API_BASE = os.getenv("API_BASE_URL", "https://comai-recommender-1.onrender.com")
 
 
-@st.cache_data
+@st.cache_data(ttl=3600)
 def get_toolcount():
-    r = requests.get(f"{API_BASE}/health", timeout=45)
-    r.raise_for_status()
-    return r.json().get("items", 0)
+    url = f"{API_BASE}/health"
+    for attempt in range(3):
+        try:
+            r = requests.get(url, timeout=20)
+            if r.status_code ==429:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            r.raise_for_status()
+            return r.json().get("items", 0)
+        except Exception:
+            time.sleep(0.5 * (attempt + 1))
+    return None
 
 
 count = get_toolcount()
+if count is None:
+    count_label = "many"
+else:
+    count_label = str(count)
 
 if st.sidebar.button("Clear Chat History"):
     st.session_state.messages = []
@@ -49,7 +64,7 @@ if prompt:
         st.markdown(prompt)
         st.badge(prompt)
     with st.status("Thinking for the most compatible tools...", expanded=True) as status:
-        st.write(f"Searching through {count} tools")
+        st.write(f"Searching through {count_label} tools")
         try:
             hits = search_api(prompt, k=5)
             if not hits:
