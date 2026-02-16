@@ -28,12 +28,11 @@ def get_toolcount():
             time.sleep(0.5 * (attempt + 1))
     return None
 
+if "toolcount" not in st.session_state:
+    st.session_state.toolcount = get_toolcount ()
 
-count = get_toolcount()
-if count is None:
-    count_label = "many"
-else:
-    count_label = str(count)
+count = st.session_state.toolcount
+count_label = "many" if count is None else str(count)
 
 if st.sidebar.button("Clear Chat History"):
     st.session_state.messages = []
@@ -50,11 +49,18 @@ prompt = st.chat_input("What tool do you need?")
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-
+@st.cache_data(ttl=180)
 def search_api(q, k=5):
-    r = requests.post(f"{API_BASE}/search", json={"q": q, "k": k}, timeout=30)
-    r.raise_for_status()
-    return r.json().get("hits", [])
+    url = f"{API_BASE}/search"
+    payload = {"q": q, "k": k }
+    for attempt in range(5):
+        r = requests.post(url, json=payload, timeout=60)
+        if r.status_code == 429:
+            time.sleep(2 * (attempt + 1))
+            continue
+
+        r.raise_for_status()
+        return r.json().get("hits", [])
 
 
 if prompt:
