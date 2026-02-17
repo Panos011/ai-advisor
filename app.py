@@ -5,7 +5,23 @@ import time
 import requests
 import streamlit as st
 
+def warm_up():
+    url = f"{API_BASE}/health"
+    for attempt in range(2):
+        try:
+            r = requests.get(url, timeout=3)
+            if r.status_code in (429, 502, 503, 504):
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            return
+        except Exception:
+            time.sleep(0.5 * (attempt + 1))
+    return
 
+if "api_wamred" not in st.session_state:
+    warm_up()
+    st.session_state.api_warmed = True
+    
 def parse_categories(raw):
     return [c.strip() for c in re.split(r"[|,/]", str(raw)) if c.strip()]
 
@@ -49,7 +65,7 @@ prompt = st.chat_input("What tool do you need?")
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=3600)
 def search_api(q, k=5):
     url = f"{API_BASE}/search"
     payload = {"q": q, "k": k }
