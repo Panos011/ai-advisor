@@ -5,6 +5,8 @@ import time
 import requests
 import streamlit as st
 
+API_BASE = os.getenv("API_BASE_URL", "https://comai-recommender-1.onrender.com")
+
 def warm_up():
     url = f"{API_BASE}/health"
     for attempt in range(2):
@@ -21,12 +23,9 @@ def warm_up():
 if "api_wamred" not in st.session_state:
     warm_up()
     st.session_state.api_warmed = True
-    
+
 def parse_categories(raw):
     return [c.strip() for c in re.split(r"[|,/]", str(raw)) if c.strip()]
-
-
-API_BASE = os.getenv("API_BASE_URL", "https://comai-recommender-1.onrender.com")
 
 
 @st.cache_data(ttl=3600)
