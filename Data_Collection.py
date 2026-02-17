@@ -308,7 +308,7 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as csvfile:
                 Uses = [li.get_text(" ", strip=True) for li in uses_ul.select("li")]
 
         # Pricing
-        h3price = soup.find("h3", id="pricing")
+        h3price = soup.find(("h3", "h2"), id="pricing")
         Price_ul = h3price.find_next("ul") if h3price else None
         Price = [li.get_text(" ", strip=True) for li in Price_ul.select("li")] if Price_ul else []
 
