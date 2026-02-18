@@ -20,7 +20,7 @@ def warm_up():
             time.sleep(0.5 * (attempt + 1))
     return
 
-if "api_wamred" not in st.session_state:
+if "api_warmed" not in st.session_state:
     warm_up()
     st.session_state.api_warmed = True
 
@@ -64,7 +64,6 @@ prompt = st.chat_input("What tool do you need?")
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-@st.cache_data(ttl=3600)
 def search_api(q, k=5):
     url = f"{API_BASE}/search"
     payload = {"q": q, "k": k }
@@ -76,6 +75,7 @@ def search_api(q, k=5):
 
         r.raise_for_status()
         return r.json().get("hits", [])
+    return []
 
 
 if prompt:
