@@ -1,12 +1,17 @@
 import os
 import re
 import time
-
 import requests
 import streamlit as st
 
+
 API_BASE = os.getenv("API_BASE_URL", "https://comai-recommender-1.onrender.com")
 
+st.set_page_config(
+    page_title="ComAI Recommender",
+    page_icon="",
+    layout="wide"
+)
 def warm_up():
     url = f"{API_BASE}/health"
     for attempt in range(2):

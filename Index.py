@@ -23,6 +23,8 @@ for _, r in df.iterrows():
         "Categories": r.get("Categories", ""),
         "Price": r.get("Price", ""),
         "Description": r.get("Description", ""),
+        "Pros": r.get("Pros", ""),
+        "Cons": r.get("Cons", ""),
     })
 client = OpenAI()
 EMB_MODEL = "text-embedding-3-small"
