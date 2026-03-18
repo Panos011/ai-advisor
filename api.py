@@ -5,6 +5,7 @@ import numpy as np
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException
 from openai import OpenAI
+from typing import Literal, Optional
 
 # INDEX_PATH contains the veector for each tool, META_PATH contains the metadata for each tool
 INDEX_PATH = "index/tools.faiss"
@@ -35,6 +36,13 @@ class SearchHit(BaseModel):
 class SearchResponse(BaseModel):
     hits: list[SearchHit]
 
+class ClarifyRequest(BaseModel):
+    q: str
+
+class ClarifyResponse(BaseModel):
+    action: Literal["clarify", "search"]
+    question: Optional[str] = None
+    refined_queryt: Optional[str] = None
 # It checks for health and returns how many tools were loaded
 
 
@@ -66,3 +74,45 @@ def search(body: SearchRequest):
         hits.append({"score": float(score), "meta": META[id_]})
 
     return {"hits": hits}
+
+CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4.1-mini")
+
+@app.post("/clarify", response_model=ClarifyResponse)
+def clarify(body: ClarifyRequest):
+    q = body.q.strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="Query 'q' is empty")
+
+    system = (
+        "Decide if the user's request needs ONE clarifying question.\n"
+        "If missing key info (task type, platform, free/paid, output), ask 1 short question.\n"
+        "Otherwise rewrite the request into a single refined query.\n"
+        "Return JSON only like:\n"
+        '{"action":"clarify","question":"...","refined_query":null}\n'
+        'or {"action":"search","question":null,"refined_query":"..."}'
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model=CHAT_MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": q},
+            ],
+            temperature=0.2,
+        )
+        raw = resp.choices[0].message.content or ""
+        data = json.loads(raw)
+    except Exception:
+        # fallback: just search original q
+        return {"action": "search", "refined_query": q}
+
+    action = data.get("action")
+    if action == "clarify":
+        question = (data.get("question") or "").strip()
+        if not question:
+            question = "Quick question: what exact task are you trying to do, and do you need a free tool?"
+        return {"action": "clarify", "question": question}
+
+    refined = (data.get("refined_query") or q).strip()
+    return {"action": "search", "refined_query": refined}

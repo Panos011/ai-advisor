@@ -62,6 +62,11 @@ def search_api(q, k=5):
         last_err = str(e)
     return [], last_err
 
+def clarify_api(q):
+    r = requests.post(f"{API_BASE}/clarify", json={"q":q}, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
 @st.cache_data(ttl=3600)
 def get_toolcount():
     url = f"{API_BASE}/health"
@@ -141,7 +146,12 @@ with left:
         with st.status("Thinking for the most compatible tools...", expanded=True) as status:
             st.write(f"Searching through {count_label} tools")
 
-            hits = search_api(prompt, k=k)
+            decision = clarify_api(prompt)
+            if decision.get("action") == "clarify":
+                ai_text = decision.get("question", "Can you clarify what you need?")
+            else:
+                refined = decision.get("refined_query", prompt)
+            hits = search_api(refined, k=k)
             err = None
 
             if err:
