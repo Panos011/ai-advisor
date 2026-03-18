@@ -49,14 +49,18 @@ def search_api(q, k=5):
     url = f"{API_BASE}/search"
     payload = {"q": q, "k": k }
     for attempt in range(5):
-        r = requests.post(url, json=payload, timeout=60)
-        if r.status_code == 429:
-            time.sleep(2 * (attempt + 1))
-            continue
+        try:
+            r = requests.post(url, json=payload, timeout=60)
+            if r.status_code == 429:
+                time.sleep(2 * (attempt + 1))
+                continue
 
-        r.raise_for_status()
-        return r.json().get("hits", [])
-    return []
+            r.raise_for_status()
+            return r.json().get("hits", [])
+        except Exception as e:
+            time.sleep(1.0 * (attempt + 1))
+        last_err = str(e)
+    return [], last_err
 
 @st.cache_data(ttl=3600)
 def get_toolcount():
