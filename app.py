@@ -154,14 +154,8 @@ with left:
         with st.status("Thinking for the most compatible tools...", expanded=True) as status:
             st.write(f"Searching through {count_label} tools")
 
-            decision, err = clarify_api(prompt)
-            if err:
-                st.session_state.last_error = err
-                status.update(label="API request failed", state="error", expanded=True)
-                with st.chat_message("assistant"):
-                    st.markdown(f"Error calling API: {err}")
-                st.session_state.messages.append({"role": "assistant", "content": f"Error calling API:{err}"})
-                st.stop()
+            decision = clarify_api(prompt)
+            err = None
             if decision.get("action") == "clarify":
                 ai_text = decision.get("question", "Can you clarify what you need?")
                 status.update(label="Need clarification", state="complete", expanded=True)
