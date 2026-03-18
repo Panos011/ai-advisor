@@ -48,24 +48,32 @@ if "api_warmed" not in st.session_state:
 def search_api(q, k=5):
     url = f"{API_BASE}/search"
     payload = {"q": q, "k": k }
+    last_err = None
     for attempt in range(5):
         try:
             r = requests.post(url, json=payload, timeout=60)
             if r.status_code == 429:
+                last_err = "Too many requests"
                 time.sleep(2 * (attempt + 1))
                 continue
 
             r.raise_for_status()
-            return r.json().get("hits", [])
+            return r.json().get("hits", []), None
         except Exception as e:
+            last_err = str(e)
             time.sleep(1.0 * (attempt + 1))
         last_err = str(e)
     return [], last_err
 
 def clarify_api(q):
-    r = requests.post(f"{API_BASE}/clarify", json={"q":q}, timeout=30)
-    r.raise_for_status()
-    return r.json()
+    for attempt in range(3):
+        r = requests.post(f"{API_BASE}/clarify", json={"q": q}, timeout=30)
+        if r.status_code == 429:
+            time.sleep(2 * (attempt + 1))
+            continue
+        r.raise_for_status()
+        return r.json()
+    return {"action": "clarify", "question": "Too many requests right now"}
 
 @st.cache_data(ttl=3600)
 def get_toolcount():
@@ -146,13 +154,24 @@ with left:
         with st.status("Thinking for the most compatible tools...", expanded=True) as status:
             st.write(f"Searching through {count_label} tools")
 
-            decision = clarify_api(prompt)
+            decision, err = clarify_api(prompt)
+            if err:
+                st.session_state.last_error = err
+                status.update(label="API request failed", state="error", expanded=True)
+                with st.chat_message("assistant"):
+                    st.markdown(f"Error calling API: {err}")
+                st.session_state.messages.append({"role": "assistant", "content": f"Error calling API:{err}"})
+                st.stop()
             if decision.get("action") == "clarify":
                 ai_text = decision.get("question", "Can you clarify what you need?")
+                status.update(label="Need clarification", state="complete", expanded=True)
+                with st.chat_message("assistant"):
+                    st.markdown(ai_text)
+                st.session_state.messages.append({"role": "assistant", "content": ai_text})
+                st.stop()
             else:
                 refined = decision.get("refined_query", prompt)
-            hits = search_api(refined, k=k)
-            err = None
+            hits, err = search_api(refined, k=k)
 
             if err:
                 st.session_state.last_error = err
@@ -229,7 +248,7 @@ with left:
         saved_items = list(st.session_state.saved.items())
 
         if not saved_items:
-            st.info("No saved tools yet. Click ⭐ Save on a result.")
+            st.info("No saved tools yet. Click Save on a result.")
         else:
             # list saved with remove buttons
             for tid, m in saved_items:
