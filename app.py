@@ -141,7 +141,8 @@ with left:
         with st.status("Thinking for the most compatible tools...", expanded=True) as status:
             st.write(f"Searching through {count_label} tools")
 
-            hits, err = search_api(prompt, k=k)
+            hits = search_api(prompt, k=k)
+            err = None
 
             if err:
                 st.session_state.last_error = err
