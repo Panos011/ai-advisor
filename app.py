@@ -13,6 +13,15 @@ st.set_page_config(
     layout="wide"
 )
 
+# Session states
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "saved" not in st.session_state:
+    st.session_state.saved = {}
+if "last_error" not in st.session_state:
+    st.session_state.last_error = None
+if "last_prompt" not in st.session_state:
+    st.session_state.last_prompt = ""
 def parse_categories(raw):
     return [c.strip() for c in re.split(r"[|,/]", str(raw)) if c.strip()]
 def is_free(price_text: str) -> bool:
