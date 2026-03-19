@@ -22,6 +22,12 @@ if "last_error" not in st.session_state:
     st.session_state.last_error = None
 if "last_prompt" not in st.session_state:
     st.session_state.last_prompt = ""
+if "pending_clarify" not in st.session_state:
+    st.session_state.pending_clarify = False
+if "clarify_base_query" not in st.session_state:
+    st.session_state.clarify_base_query = ""
+if "clarify_question" not in st.session_state:
+    st.session_state.clarify_question = ""
 def parse_categories(raw):
     return [c.strip() for c in re.split(r"[|,/]", str(raw)) if c.strip()]
 def is_free(price_text: str) -> bool:
@@ -124,6 +130,13 @@ with left:
 
     prompt = st.chat_input("What tool do you need?")
 
+    if prompt and st.session_state.pending_clarify:
+        refined = f"{st.session_state.clarify_base_query}. Clarification: {prompt}"
+        st.session_state.pending_clarify = False
+        st.session_state.pending_clarify = ""
+        st.session_state.clarify_question = ""
+        prompt = refined
+
     if st.session_state.last_error:
         st.warning(f"Last request failed: {st.session_state.last_error}")
         if st.button("Try again"):
@@ -158,13 +171,18 @@ with left:
             err = None
             if decision.get("action") == "clarify":
                 ai_text = decision.get("question", "Can you clarify what you need?")
+
+                # store clarify state so next user message becomes the answer
+                st.session_state.pending_clarify = True
+                st.session_state.clarify_base_query = prompt
+                st.session_state.clarify_question = ai_text
+
                 status.update(label="Need clarification", state="complete", expanded=True)
                 with st.chat_message("assistant"):
                     st.markdown(ai_text)
                 st.session_state.messages.append({"role": "assistant", "content": ai_text})
                 st.stop()
-            else:
-                refined = decision.get("refined_query", prompt)
+            refined = decision.get("refined_query", prompt)
             hits, err = search_api(refined, k=k)
 
             if err:
