@@ -126,7 +126,7 @@ if st.sidebar.button("Clear Saved Tools"):
 st.title("ComAI Recommender", text_alignment="left", width="stretch")
 prompt = st.chat_input("What tool do you need?")
 st.caption("Find the right AI tool in seconds")
-left = st.columns([2,1])
+left = st.container
 
 with left:
     for message in st.session_state.messages:
