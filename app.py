@@ -81,7 +81,7 @@ def clarify_api(q):
             continue
         r.raise_for_status()
         return r.json()
-    return {"action": "clarify", "question": "Too many requests right now"}
+    return {"action": "search", "refine_query": "q"}
 
 @st.cache_data(ttl=3600)
 def get_toolcount():
@@ -122,7 +122,6 @@ if st.sidebar.button("Clear Saved Tools"):
 # Main Layout
 st.title("ComAI Recommender", text_alignment="left", width="stretch")
 st.caption("Find the right AI tool in seconds")
-prompt = st.chat_input("What tool do you need?")
 left, right = st.columns([2,1], gap="large")
 
 # Left: Chat + Results
@@ -130,11 +129,11 @@ with left:
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
-
+    prompt = st.chat_input("What tool do you need?")
     if prompt and st.session_state.pending_clarify:
         refined = f"{st.session_state.clarify_base_query}. Clarification: {prompt}"
         st.session_state.pending_clarify = False
-        st.session_state.pending_clarify = ""
+        st.session_state.clarify_base_query = ""
         st.session_state.clarify_question = ""
         prompt = refined
 
