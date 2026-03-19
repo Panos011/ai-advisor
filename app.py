@@ -28,6 +28,8 @@ if "clarify_base_query" not in st.session_state:
     st.session_state.clarify_base_query = ""
 if "clarify_question" not in st.session_state:
     st.session_state.clarify_question = ""
+if "clarify_cache" not in st.session_state:
+    st.session_state.clarify_cache = {}
 def parse_categories(raw):
     return [c.strip() for c in re.split(r"[|,/]", str(raw)) if c.strip()]
 def is_free(price_text: str) -> bool:
@@ -166,7 +168,11 @@ with left:
         with st.status("Thinking for the most compatible tools...", expanded=True) as status:
             st.write(f"Searching through {count_label} tools")
 
-            decision = clarify_api(prompt)
+            if prompt in st.session_state.clarify_cache:
+                decision = st.session_state.clarify_cache[prompt]
+            else:
+                decision = clarify_api(prompt)
+                st.session_state.clarify_cache[prompt] = decision
             err = None
             if decision.get("action") == "clarify":
                 ai_text = decision.get("question", "Can you clarify what you need?")
