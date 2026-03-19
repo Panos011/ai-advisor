@@ -120,6 +120,7 @@ if st.sidebar.button("Clear Saved Tools"):
 # Main Layout
 st.title("ComAI Recommender", text_alignment="left", width="stretch")
 st.caption("Find the right AI tool in seconds")
+prompt = st.chat_input("What tool do you need?")
 left, right = st.columns([2,1], gap="large")
 
 # Left: Chat + Results
@@ -127,8 +128,6 @@ with left:
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
-
-    prompt = st.chat_input("What tool do you need?")
 
     if prompt and st.session_state.pending_clarify:
         refined = f"{st.session_state.clarify_base_query}. Clarification: {prompt}"
@@ -251,7 +250,7 @@ with left:
                     st.session_state.messages.append(
                         {"role": "assistant", "content": f"Returned {len(filtered)} tools."})
 
-    # -----------------------------
+  # -----------------------------
     # RIGHT: Saved + Compare
     # -----------------------------
     with right:
