@@ -126,7 +126,7 @@ if st.sidebar.button("Clear Saved Tools"):
 st.title("ComAI Recommender", text_alignment="left", width="stretch")
 prompt = st.chat_input("What tool do you need?")
 st.caption("Find the right AI tool in seconds")
-left = st.container
+left = st.container()
 
 with left:
     for message in st.session_state.messages:
@@ -259,49 +259,49 @@ with left:
                     st.session_state.messages.append(
                         {"role": "assistant", "content": f"Returned {len(filtered)} tools."})
 
-    # Pop-over window
-    with st.popover("Saved tools"):
-        st.subheader("Saved tools")
+# Pop-over window
+with st.popover("Saved tools"):
+    st.subheader("Saved tools")
 
-        saved_items = list(st.session_state.saved.items())
+    saved_items = list(st.session_state.saved.items())
 
-        if not saved_items:
-            st.info("No saved tools yet. Click Save on a result.")
-        else:
-            # list saved with remove buttons
-            for tid, m in saved_items:
-                cols = st.columns([6, 2])
-                cols[0].write(m.get("Name", tid))
-                if cols[1].button("Remove", key=f"rm_{tid}"):
-                    st.session_state.saved.pop(tid, None)
-                    st.rerun()
+    if not saved_items:
+        st.info("No saved tools yet. Click Save on a result.")
+    else:
+        # list saved with remove buttons
+        for tid, m in saved_items:
+            cols = st.columns([6, 2])
+            cols[0].write(m.get("Name", tid))
+            if cols[1].button("Remove", key=f"rm_{tid}"):
+                st.session_state.saved.pop(tid, None)
+                st.rerun()
 
 
+        st.divider()
+
+        st.subheader("Compare (2–3 tools)")
+        name_map = {m.get("Name", tid): tid for tid, m in saved_items}
+        selected_names = st.multiselect(
+            "Pick tools",
+            options=list(name_map.keys()),
+            default=list(name_map.keys())[:2] if len(name_map) >= 2 else list(name_map.keys())
+        )
+
+        if st.button("Compare selected", type="primary",
+                        disabled=(len(selected_names) < 2 or len(selected_names) > 3)):
+            selected_meta = [st.session_state.saved[name_map[n]] for n in selected_names]
             st.divider()
-
-            st.subheader("Compare (2–3 tools)")
-            name_map = {m.get("Name", tid): tid for tid, m in saved_items}
-            selected_names = st.multiselect(
-                "Pick tools",
-                options=list(name_map.keys()),
-                default=list(name_map.keys())[:2] if len(name_map) >= 2 else list(name_map.keys())
-            )
-
-            if st.button("Compare selected", type="primary",
-                         disabled=(len(selected_names) < 2 or len(selected_names) > 3)):
-                selected_meta = [st.session_state.saved[name_map[n]] for n in selected_names]
-                st.divider()
-                cols = st.columns(len(selected_meta))
-                for col, meta in zip(cols, selected_meta):
-                    with col:
-                        st.markdown(f"### {meta.get('Name', '(no name)')}")
-                        cats = parse_categories(meta.get("Categories", ""))
-                        if cats:
-                            st.markdown(" ".join(f":blue-badge[{c}]" for c in cats[:6]))
-                        st.markdown(f"**Price:** {meta.get('Price', '—')}")
-                        desc = meta.get("Description", "")
-                        if desc:
-                            st.write(desc[:300] + ("..." if len(desc) > 300 else ""))
-                        link = meta.get("Tool_link", "")
-                        if link:
-                            st.link_button("Visit site", link)
+            cols = st.columns(len(selected_meta))
+            for col, meta in zip(cols, selected_meta):
+                with col:
+                    st.markdown(f"### {meta.get('Name', '(no name)')}")
+                    cats = parse_categories(meta.get("Categories", ""))
+                    if cats:
+                        st.markdown(" ".join(f":blue-badge[{c}]" for c in cats[:6]))
+                    st.markdown(f"**Price:** {meta.get('Price', '—')}")
+                    desc = meta.get("Description", "")
+                    if desc:
+                        st.write(desc[:300] + ("..." if len(desc) > 300 else ""))
+                    link = meta.get("Tool_link", "")
+                    if link:
+                        st.link_button("Visit site", link)
