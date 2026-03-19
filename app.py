@@ -30,6 +30,8 @@ if "clarify_question" not in st.session_state:
     st.session_state.clarify_question = ""
 if "clarify_cache" not in st.session_state:
     st.session_state.clarify_cache = {}
+if "last_results" not in st.session_state:
+    st.session_state.last_results = []
 def parse_categories(raw):
     return [c.strip() for c in re.split(r"[|,/]", str(raw)) if c.strip()]
 def is_free(price_text: str) -> bool:
@@ -121,6 +123,7 @@ if st.sidebar.button("Clear Saved Tools"):
 
 # Main Layout
 st.title("ComAI Recommender", text_alignment="left", width="stretch")
+prompt = st.chat_input("What tool do you need?")
 st.caption("Find the right AI tool in seconds")
 left, right = st.columns([2,1], gap="large")
 
@@ -129,7 +132,6 @@ with left:
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
-    prompt = st.chat_input("What tool do you need?")
     if prompt and st.session_state.pending_clarify:
         refined = f"{st.session_state.clarify_base_query}. Clarification: {prompt}"
         st.session_state.pending_clarify = False
@@ -202,6 +204,7 @@ with left:
 
                 # apply filters
                 filtered = []
+                st.session_state.last_results = filtered
                 for h in hits:
                     m = h.get("meta", {}) or {}
                     if passes_filters(m):
@@ -216,7 +219,7 @@ with left:
                     status.update(label="Compatible tools have been found", state="complete", expanded=True)
 
                     with st.chat_message("assistant"):
-                        for idx, h in enumerate(filtered):
+                        for idx, h in enumerate(st.session_state.last_results):
                             m = h.get("meta", {}) or {}
                             score = float(h.get("score", 0.0))
 
@@ -272,7 +275,7 @@ with left:
                 cols[0].write(m.get("Name", tid))
                 if cols[1].button("Remove", key=f"rm_{tid}"):
                     st.session_state.saved.pop(tid, None)
-                    st.rerun()
+
 
             st.divider()
 
