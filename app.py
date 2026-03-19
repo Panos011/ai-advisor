@@ -75,6 +75,8 @@ def search_api(q, k=5):
         last_err = str(e)
     return [], last_err
 
+RETRIEVAL_K = 30
+FINAL_K = 5
 def clarify_api(q):
     for attempt in range(3):
         r = requests.post(f"{API_BASE}/clarify", json={"q": q}, timeout=30)
@@ -108,7 +110,6 @@ count_label = "many" if count is None else str(count)
 # Sidebar controls
 
 st.sidebar.header("Filters")
-k = st.sidebar.slider("Number of results", min_value=3, max_value=15, value=5, step=1)
 free_only = st.sidebar.toggle("Free only", value=False)
 category_filter = st.sidebar.text_input("Category contains (optional)", value="").strip().lower()
 if st.sidebar.button("Clear Chat History"):
@@ -125,9 +126,8 @@ if st.sidebar.button("Clear Saved Tools"):
 st.title("ComAI Recommender", text_alignment="left", width="stretch")
 prompt = st.chat_input("What tool do you need?")
 st.caption("Find the right AI tool in seconds")
-left, right = st.columns([2,1], gap="large")
+left = st.columns([2,1])
 
-# Left: Chat + Results
 with left:
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
@@ -189,7 +189,7 @@ with left:
                 st.session_state.messages.append({"role": "assistant", "content": ai_text})
                 st.stop()
             refined = decision.get("refined_query", prompt)
-            hits, err = search_api(refined, k=k)
+            hits, err = search_api(refined, k=RETRIEVAL_K)
 
             if err:
                 st.session_state.last_error = err
@@ -215,6 +215,7 @@ with left:
                     with st.chat_message("assistant"):
                         st.markdown("No results (try removing filters or changing the query).")
                     st.session_state.messages.append({"role": "assistant", "content": "No results."})
+                    st.session_state.last_results = []
                 else:
                     status.update(label="Compatible tools have been found", state="complete", expanded=True)
 
@@ -258,10 +259,8 @@ with left:
                     st.session_state.messages.append(
                         {"role": "assistant", "content": f"Returned {len(filtered)} tools."})
 
-  # -----------------------------
-    # RIGHT: Saved + Compare
-    # -----------------------------
-    with right:
+    # Pop-over window
+    with st.popover("Saved tools"):
         st.subheader("Saved tools")
 
         saved_items = list(st.session_state.saved.items())
@@ -275,6 +274,7 @@ with left:
                 cols[0].write(m.get("Name", tid))
                 if cols[1].button("Remove", key=f"rm_{tid}"):
                     st.session_state.saved.pop(tid, None)
+                    st.rerun()
 
 
             st.divider()
