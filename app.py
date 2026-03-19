@@ -87,6 +87,14 @@ def clarify_api(q):
         return r.json()
     return {"action": "search", "refine_query": "q"}
 
+def recommend_api(q, retrieve_k=30, final_k=5):
+    r = requests.post(
+        f"{API_BASE}/recommend",
+        json={"q": q, "retrieve_k": retrieve_k, "final_k": final_k},
+        timeout=60
+    )
+    r.raise_for_status()
+    return r.json().get("hits", [])
 @st.cache_data(ttl=3600)
 def get_toolcount():
     url = f"{API_BASE}/health"
@@ -305,3 +313,4 @@ with st.popover("Saved tools"):
                     link = meta.get("Tool_link", "")
                     if link:
                         st.link_button("Visit site", link)
+

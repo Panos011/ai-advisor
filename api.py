@@ -11,6 +11,7 @@ from typing import Literal, Optional
 INDEX_PATH = "index/tools.faiss"
 META_PATH = "index/meta.jsonl"
 EMB_MODEL = os.getenv("EMB_MODEL", "text-embedding-3-small")
+GPT_MODEL = os.getenv("GPT_MODEL", "gpt-5.4-mini")
 
 # Tiny app with two doors /health and /search
 app = FastAPI(title="AI Tools Search API")
@@ -27,12 +28,17 @@ class SearchRequest(BaseModel):
     q: str  # The questions
     k: int = 5  # How many results we need
 
+class RecommendRequest(BaseModel):
+    q: str
+    retrieve_k: int = 30
+    final_k: int = 5
 
 class SearchHit(BaseModel):
     score: float  # How close the match is
     meta: dict  # The metadata of the tool
 
-
+class RecommendResponse(BaseModel):
+    hits: list[SearchHit]
 class SearchResponse(BaseModel):
     hits: list[SearchHit]
 
@@ -75,8 +81,71 @@ def search(body: SearchRequest):
 
     return {"hits": hits}
 
-CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4.1-mini")
+CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-5.4-mini")
 
+@app.post("/recommend", response_model=RecommendResponse)
+def recommend(body: RecommendRequest):
+    q = body.q.strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="Query 'q' is empty")
+
+    vec = embed([q])
+    scores, ids = index.search(vec, min(body.retrieve_k, len(META)))
+    candidates = []
+    for score, id_ in zip(scores[0].tolist(), ids[0].tolist()):
+        if id_ == -1:
+            continue
+        m = META[id_]
+        candidates.append({
+            "id": id_,
+            "score": float(score),
+            "name": m.get("Name", ""),
+            "categories": m.get("Categories", ""),
+            "price": m.get("Price", ""),
+            "description": m.get("Description", "")
+        })
+    if not candidates:
+        return {"hits": []}
+
+    prompt = {
+        "query": q,
+        "final_k": body.final_k,
+        "candidates": candidates
+    }
+
+    resp = client.chat.completions.create(
+        model=GPT_MODEL,
+        messages=[
+            {"role": "system", "content": "You select the best tools for the user query from the provided candidates"},
+            {"role": "user", "content": f""" Pick exactly {body.final_k} tools from the candidates that best match the query. Pick exactly {body.final_k} tool from the candidates that best match the query. Query and candidates: 
+{json.dumps(prompt)}"""}
+        ],
+        temperature=0.2,
+    )
+    try:
+        data = json.loads(resp.choices[0].message.content)
+        selected = data.get("selected_ids", [])
+    except Exception:
+        selected = []
+
+    selected_set = set(int(x) for x in selected if str(x).isdigit())
+
+    # build final hits in the chosen order
+    final_hits = []
+    for id_ in selected:
+        try:
+            id_int = int(id_)
+        except:
+            continue
+        if 0 <= id_int < len(META):
+            final_hits.append({"score": 0.0, "meta": META[id_int]})
+
+    # fallback if LLM fails: just take top k
+    if not final_hits:
+        top_ids = ids[0].tolist()[: body.final_k]
+        final_hits = [{"score": 0.0, "meta": META[i]} for i in top_ids if i != -1]
+
+    return {"hits": final_hits}
 @app.post("/clarify", response_model=ClarifyResponse)
 def clarify(body: ClarifyRequest):
     q = body.q.strip()
@@ -116,3 +185,4 @@ def clarify(body: ClarifyRequest):
 
     refined = (data.get("refined_query") or q).strip()
     return {"action": "search", "refined_query": refined}
+
