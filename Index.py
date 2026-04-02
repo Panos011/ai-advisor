@@ -43,6 +43,7 @@ for chunk in batched(texts, 256):
     vectors.extend([d.embedding for d in resp.data])
 embs = np.array(vectors, dtype="float32")
 # FAISS (cosine via IP on normalized vectors)
+faiss.normalize_L2(embs)
 index = faiss.IndexFlatIP(embs.shape[1])
 index = faiss.IndexIDMap(index)
 ids = (pd.Series(range(len(df)))).astype("int64").to_numpy()

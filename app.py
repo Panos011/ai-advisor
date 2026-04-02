@@ -32,12 +32,21 @@ if "clarify_cache" not in st.session_state:
     st.session_state.clarify_cache = {}
 if "last_results" not in st.session_state:
     st.session_state.last_results = []
+if "last_request_time" not in st.session_state:
+    st.session_state.last_request_time = 0.0
+
+MIN_REQUEST_GAP = 1
 def parse_categories(raw):
     return [c.strip() for c in re.split(r"[|,/]", str(raw)) if c.strip()]
 def is_free(price_text: str) -> bool:
     return "free" in (price_text or "").lower()
 def tool_id_from_meta(m:dict) -> str:
     return (m.get("Tool_link") or m.get("Source_URL") or m.get("Name") or "").strip()
+def throttle():
+    gap = time.time() - st.session_state.last_request_time
+    if gap < MIN_REQUEST_GAP:
+        time.sleep(MIN_REQUEST_GAP - gap)
+    st.session_state.last_request_time = time.time()
 def warm_up():
     url = f"{API_BASE}/health"
     for attempt in range(2):
@@ -54,13 +63,50 @@ def warm_up():
 if "api_warmed" not in st.session_state:
     warm_up()
     st.session_state.api_warmed = True
+def render_results(hits):
+    for idx, h in enumerate(hits):
+        m = h.get("meta", {}) or {}
+        score = float(h.get("score", 0.0))
+        why = h.get("why")  # reason from LLM
+        name = m.get("Name", "(no name)")
+        link = m.get("Tool_link", "#")
+        desc = m.get("Description", "")
+        price = m.get("Price", "")
+        cats = parse_categories(m.get("Categories", ""))
+        tid = tool_id_from_meta(m)
 
+        with st.container(border=True):
+            top = st.columns([6, 2])
+            with top[0]:
+                st.markdown(f"**{name}**")
+            with top[1]:
+                saved = tid in st.session_state.saved
+                label = "✅ Saved" if saved else "⭐ Save"
+                if st.button(label, key=f"save_{tid}_{idx}"):
+                    if not saved:
+                        st.session_state.saved[tid] = m
+                    else:
+                        st.session_state.saved.pop(tid, None)
+                    st.rerun()
+            if cats:
+                st.markdown(" ".join(f":blue-badge[{c}]" for c in cats[:8]))
+            if why:
+                st.info(why)  # show the LLM's reason
+            if desc:
+                st.write(desc)
+            bottom = st.columns([2, 2, 3])
+            with bottom[0]:
+                st.markdown(f"**Price:** {price if price else '—'}")
+            with bottom[1]:
+                if link and link != "#":
+                    st.link_button("Visit official site", link)
 def search_api(q, k=5):
     url = f"{API_BASE}/search"
     payload = {"q": q, "k": k }
-    last_err = None
+    last_err = "Unkown Error"
     for attempt in range(5):
         try:
+            throttle()
             r = requests.post(url, json=payload, timeout=60)
             if r.status_code == 429:
                 last_err = "Too many requests"
@@ -72,22 +118,26 @@ def search_api(q, k=5):
         except Exception as e:
             last_err = str(e)
             time.sleep(1.0 * (attempt + 1))
-        last_err = str(e)
     return [], last_err
 
 RETRIEVAL_K = 30
 FINAL_K = 5
 def clarify_api(q):
-    for attempt in range(3):
-        r = requests.post(f"{API_BASE}/clarify", json={"q": q}, timeout=30)
-        if r.status_code == 429:
-            time.sleep(2 * (attempt + 1))
-            continue
-        r.raise_for_status()
-        return r.json()
-    return {"action": "search", "refine_query": "q"}
+    try:
+        for attempt in range(3):
+            throttle()
+            r = requests.post(f"{API_BASE}/clarify", json={"q": q}, timeout=30)
+            if r.status_code == 429:
+                time.sleep(2 * (attempt + 1))
+                continue
+            r.raise_for_status()
+            return r.json()
+    except Exception:
+        pass
+    return {"action": "search", "refined_query": q}
 
 def recommend_api(q, retrieve_k=30, final_k=5):
+    throttle()
     r = requests.post(
         f"{API_BASE}/recommend",
         json={"q": q, "retrieve_k": retrieve_k, "final_k": final_k},
@@ -131,7 +181,7 @@ if st.sidebar.button("Clear Saved Tools"):
 
 
 # Main Layout
-st.title("ComAI Recommender", text_alignment="left", width="stretch")
+st.title("ComAI Recommender")
 prompt = st.chat_input("What tool do you need?")
 st.caption("Find the right AI tool in seconds")
 left = st.container()
@@ -140,12 +190,9 @@ with left:
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
-    if prompt and st.session_state.pending_clarify:
-        refined = f"{st.session_state.clarify_base_query}. Clarification: {prompt}"
-        st.session_state.pending_clarify = False
-        st.session_state.clarify_base_query = ""
-        st.session_state.clarify_question = ""
-        prompt = refined
+    if st.session_state.last_results and not prompt:
+        with st.chat_message("assistant"):
+            render_results(st.session_state.last_results)
 
     if st.session_state.last_error:
         st.warning(f"Last request failed: {st.session_state.last_error}")
@@ -177,46 +224,57 @@ with left:
         with st.status("Thinking for the most compatible tools...", expanded=True) as status:
             st.write(f"Searching through {count_label} tools")
 
-            if prompt in st.session_state.clarify_cache:
-                decision = st.session_state.clarify_cache[prompt]
+            if st.session_state.pending_clarify:
+                refined = f"{st.session_state.clarify_base_query}. {prompt}"
+                st.session_state.pending_clarify = False
+                st.session_state.clarify_base_query = ""
+                st.session_state.clarify_question = ""
             else:
-                decision = clarify_api(prompt)
-                st.session_state.clarify_cache[prompt] = decision
+                if prompt in st.session_state.clarify_cache:
+                    decision = st.session_state.clarify_cache[prompt]
+                else:
+                    try:
+                        decision = clarify_api(prompt)
+                    except Exception:
+                        decision = {"action": "search", "refined_query": prompt}
+                    st.session_state.clarify_cache[prompt] = decision
+
+                if decision.get("action") == "clarify":
+                    ai_text = decision.get("question", "Can you clarify what you need?")
+                    st.session_state.pending_clarify = True
+                    st.session_state.clarify_base_query = prompt
+                    st.session_state.clarify_question = ai_text
+                    status.update(label="Need clarification", state="complete", expanded=True)
+                    with st.chat_message("assistant"):
+                        st.markdown(ai_text)
+                    st.session_state.messages.append({"role": "assistant", "content": ai_text})
+                    st.stop()
+
+                refined = decision.get("refined_query") or prompt
+
             err = None
-            if decision.get("action") == "clarify":
-                ai_text = decision.get("question", "Can you clarify what you need?")
-
-                # store clarify state so next user message becomes the answer
-                st.session_state.pending_clarify = True
-                st.session_state.clarify_base_query = prompt
-                st.session_state.clarify_question = ai_text
-
-                status.update(label="Need clarification", state="complete", expanded=True)
-                with st.chat_message("assistant"):
-                    st.markdown(ai_text)
-                st.session_state.messages.append({"role": "assistant", "content": ai_text})
-                st.stop()
-            refined = decision.get("refined_query", prompt)
-            hits, err = search_api(refined, k=RETRIEVAL_K)
+            try:
+                hits = recommend_api(refined, retrieve_k=RETRIEVAL_K, final_k=FINAL_K)
+            except Exception as e:
+                hits = []
+                err = str(e)
 
             if err:
                 st.session_state.last_error = err
                 status.update(label="API request failed", state="error", expanded=True)
-
                 with st.chat_message("assistant"):
                     st.markdown(f"Error calling API: {err}")
-
                 st.session_state.messages.append({"role": "assistant", "content": f"Error calling API: {err}"})
             else:
                 st.session_state.last_error = None
 
-                # apply filters
                 filtered = []
-                st.session_state.last_results = filtered
                 for h in hits:
                     m = h.get("meta", {}) or {}
                     if passes_filters(m):
                         filtered.append(h)
+
+                st.session_state.last_results = filtered
 
                 if not filtered:
                     status.update(label="No results found", state="complete", expanded=True)
@@ -226,44 +284,8 @@ with left:
                     st.session_state.last_results = []
                 else:
                     status.update(label="Compatible tools have been found", state="complete", expanded=True)
-
                     with st.chat_message("assistant"):
-                        for idx, h in enumerate(st.session_state.last_results):
-                            m = h.get("meta", {}) or {}
-                            score = float(h.get("score", 0.0))
-
-                            name = m.get("Name", "(no name)")
-                            link = m.get("Tool_link", "#")
-                            desc = m.get("Description", "")
-                            price = m.get("Price", "")
-                            cats = parse_categories(m.get("Categories", ""))
-
-                            tid = tool_id_from_meta(m)
-
-                            # result card
-                            with st.container(border=True):
-                                top = st.columns([6, 2])
-                                with top[0]:
-                                    st.markdown(f"**{name}** — score `{score:.3f}`")
-                                with top[1]:
-                                    saved = tid in st.session_state.saved
-                                    if st.button("⭐ Save" if not saved else "✅ Saved", key=f"save_{tid}_{idx}"):
-                                        st.session_state.saved[tid] = m
-                                        st.rerun()
-
-                                if cats:
-                                    st.markdown(" ".join(f":blue-badge[{c}]" for c in cats[:8]))
-
-                                if desc:
-                                    st.write(desc)
-
-                                bottom = st.columns([2, 2, 3])
-                                with bottom[0]:
-                                    st.markdown(f"**Price:** {price if price else '—'}")
-                                with bottom[1]:
-                                    if link and link != "#":
-                                        st.link_button("Visit official site", link)
-
+                        render_results(filtered)
                     st.session_state.messages.append(
                         {"role": "assistant", "content": f"Returned {len(filtered)} tools."})
 

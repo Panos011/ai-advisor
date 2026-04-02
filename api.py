@@ -36,6 +36,7 @@ class RecommendRequest(BaseModel):
 class SearchHit(BaseModel):
     score: float  # How close the match is
     meta: dict  # The metadata of the tool
+    why: Optional[str] = None
 
 class RecommendResponse(BaseModel):
     hits: list[SearchHit]
@@ -48,7 +49,7 @@ class ClarifyRequest(BaseModel):
 class ClarifyResponse(BaseModel):
     action: Literal["clarify", "search"]
     question: Optional[str] = None
-    refined_queryt: Optional[str] = None
+    refined_query: Optional[str] = None
 # It checks for health and returns how many tools were loaded
 
 
@@ -61,6 +62,7 @@ def health():
 def embed(texts: list[str]) -> np.ndarray:
     resp = client.embeddings.create(model=EMB_MODEL, input=texts)
     vecs = np.array([d.embedding for d in resp.data], dtype="float32")
+    faiss.normalize_L2(vecs)
     return vecs
 
 # It searches for the best matches, and it returns the best 5 matches and their metadata
@@ -114,17 +116,31 @@ def recommend(body: RecommendRequest):
     }
 
     resp = client.chat.completions.create(
-        model=GPT_MODEL,
+        model=CHAT_MODEL,
         messages=[
-            {"role": "system", "content": "You select the best tools for the user query from the provided candidates"},
-            {"role": "user", "content": f""" Pick exactly {body.final_k} tools from the candidates that best match the query. Pick exactly {body.final_k} tool from the candidates that best match the query. Query and candidates: 
-{json.dumps(prompt)}"""}
+            {
+                "role": "system",
+                "content": (
+                    "You are an AI tool recommender. Select the best tools for the user query.\n"
+                    "Return ONLY valid JSON, no markdown, no extra text:\n"
+                    '{"selected": [{"id": <integer>, "reason": "<one sentence why this fits>"}, ...]}'
+                )
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Query: {q}\n\n"
+                    f"Select exactly {body.final_k} tools from these candidates:\n"
+                    f"{json.dumps(candidates, ensure_ascii=False)}"
+                )
+            }
         ],
         temperature=0.2,
+        response_format={"type": "json_object"}  # forces valid JSON every time
     )
     try:
         data = json.loads(resp.choices[0].message.content)
-        selected = data.get("selected_ids", [])
+        selected = data.get("selected", [])
     except Exception:
         selected = []
 
@@ -132,18 +148,20 @@ def recommend(body: RecommendRequest):
 
     # build final hits in the chosen order
     final_hits = []
-    for id_ in selected:
+    for item in selected:
         try:
-            id_int = int(id_)
-        except:
+            id_int = int(item.get("id", -1))
+            reason = str(item.get("reason", ""))
+        except(TypeError, ValueError):
             continue
         if 0 <= id_int < len(META):
-            final_hits.append({"score": 0.0, "meta": META[id_int]})
+            final_hits.append({"score": 0.0, "meta": META[id_int], "why" : reason})
 
     # fallback if LLM fails: just take top k
     if not final_hits:
-        top_ids = ids[0].tolist()[: body.final_k]
-        final_hits = [{"score": 0.0, "meta": META[i]} for i in top_ids if i != -1]
+        top = [(i, s) for i, s in zip(ids[0].tolist(), scores[0].tolist()) if i != -1]
+        final_hits = [{"score": float(s), "meta": META[i], "why": None}
+                      for i, s in top[:body.final_k]]
 
     return {"hits": final_hits}
 @app.post("/clarify", response_model=ClarifyResponse)
