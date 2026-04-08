@@ -34,7 +34,7 @@ if "last_results" not in st.session_state:
     st.session_state.last_results = []
 if "last_request_time" not in st.session_state:
     st.session_state.last_request_time = 0.0
-if "resulta_history" not in st.session_state:
+if "results_history" not in st.session_state:
     st.session_state.results_history = []
 
 MIN_REQUEST_GAP = 1
@@ -172,19 +172,21 @@ st.caption("Find the right AI tool in seconds")
 left = st.container()
 
 with left:
-    result_idx = 0
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
-
-        if message["role"] == "assistant" and message["content"].startswith("Returned"):
-            if result_idx < len(st.session_state.results_history):
+        if message.get("type") == "results":
+            idx = message.get("result_index", -1)
+            if 0 <= idx < len(st.session_state.results_history):
                 with st.chat_message("assistant"):
-                    render_results(st.session_state.results_history[result_idx])
-                result_idx += 1
-
-    if st.session_state.last_results and not prompt:
-        pass
+                    render_results(st.session_state.results_history[idx])
+        st.session_state.results_history.append(filter)
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": f"Returned {len(filter)} tools",
+            "type": "results",
+            "result_index": len(st.session_state.results_history) - 1
+        })
 
 
     def passes_filters(meta: dict) -> bool:
@@ -217,14 +219,20 @@ with left:
                 st.session_state.clarify_base_query = ""
                 st.session_state.clarify_question = ""
             else:
-                if prompt in st.session_state.clarify_cache:
-                    decision = st.session_state.clarify_cache[prompt]
+                # build context from previous search so the LLM understands follow-ups
+                context = ""
+                if st.session_state.last_prompt:
+                    context = f"Previous search was about: {st.session_state.last_prompt}. "
+                contextual_prompt = context + prompt
+
+                if contextual_prompt in st.session_state.clarify_cache:
+                    decision = st.session_state.clarify_cache[contextual_prompt]
                 else:
                     try:
-                        decision = clarify_api(prompt)
+                        decision = clarify_api(contextual_prompt)
                     except Exception:
-                        decision = {"action": "search", "refined_query": prompt}
-                    st.session_state.clarify_cache[prompt] = decision
+                        decision = {"action": "search", "refined_query": contextual_prompt}
+                    st.session_state.clarify_cache[contextual_prompt] = decision
 
                 if decision.get("action") == "clarify":
                     ai_text = decision.get("question", "Can you clarify what you need?")
