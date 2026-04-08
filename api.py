@@ -11,6 +11,7 @@ from typing import Literal, Optional, List, Dict, Any
 INDEX_PATH = "index/tools.faiss"
 META_PATH = "index/meta.jsonl"
 EMB_MODEL = os.getenv("EMB_MODEL", "text-embedding-3-small")
+CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-5.4-mini")
 
 # Tiny app with two doors /health and /search
 app = FastAPI(title="AI Tools Search API")
@@ -22,7 +23,12 @@ with open(META_PATH, "r", encoding="utf-8") as f:
 
 client = OpenAI()
 
+class IntentRequest(BaseModel):
+    prompt: str
+    last_query: str
 
+class IntentResponse(BaseModel):
+    intent: str
 class SearchRequest(BaseModel):
     q: str  # The questions
     k: int = 30  # How many results we need
@@ -135,7 +141,6 @@ def search(body: SearchRequest):
 
     return {"hits": hits}
 
-CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-5.4-mini")
 
 @app.post("/recommend", response_model=RecommendResponse)
 def recommend(body: RecommendRequest):
@@ -267,3 +272,32 @@ def clarify(body: ClarifyRequest):
     refined = (data.get("refined_query") or q).strip()
     return {"action": "search", "refined_query": refined}
 
+@app.post("/detect_intent", response_model=IntentResponse)
+def detect_intent(body: IntentRequest):
+    system = (
+        "You are a search intent classifier and give the previous search query decide if the user is:\n"
+        "-'refine':modifying, filtering or following up on the previous search"
+        "for example 'free only', 'show me more', 'I need something simpler', 'I need something more specific', 'what about paid ones'\n"
+        "-'new': asking for something completely different\n"
+        "Return ONLY valid JSON: {\"intent\": \"refine\"} or {\"intent\" : \"new\"}"
+    )
+    try:
+        resp = client.chat.completions.create(
+            model= CHAT_MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": (
+                    f"Previous search: {body.last_query}\n"
+                    f"New message: {body.prompt}"
+                )}
+            ],
+            temperature= 0.0,
+            response_format = {"type": "json_object"}
+        )
+        data = json.loads(resp.choices[0].message.content)
+        intent = data.get("intent", "new")
+        if intent not in ("refine", "new"):
+            intent = "new"
+        return {"intent": intent}
+    except Exception:
+        return {"intent": "new"}

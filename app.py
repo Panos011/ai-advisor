@@ -36,6 +36,8 @@ if "last_request_time" not in st.session_state:
     st.session_state.last_request_time = 0.0
 if "results_history" not in st.session_state:
     st.session_state.results_history = []
+if "last_query" not in st.session_state:
+    st.session_state.last_query = ""
 
 MIN_REQUEST_GAP = 1
 def parse_categories(raw):
@@ -128,6 +130,21 @@ def recommend_api(q, retrieve_k=30, final_k=5):
     )
     r.raise_for_status()
     return r.json().get("hits", [])
+
+def detect_intent(prompt, last_query):
+    if not last_query:
+        return "new"
+    try:
+        throttle()
+        r = requests.post(
+            f"{API_BASE}/detect_intent",
+            json={"prompt": prompt, "last_query": last_query},
+            timeout = 30
+        )
+        r.raise_for_status()
+        return r.json().get("intent", "new")
+    except Exception:
+        return "new"
 @st.cache_data(ttl=3600)
 def get_toolcount():
     url = f"{API_BASE}/health"
@@ -142,6 +159,7 @@ def get_toolcount():
         except Exception:
             time.sleep(0.5 * (attempt + 1))
     return None
+
 
 if "toolcount" not in st.session_state:
     st.session_state.toolcount = get_toolcount ()
@@ -213,24 +231,25 @@ with left:
                 st.session_state.clarify_question = ""
             else:
                 # build context from previous search so the LLM understands follow-ups
-                context = ""
-                if st.session_state.last_prompt:
-                    context = f"Previous search was about: {st.session_state.last_prompt}. "
-                contextual_prompt = context + prompt
+                intent = detect_intent(prompt, st.session_state.last_query)
+                if intent == "refine":
+                    combined = f" {st.session_state.last_query}.{prompt} "
+                else:
+                    combined = prompt
 
-                if contextual_prompt in st.session_state.clarify_cache:
-                    decision = st.session_state.clarify_cache[contextual_prompt]
+                if combined in st.session_state.clarify_cache:
+                    decision = st.session_state.clarify_cache[combined]
                 else:
                     try:
-                        decision = clarify_api(contextual_prompt)
+                        decision = clarify_api(combined)
                     except Exception:
-                        decision = {"action": "search", "refined_query": contextual_prompt}
-                    st.session_state.clarify_cache[contextual_prompt] = decision
+                        decision = {"action": "search", "refined_query": combined}
+                    st.session_state.clarify_cache[combined] = decision
 
                 if decision.get("action") == "clarify":
                     ai_text = decision.get("question", "Can you clarify what you need?")
                     st.session_state.pending_clarify = True
-                    st.session_state.clarify_base_query = prompt
+                    st.session_state.clarify_base_query = combined
                     st.session_state.clarify_question = ai_text
                     status.update(label="Need clarification", state="complete", expanded=True)
                     with st.chat_message("assistant"):
@@ -238,7 +257,7 @@ with left:
                     st.session_state.messages.append({"role": "assistant", "content": ai_text})
                     st.stop()
 
-                refined = decision.get("refined_query") or prompt
+                refined = decision.get("refined_query") or combined
 
             err = None
             try:
