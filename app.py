@@ -34,6 +34,8 @@ if "last_results" not in st.session_state:
     st.session_state.last_results = []
 if "last_request_time" not in st.session_state:
     st.session_state.last_request_time = 0.0
+if "resulta_history" not in st.session_state:
+    st.session_state.results_history = []
 
 MIN_REQUEST_GAP = 1
 def parse_categories(raw):
@@ -154,6 +156,8 @@ category_filter = st.sidebar.text_input("Category contains (optional)", value=""
 if st.sidebar.button("Clear Chat History"):
     st.session_state.messages = []
     st.session_state.last_error = None
+    st.session_state.last_results = []
+    st.session_state.results_history = []
     st.rerun()
 
 if st.sidebar.button("Clear Saved Tools"):
@@ -168,17 +172,19 @@ st.caption("Find the right AI tool in seconds")
 left = st.container()
 
 with left:
+    result_idx = 0
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
-    if st.session_state.last_results and not prompt:
-        with st.chat_message("assistant"):
-            render_results(st.session_state.last_results)
 
-    if st.session_state.last_error:
-        st.warning(f"Last request failed: {st.session_state.last_error}")
-        if st.button("Try again"):
-            prompt = st.session_state.last_prompt
+        if message["role"] == "assistant" and message["content"].startswith("Returned"):
+            if result_idx < len(st.session_state.results_history):
+                with st.chat_message("assistant"):
+                    render_results(st.session_state.results_history[result_idx])
+                result_idx += 1
+
+    if st.session_state.last_results and not prompt:
+        pass
 
 
     def passes_filters(meta: dict) -> bool:
@@ -256,6 +262,7 @@ with left:
                         filtered.append(h)
 
                 st.session_state.last_results = filtered
+                st.session_state.results_history.append(filtered)
 
                 if not filtered:
                     status.update(label="No results found", state="complete", expanded=True)
