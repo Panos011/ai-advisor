@@ -5,13 +5,12 @@ import numpy as np
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException
 from openai import OpenAI
-from typing import Literal, Optional
+from typing import Literal, Optional, List, Dict, Any
 
 # INDEX_PATH contains the veector for each tool, META_PATH contains the metadata for each tool
 INDEX_PATH = "index/tools.faiss"
 META_PATH = "index/meta.jsonl"
 EMB_MODEL = os.getenv("EMB_MODEL", "text-embedding-3-small")
-GPT_MODEL = os.getenv("GPT_MODEL", "gpt-5.4-mini")
 
 # Tiny app with two doors /health and /search
 app = FastAPI(title="AI Tools Search API")
@@ -26,7 +25,7 @@ client = OpenAI()
 
 class SearchRequest(BaseModel):
     q: str  # The questions
-    k: int = 5  # How many results we need
+    k: int = 30  # How many results we need
 
 class RecommendRequest(BaseModel):
     q: str
@@ -64,6 +63,59 @@ def embed(texts: list[str]) -> np.ndarray:
     vecs = np.array([d.embedding for d in resp.data], dtype="float32")
     faiss.normalize_L2(vecs)
     return vecs
+
+# Decision logic to reduce bias and promote fairness #
+
+def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    """Cosine similarity between two vectors."""
+    dot = np.dot(a,b)
+    norm = np.linalg.norm(a) * np.linalg.norm(b)
+    if norm == 0:
+        return 0.0
+    return float(dot / norm)
+
+def mmr_rerank(
+        candidates: List[Dict[str, Any]],
+        embeddings: np.ndarray,
+        lambda_: float = 0.7,
+        top_k: int = 30,
+) -> List[Dict[str, Any]]:
+    """ Maximal Marginal Relevance reranking"""
+    n = len(candidates)
+    if n == 0:
+        return []
+    selected_indices: List[int] = []
+    remaining_indices: List[int] = list(range(n))
+
+    # Normalise relevance scores to [0, 1] for fair weighting
+    max_score = max(c["score"] for c in candidates) or 1.0
+    relevance = np.array([c["score"] / max_score for c in candidates])
+
+    for _ in range(min(top_k, n)):
+        best_idx = None
+        best_mmr = -float("inf")
+
+        for idx in remaining_indices:
+            rel = relevance[idx]
+
+            # Max similarity to any already-selected item
+            if not selected_indices:
+                max_sim = 0.0
+            else:
+                sims = [
+                    cosine_similarity(embeddings[idx], embeddings[s])
+                    for s in selected_indices
+                ]
+                max_sim = max(sims)
+            mmr_score = lambda_ * rel - (1 - lambda_) *max_sim
+
+            if mmr_score > best_mmr:
+                best_mmr = mmr_score
+                best_idx = idx
+        selected_indices.append(best_idx)
+        remaining_indices.remove(best_idx)
+    return [candidates[i] for i in selected_indices]
+
 
 # It searches for the best matches, and it returns the best 5 matches and their metadata
 
@@ -108,12 +160,16 @@ def recommend(body: RecommendRequest):
         })
     if not candidates:
         return {"hits": []}
+    candidate_embeddings = []
+    for c in candidates:
+        try:
+            emb = index.reconstruct(int(c["id"]))
+            candidate_embeddings.append(emb)
+        except Exception:
+            candidate_embeddings.append(np.zeros(index.d, dtype="float32"))
+    candidate_embeddings = np.array(candidate_embeddings, dtype="float32")
 
-    prompt = {
-        "query": q,
-        "final_k": body.final_k,
-        "candidates": candidates
-    }
+    candidates = mmr_rerank(candidates, candidate_embeddings, lambda_=0.7, top_k=30)
 
     resp = client.chat.completions.create(
         model=CHAT_MODEL,
@@ -121,9 +177,16 @@ def recommend(body: RecommendRequest):
             {
                 "role": "system",
                 "content": (
-                    "You are an AI tool recommender. Select the best tools for the user query.\n"
+                    "You are an AI tool recommender. You will receive a user's needs and a numbered list of candidate tools."
+                    "Critical Evaluation Rules:"
+                    "1. Evaluate only based on how well each tool's described features match the user's stated needs"
+                    "2.Do not favour tools based on popularity, brand recognition or how often you seen them in your training data"
+                    "3. A lesser-known tool that matching perfectly a user's needs its always a better choice to a well-known tool that partially matches"
+                    "4. Consider the user's budget constraints. If they have not specified consider having at least 1 free option"
+                    "5. Treat every candidate tool equally credible regardless of whether you recognise the name"
+                    "6. Do not favour tools based on their position in the list. A tool at at the last place is as valid as the tool in the first place\n"
                     "Return ONLY valid JSON, no markdown, no extra text:\n"
-                    '{"selected": [{"id": <integer>, "reason": "<one sentence why this fits>"}, ...]}'
+                    '{"selected": [{"id": <integer>, "reason": "<two sentences why this fits>"}, ...]}'
                 )
             },
             {
@@ -144,7 +207,7 @@ def recommend(body: RecommendRequest):
     except Exception:
         selected = []
 
-    selected_set = set(int(x) for x in selected if str(x).isdigit())
+
 
     # build final hits in the chosen order
     final_hits = []
@@ -172,7 +235,7 @@ def clarify(body: ClarifyRequest):
 
     system = (
         "Decide if the user's request needs ONE clarifying question.\n"
-        "If missing key info (task type, platform, free/paid, output), ask 1 short question.\n"
+        "If missing key info (task type, platform, free/paid, output), ask 1-3 short question(s).\n"
         "Otherwise rewrite the request into a single refined query.\n"
         "Return JSON only like:\n"
         '{"action":"clarify","question":"...","refined_query":null}\n'

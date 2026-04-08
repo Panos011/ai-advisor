@@ -100,25 +100,6 @@ def render_results(hits):
             with bottom[1]:
                 if link and link != "#":
                     st.link_button("Visit official site", link)
-def search_api(q, k=5):
-    url = f"{API_BASE}/search"
-    payload = {"q": q, "k": k }
-    last_err = "Unkown Error"
-    for attempt in range(5):
-        try:
-            throttle()
-            r = requests.post(url, json=payload, timeout=60)
-            if r.status_code == 429:
-                last_err = "Too many requests"
-                time.sleep(2 * (attempt + 1))
-                continue
-
-            r.raise_for_status()
-            return r.json().get("hits", []), None
-        except Exception as e:
-            last_err = str(e)
-            time.sleep(1.0 * (attempt + 1))
-    return [], last_err
 
 RETRIEVAL_K = 30
 FINAL_K = 5
