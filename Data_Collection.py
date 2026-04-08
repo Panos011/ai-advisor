@@ -67,6 +67,7 @@ def fetch(url: str, tries: int = 4):
                     f"?api_key={SCRAPER_KEY}"
                     "&keep_headers=true"
                     "&country_code=us"
+                    "&render=true"
                     f"&url={quote_plus(url)}"
                 )
                 r = session.get(wrapped, timeout=40, allow_redirects=True)

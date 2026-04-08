@@ -15,7 +15,7 @@ def clean_list_remove_brackets(x) -> str:
     """
     If value is like "['a','b']" or '["a","b"]', parse it, clean items,
     dedupe while preserving order, and return WITHOUT [ ] brackets.
-    Otherwise just whitespace-normalize the string.
+    Otherwise, just whitespace-normalize the string.
     """
     s = norm_ws(x)
     if not (s.startswith("[") and s.endswith("]")):
@@ -47,14 +47,14 @@ df = pd.read_csv(IN_CSV, dtype=str, na_filter=False).fillna("")
 original_cols = list(df.columns)
 
 # Ensure expected columns exist (optional)
-expected = ["Name","Description","Price","Tool_link","Source_url","Unique_value",
+expected = ["Name","Description","Price","Tool_link","Source_URL","Unique_Value",
             "Features","Pros","Cons","Use_cases","Categories"]
 for c in expected:
     if c not in df.columns:
         df[c] = ""
 
 # Clean scalars
-for c in ["Name","Description","Price","Tool_link","Source_url","Unique_value"]:
+for c in ["Name","Description","Price","Tool_link","Source_URL","Unique_Value"]:
     df[c] = df[c].map(norm_ws)
 
 # Clean list-like columns (remove [ ])
