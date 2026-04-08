@@ -180,13 +180,6 @@ with left:
             if 0 <= idx < len(st.session_state.results_history):
                 with st.chat_message("assistant"):
                     render_results(st.session_state.results_history[idx])
-        st.session_state.results_history.append(filter)
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": f"Returned {len(filter)} tools",
-            "type": "results",
-            "result_index": len(st.session_state.results_history) - 1
-        })
 
 
     def passes_filters(meta: dict) -> bool:
@@ -284,6 +277,14 @@ with left:
                         render_results(filtered)
                     st.session_state.messages.append(
                         {"role": "assistant", "content": f"Returned {len(filtered)} tools."})
+
+                    st.session_state.results_history.append(filtered)
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": f"Returned {len(filtered)} tools",
+                        "type": "results",
+                        "result_index": len(st.session_state.results_history) - 1
+                    })
 
 # Pop-over window
 with st.popover("Saved tools"):
