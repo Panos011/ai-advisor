@@ -281,8 +281,9 @@ with left:
                     if passes_filters(m):
                         filtered.append(h)
 
-                st.session_state.last_results = filtered
                 st.session_state.results_history.append(filtered)
+                st.session_state.last_results = filtered
+                st.session_state.last_query = refined
 
                 if not filtered:
                     status.update(label="No results found", state="complete", expanded=True)
