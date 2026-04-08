@@ -215,21 +215,38 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as csvfile:
     for url in toollinks:
         r = fetch(url)
         soup = BeautifulSoup(r.content, "lxml")
-        # ToolName
+        # --- Tool Name ---
+        ToolName = ""
 
-        title_el = soup.find("h1", class_=lambda c: c and "text-darkBlue" in c)
+        # Priority 1: og:title meta tag (server-rendered, no JS needed)
+        og = soup.find("meta", property="og:title")
+        if og and og.get("content"):
+            ToolName = re.split(r"\s+(AI\s+)?Reviews", og["content"])[0].strip()
 
-        # fallback to any h1 if that fails
-        if not title_el:
-            title_el = soup.find("h1")
+        # Priority 2: <title> tag
+        if not ToolName:
+            title_tag = soup.find("title")
+            if title_tag:
+                raw = title_tag.get_text(strip=True)
+                ToolName = re.split(r"\s+(AI\s+)?Reviews", raw)[0].strip()
 
-        ToolName = title_el.get_text(separator=" ", strip=True) if title_el else ""
+        # Priority 3: any <h1> on the page
+        if not ToolName:
+            h1 = soup.find("h1")
+            if h1:
+                ToolName = h1.get_text(" ", strip=True)
+
+        # Priority 4: extract from URL slug as last resort
+        if not ToolName:
+            slug = url.rstrip("/").split("/tool/")[-1]
+            ToolName = slug.replace("-", " ").title()
+            print(f"(name from URL slug: {ToolName})")
+
         print(f"{ToolName}\n")
 
         if not ToolName:
             print(f"Skipping {url} — no name found")
             continue
-
         def slugify(s: str) -> str:
             return re.sub(r'[^a-z0-9]+', '-', (s or "").lower()).strip("-")
 
@@ -373,3 +390,16 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as csvfile:
         })
         csvfile.flush()
 print("TOTAL TOOL LINKS FOUND:", len(toollinks))
+
+# DEBUG — paste output back to me
+print(f"\n{'='*60}")
+print(f"URL: {url}")
+print(f"Status: {r.status_code}")
+print(f"Content length: {len(r.content)}")
+print(f"Title tag: {soup.find('title')}")
+print(f"All h1 tags: {[h.get_text(strip=True)[:80] for h in soup.find_all('h1')]}")
+print(f"__NEXT_DATA__ present: {bool(soup.find('script', id='__NEXT_DATA__'))}")
+# Check if it's a captcha/block page
+body_text = soup.get_text()[:500]
+print(f"First 500 chars of body:\n{body_text}")
+print(f"{'='*60}\n")
