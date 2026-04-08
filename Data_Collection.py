@@ -216,6 +216,7 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as csvfile:
         r = fetch(url)
         soup = BeautifulSoup(r.content, "lxml")
         # ToolName
+
         title_el = soup.find("h1", class_=lambda c: c and "text-darkBlue" in c)
 
         # fallback to any h1 if that fails
