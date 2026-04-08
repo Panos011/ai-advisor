@@ -67,7 +67,6 @@ def fetch(url: str, tries: int = 4):
                     f"?api_key={SCRAPER_KEY}"
                     "&keep_headers=true"
                     "&country_code=us"
-                    "&render=true"
                     f"&url={quote_plus(url)}"
                 )
                 r = session.get(wrapped, timeout=40, allow_redirects=True)
@@ -218,40 +217,18 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as csvfile:
         soup = BeautifulSoup(r.content, "lxml")
         # ToolName
 
-        # Tool Name
-        ToolName = ""
+        title_el = soup.find("h1", class_=lambda c: c and "text-darkBlue" in c)
 
-        # Method 1: try __NEXT_DATA__ (always server-rendered, no JS needed)
-        next_data = soup.find("script", id="__NEXT_DATA__", type="application/json")
-        if next_data and next_data.string:
-            try:
-                j = json.loads(next_data.string)
-                # navigate the Next.js page props to find the tool name
-                props = j.get("props", {}).get("pageProps", {})
-                ToolName = props.get("tool", {}).get("toolName", "")
-                if not ToolName:
-                    ToolName = props.get("tool", {}).get("name", "")
-            except Exception:
-                pass
-
-        # Method 2: fallback to any h1
-        if not ToolName:
+        # fallback to any h1 if that fails
+        if not title_el:
             title_el = soup.find("h1")
-            ToolName = title_el.get_text(" ", strip=True) if title_el else ""
 
-        # Method 3: fallback to <title> tag
-        if not ToolName:
-            title_tag = soup.find("title")
-            if title_tag:
-                # title is usually "ToolName AI Reviews: Use Cases..."
-                raw = title_tag.get_text(strip=True)
-                ToolName = raw.split(" AI Reviews")[0].split(" Reviews")[0].strip()
+        ToolName = title_el.get_text(separator=" ", strip=True) if title_el else ""
+        print(f"{ToolName}\n")
 
         if not ToolName:
             print(f"Skipping {url} — no name found")
             continue
-
-        print(f"{ToolName}")
 
         def slugify(s: str) -> str:
             return re.sub(r'[^a-z0-9]+', '-', (s or "").lower()).strip("-")
