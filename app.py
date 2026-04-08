@@ -186,7 +186,7 @@ if st.sidebar.button("Clear Saved Tools"):
 # Main Layout
 st.title("ComAI Recommender")
 prompt = st.chat_input("What tool do you need?")
-st.caption("Find the right AI tool in seconds")
+st.caption(f"Find the right AI tool in seconds — searching across {count_label} tools")
 left = st.container()
 
 with left:

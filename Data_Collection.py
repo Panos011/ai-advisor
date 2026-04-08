@@ -216,9 +216,18 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as csvfile:
         r = fetch(url)
         soup = BeautifulSoup(r.content, "lxml")
         # ToolName
-        title_el = soup.find("h1", class_="mb-0 text-2xl font-semibold text-darkBlue sm:text-[2.5rem]")
-        ToolName = title_el.get_text(" ", strip=True) if title_el else ""
+        title_el = soup.find("h1", class_=lambda c: c and "text-darkBlue" in c)
+
+        # fallback to any h1 if that fails
+        if not title_el:
+            title_el = soup.find("h1")
+
+        ToolName = title_el.get_text(separator=" ", strip=True) if title_el else ""
         print(f"{ToolName}\n")
+
+        if not ToolName:
+            print(f"Skipping {url} — no name found")
+            continue
 
         def slugify(s: str) -> str:
             return re.sub(r'[^a-z0-9]+', '-', (s or "").lower()).strip("-")
