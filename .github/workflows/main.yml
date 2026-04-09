@@ -37,7 +37,7 @@ jobs:
           python -m playwright install-deps
 
       - name: Run scraper -> AI_tools.csv
-        run: python futurepedia_scrapper.py
+        run: python futurepedia_scraper.py
 
       - name: Clean and build embeddings CSV
         run: python Data_Cleaning.py
