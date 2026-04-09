@@ -4,7 +4,7 @@ import json
 import re
 from urllib.parse import urljoin, urlsplit, urlunsplit, urlparse, parse_qs
 
-from crawlee.playwright_crawler import PlaywrightCrawler, PlaywrightCrawlingContext
+from crawlee.crawlers import PlaywrightCrawler, PlaywrightCrawlingContext
 from crawlee.configuration import Configuration
 from bs4 import BeautifulSoup
 
