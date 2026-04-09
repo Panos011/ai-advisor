@@ -1,12 +1,11 @@
 name: Weekly data refresh
-
 on:
   schedule:
-    - cron: "0 5 * * MON"  # every Monday at 05:00
-  workflow_dispatch: # allow manual run
+    - cron: "0 5 * * MON"
+  workflow_dispatch:
 
 permissions:
-  contents: write # needed so the action can commit back
+  contents: write
 
 jobs:
   refresh:
@@ -28,19 +27,12 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{runner.os}}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Install dependencies
+      - name: Install all dependencies
         run: |
-          pip install -r requirements.txt
+          pip install --no-cache-dir -r requirements.txt
           pip install --no-cache-dir "crawlee[playwright]"
           pip install --no-cache-dir playwright
+          python -c "import playwright; print('playwright OK:', playwright.__version__)"
           python -m playwright install chromium
           python -m playwright install-deps
 
@@ -53,27 +45,16 @@ jobs:
       - name: Build FAISS index (OpenAI embeddings)
         run: python Index.py
 
-      # ---------------- Safe commit & push step ----------------
       - name: Commit and push updated data
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Stage updated files
           git add AI_tools.csv Clean_AI_tools.csv Embeddings_AI_tools.csv index/
-
-          # Commit only if there are changes
           if ! git diff --cached --quiet; then
             git commit -m "Weekly data refresh"
           else
             echo "No changes to commit"
           fi
-
-          # Fetch the latest remote commits
           git fetch origin main
-
-          # Rebase local commit on top of remote
           git rebase origin/main || git rebase --abort
-
-          # Push changes to remote
           git push origin main
