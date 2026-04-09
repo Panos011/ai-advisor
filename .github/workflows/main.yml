@@ -39,10 +39,8 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install "crawlee[playwright]"
-
-      - name: Install Playwright browsers
-        run: |
+          pip install --no-cache-dir "crawlee[playwright]"
+          pip install --no-cache-dir playwright
           python -m playwright install chromium
           python -m playwright install-deps
 
