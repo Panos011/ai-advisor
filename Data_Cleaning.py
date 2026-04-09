@@ -57,6 +57,14 @@ for c in expected:
 for c in ["Name","Description","Price","Tool_link","Source_URL","Unique_Value"]:
     df[c] = df[c].map(norm_ws)
 
+# Fix Name: convert URL slug to proper title case
+def slug_to_name(s: str) -> str:
+    s = norm_ws(s)
+    if not s:
+        return s
+    return s.replace("-", " ").title()
+
+df["Name"] = df["Name"].map(slug_to_name)
 # Clean list-like columns (remove [ ])
 for c in ["Features","Pros","Cons","Use_cases","Categories"]:
     df[c] = df[c].map(clean_list_remove_brackets)

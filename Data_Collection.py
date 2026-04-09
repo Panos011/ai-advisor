@@ -218,31 +218,14 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as csvfile:
         # --- Tool Name ---
         ToolName = ""
 
-        # Priority 1: og:title meta tag (server-rendered, no JS needed)
-        og = soup.find("meta", property="og:title")
-        if og and og.get("content"):
-            ToolName = re.split(r"\s+(AI\s+)?Reviews", og["content"])[0].strip()
-
-        # Priority 2: <title> tag
-        if not ToolName:
-            title_tag = soup.find("title")
-            if title_tag:
-                raw = title_tag.get_text(strip=True)
-                ToolName = re.split(r"\s+(AI\s+)?Reviews", raw)[0].strip()
-
-        # Priority 3: any <h1> on the page
-        if not ToolName:
-            h1 = soup.find("h1")
-            if h1:
-                ToolName = h1.get_text(" ", strip=True)
-
-        # Priority 4: extract from URL slug as last resort
-        if not ToolName:
-            slug = url.rstrip("/").split("/tool/")[-1]
-            ToolName = slug.replace("-", " ").title()
-            print(f"(name from URL slug: {ToolName})")
-
+        # Tool name from URL slug
+        slug = url.rstrip("/").split("/tool/")[-1]
+        ToolName = slug
         print(f"{ToolName}\n")
+
+        if not ToolName:
+            print(f"Skipping {url} — no name found")
+            continue
 
         if not ToolName:
             print(f"Skipping {url} — no name found")
