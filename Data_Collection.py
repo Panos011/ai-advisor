@@ -323,8 +323,8 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as csvfile:
         Price = [li.get_text(" ", strip=True) for li in Price_ul.select("li")] if Price_ul else []
 
         # Get link to AI tool
-        link_class = soup.find("a", attrs={"data-tool-name": ToolName})
-        ToolLink = link_class.get("href") if link_class else None
+        link_tag = soup.find("a", attrs={"data-tool-name": True})
+        ToolLink = link_tag.get("href") if link_tag else None
 
         if ToolLink:
             ToolLink = ToolLink.split('?', 1)[0]
