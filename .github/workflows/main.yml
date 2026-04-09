@@ -31,8 +31,8 @@ jobs:
         run: |
           pip install --no-cache-dir -r requirements.txt
           pip install --no-cache-dir "crawlee[playwright]"
-          pip install --no-cache-dir playwright
-          python -c "import playwright; print('playwright OK:', playwright.__version__)"
+          pip install --no-cache-dir playwright "pyee>=11.1.0,<12.0.0"
+          python -c "from playwright.sync_api import sync_playwright; print('playwright OK')"
           python -m playwright install chromium
           python -m playwright install-deps
 
