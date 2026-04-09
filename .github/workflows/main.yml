@@ -41,8 +41,8 @@ jobs:
 
       - name: Install Playwright browsers
         run: |
-          playwright install chromium
-          playwright install-deps
+          python -m playwright install chromium
+          python -m playwright install-deps
 
       - name: Run scraper -> AI_tools.csv
         run: python futurepedia_scrapper.py
