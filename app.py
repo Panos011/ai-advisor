@@ -40,17 +40,27 @@ if "last_query" not in st.session_state:
     st.session_state.last_query = ""
 
 MIN_REQUEST_GAP = 1
+
+
 def parse_categories(raw):
     return [c.strip() for c in re.split(r"[|,/]", str(raw)) if c.strip()]
+
+
 def is_free(price_text: str) -> bool:
     return "free" in (price_text or "").lower()
-def tool_id_from_meta(m:dict) -> str:
+
+
+def tool_id_from_meta(m: dict) -> str:
     return (m.get("Tool_link") or m.get("Source_URL") or m.get("Name") or "").strip()
+
+
 def throttle():
     gap = time.time() - st.session_state.last_request_time
     if gap < MIN_REQUEST_GAP:
         time.sleep(MIN_REQUEST_GAP - gap)
     st.session_state.last_request_time = time.time()
+
+
 def warm_up():
     url = f"{API_BASE}/health"
     for attempt in range(2):
@@ -64,9 +74,12 @@ def warm_up():
             time.sleep(0.5 * (attempt + 1))
     return
 
+
 if "api_warmed" not in st.session_state:
     warm_up()
     st.session_state.api_warmed = True
+
+
 def render_results(hits):
     for idx, h in enumerate(hits):
         m = h.get("meta", {}) or {}
@@ -105,8 +118,11 @@ def render_results(hits):
                 if link and link != "#":
                     st.link_button("Visit official site", link)
 
+
 RETRIEVAL_K = 30
 FINAL_K = 5
+
+
 def clarify_api(q):
     try:
         for attempt in range(3):
@@ -121,6 +137,7 @@ def clarify_api(q):
         pass
     return {"action": "search", "refined_query": q}
 
+
 def recommend_api(q, retrieve_k=30, final_k=5):
     throttle()
     r = requests.post(
@@ -131,6 +148,7 @@ def recommend_api(q, retrieve_k=30, final_k=5):
     r.raise_for_status()
     return r.json().get("hits", [])
 
+
 def detect_intent(prompt, last_query):
     if not last_query:
         return "new"
@@ -139,19 +157,21 @@ def detect_intent(prompt, last_query):
         r = requests.post(
             f"{API_BASE}/detect_intent",
             json={"prompt": prompt, "last_query": last_query},
-            timeout = 30
+            timeout=30
         )
         r.raise_for_status()
         return r.json().get("intent", "new")
     except Exception:
         return "new"
+
+
 @st.cache_data(ttl=3600)
 def get_toolcount():
     url = f"{API_BASE}/health"
     for attempt in range(3):
         try:
             r = requests.get(url, timeout=20)
-            if r.status_code ==429:
+            if r.status_code == 429:
                 time.sleep(1.5 * (attempt + 1))
                 continue
             r.raise_for_status()
@@ -162,7 +182,7 @@ def get_toolcount():
 
 
 if "toolcount" not in st.session_state:
-    st.session_state.toolcount = get_toolcount ()
+    st.session_state.toolcount = get_toolcount()
 
 count = st.session_state.toolcount
 count_label = "many" if count is None else str(count)
@@ -281,7 +301,6 @@ with left:
                     if passes_filters(m):
                         filtered.append(h)
 
-                st.session_state.results_history.append(filtered)
                 st.session_state.last_results = filtered
                 st.session_state.last_query = refined
 
@@ -295,8 +314,6 @@ with left:
                     status.update(label="Compatible tools have been found", state="complete", expanded=True)
                     with st.chat_message("assistant"):
                         render_results(filtered)
-                    st.session_state.messages.append(
-                        {"role": "assistant", "content": f"Returned {len(filtered)} tools."})
 
                     st.session_state.results_history.append(filtered)
                     st.session_state.messages.append({
@@ -323,7 +340,6 @@ with st.popover("Saved tools"):
                 st.session_state.saved.pop(tid, None)
                 st.rerun()
 
-
         st.divider()
 
         st.subheader("Compare (2–3 tools)")
@@ -335,7 +351,7 @@ with st.popover("Saved tools"):
         )
 
         if st.button("Compare selected", type="primary",
-                        disabled=(len(selected_names) < 2 or len(selected_names) > 3)):
+                     disabled=(len(selected_names) < 2 or len(selected_names) > 3)):
             selected_meta = [st.session_state.saved[name_map[n]] for n in selected_names]
             st.divider()
             cols = st.columns(len(selected_meta))
@@ -352,4 +368,3 @@ with st.popover("Saved tools"):
                     link = meta.get("Tool_link", "")
                     if link:
                         st.link_button("Visit site", link)
-
