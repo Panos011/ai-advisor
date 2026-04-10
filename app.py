@@ -312,9 +312,6 @@ with left:
                     st.session_state.last_results = []
                 else:
                     status.update(label="Compatible tools have been found", state="complete", expanded=True)
-                    with st.chat_message("assistant"):
-                        render_results(filtered)
-
                     st.session_state.results_history.append(filtered)
                     st.session_state.messages.append({
                         "role": "assistant",
