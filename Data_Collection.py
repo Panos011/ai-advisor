@@ -1,4 +1,5 @@
-import json, re
+import json
+import re
 import os
 import csv
 import random
@@ -48,6 +49,7 @@ adapter = HTTPAdapter(max_retries=retries)
 session.mount("https://", adapter)
 session.mount("http://", adapter)
 
+
 def fetch(url: str, tries: int = 4):
     """
     Fetch a URL via ScraperAPI if SCRAPERAPI_KEY is set, otherwise direct.
@@ -85,6 +87,8 @@ def fetch(url: str, tries: int = 4):
             time.sleep(1.5 + i)
 
     raise last_err if last_err else RuntimeError("fetch failed")
+
+
 def get_category_slugs() -> list[str]:
     try:
         r = fetch(f"{URL}/ai-tools")
@@ -105,12 +109,22 @@ def get_category_slugs() -> list[str]:
     except Exception:
         return []
 
+
 PATHS = [
     "personal-assistant",
     "research-assistant",
     "spreadsheet-assistant",
     "translators",
     "presentations",
+    "video-enhancer",
+    "video-editing",
+    "video-generators",
+    "text-to-video",
+    "prompt-generators",
+    "writing-generators",
+    "paraphrasing",
+    "storyteller",
+    "copywriting-assistant",
     "website-builders",
     "marketing",
     "finance",
@@ -138,14 +152,16 @@ PATHS = [
     "gift-ideas",
     "code-assistant",
     "no-code",
-    "sql-assistant"
+    "sql-assistant",
 ]
+
 
 def norm(u: str) -> str:
     u = urljoin(URL, u)
     s = urlsplit(u)
     path = s.path.rstrip("/")
     return urlunsplit((s.scheme, s.netloc, path, "", ""))
+
 
 toollinks, seen = [], set()
 for path in PATHS:
@@ -215,7 +231,7 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as csvfile:
     for url in toollinks:
         r = fetch(url)
         soup = BeautifulSoup(r.content, "lxml")
-        # --- Tool Name ---
+        #  Tool Name
         ToolName = ""
 
         # Tool name from URL slug
@@ -227,9 +243,7 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as csvfile:
             print(f"Skipping {url} — no name found")
             continue
 
-        if not ToolName:
-            print(f"Skipping {url} — no name found")
-            continue
+
         def slugify(s: str) -> str:
             return re.sub(r'[^a-z0-9]+', '-', (s or "").lower()).strip("-")
 
@@ -257,7 +271,7 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as csvfile:
         if not ToolDescription:
             heading = soup.find(
                 lambda t: t.name in ('h2', 'h3', 'p')
-                and re.match(r'^\s*what is\b', t.get_text(" ",strip=True), re.I )
+                and re.match(r'^\s*what is\b', t.get_text(" ", strip=True), re.I)
             )
             if heading:
                 node = heading.find_next()
@@ -265,7 +279,7 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as csvfile:
                     if node.name in ('h2', 'h3'):
                         break
                     if node.name == 'p':
-                        txt = node.get_text(" ", strip= True)
+                        txt = node.get_text(" ", strip=True)
                         if txt and not re.match(r'^\s*what is\b', txt, re.I):
                             ToolDescription = txt
                             break
