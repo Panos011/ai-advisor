@@ -12,11 +12,6 @@ def norm_ws(x) -> str:
 
 
 def clean_list_remove_brackets(x) -> str:
-    """
-    If value is like "['a','b']" or '["a","b"]', parse it, clean items,
-    dedupe while preserving order, and return WITHOUT [ ] brackets.
-    Otherwise, just whitespace-normalize the string.
-    """
     s = norm_ws(x)
     if not (s.startswith("[") and s.endswith("]")):
         return s
@@ -34,7 +29,7 @@ def clean_list_remove_brackets(x) -> str:
                 seen.add(item_s)
                 out.append(item_s)
 
-        # ✅ no [ ] brackets:
+        #  no [ ] brackets:
         return " | ".join(out)
 
     except Exception:
@@ -47,33 +42,38 @@ df = pd.read_csv(IN_CSV, dtype=str, na_filter=False).fillna("")
 original_cols = list(df.columns)
 
 # Ensure expected columns exist (optional)
-expected = ["Name","Description","Price","Tool_link","Source_URL","Unique_Value",
-            "Features","Pros","Cons","Use_cases","Categories"]
+expected = ["Name", "Description", "Price", "Tool_link", "Source_URL", "Unique_Value",
+            "Features", "Pros", "Cons", "Use_cases", "Categories"]
 for c in expected:
     if c not in df.columns:
         df[c] = ""
 
 # Clean scalars
-for c in ["Name","Description","Price","Tool_link","Source_URL","Unique_Value"]:
+for c in ["Name", "Description", "Price", "Tool_link", "Source_URL", "Unique_Value"]:
     df[c] = df[c].map(norm_ws)
 
 # Fix Name: convert URL slug to proper title case
+
+
 def slug_to_name(s: str) -> str:
     s = norm_ws(s)
     if not s:
         return s
     return s.replace("-", " ").title()
 
+
 df["Name"] = df["Name"].map(slug_to_name)
 # Clean list-like columns (remove [ ])
-for c in ["Features","Pros","Cons","Use_cases","Categories"]:
+for c in ["Features", "Pros", "Cons", "Use_cases", "Categories"]:
     df[c] = df[c].map(clean_list_remove_brackets)
 
 # --- Output 1: Clean ---
 df_clean = df[original_cols]
 df_clean.to_csv(OUT_CLEAN, index=False, encoding="utf-8")
 
-# --- Output 2: Embeddings-friendly (same as before) ---
+# Output 2: Embeddings-friendly
+
+
 def flatten_to_pipes(x) -> str:
     s = norm_ws(x)
     if s.startswith("[") and s.endswith("]"):
@@ -85,19 +85,20 @@ def flatten_to_pipes(x) -> str:
             pass
     return s
 
+
 df_emb = df.copy()
-for c in ["Features","Pros","Cons","Use_cases","Categories"]:
+for c in ["Features", "Pros", "Cons", "Use_cases", "Categories"]:
     df_emb[c] = df_emb[c].map(flatten_to_pipes)
 
 df_emb["doc"] = (
-    "Name: "       + df_emb["Name"]        + "\n" +
-    "Categories: " + df_emb["Categories"]  + "\n" +
-    "Features: "   + df_emb["Features"]    + "\n" +
-    "Use cases: "  + df_emb["Use_cases"]   + "\n" +
-    "Pros: "       + df_emb["Pros"]        + "\n" +
-    "Cons: "       + df_emb["Cons"]        + "\n" +
-    "Price: "      + df_emb["Price"]       + "\n" +
-    "Description: "+ df_emb["Description"]
+    "Name: " + df_emb["Name"] + "\n" +
+    "Categories: " + df_emb["Categories"] + "\n" +
+    "Features: " + df_emb["Features"] + "\n" +
+    "Use cases: " + df_emb["Use_cases"] + "\n" +
+    "Pros: " + df_emb["Pros"] + "\n" +
+    "Cons: " + df_emb["Cons"] + "\n" +
+    "Price: " + df_emb["Price"] + "\n" +
+    "Description: " + df_emb["Description"]
 )
 
 df_emb.to_csv(OUT_EMB, index=False, encoding="utf-8")
