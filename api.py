@@ -23,33 +23,44 @@ with open(META_PATH, "r", encoding="utf-8") as f:
 
 client = OpenAI()
 
+
 class IntentRequest(BaseModel):
     prompt: str
     last_query: str
 
+
 class IntentResponse(BaseModel):
     intent: str
+
+
 class SearchRequest(BaseModel):
     q: str  # The questions
     k: int = 30  # How many results we need
+
 
 class RecommendRequest(BaseModel):
     q: str
     retrieve_k: int = 30
     final_k: int = 5
 
+
 class SearchHit(BaseModel):
     score: float  # How close the match is
     meta: dict  # The metadata of the tool
     why: Optional[str] = None
 
+
 class RecommendResponse(BaseModel):
     hits: list[SearchHit]
+
+
 class SearchResponse(BaseModel):
     hits: list[SearchHit]
 
+
 class ClarifyRequest(BaseModel):
     q: str
+
 
 class ClarifyResponse(BaseModel):
     action: Literal["clarify", "search"]
@@ -72,13 +83,15 @@ def embed(texts: list[str]) -> np.ndarray:
 
 # Decision logic to reduce bias and promote fairness #
 
+
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     """Cosine similarity between two vectors."""
-    dot = np.dot(a,b)
+    dot = np.dot(a, b)
     norm = np.linalg.norm(a) * np.linalg.norm(b)
     if norm == 0:
         return 0.0
     return float(dot / norm)
+
 
 def mmr_rerank(
         candidates: List[Dict[str, Any]],
@@ -113,7 +126,7 @@ def mmr_rerank(
                     for s in selected_indices
                 ]
                 max_sim = max(sims)
-            mmr_score = lambda_ * rel - (1 - lambda_) *max_sim
+            mmr_score = lambda_ * rel - (1 - lambda_) * max_sim
 
             if mmr_score > best_mmr:
                 best_mmr = mmr_score
@@ -212,18 +225,16 @@ def recommend(body: RecommendRequest):
     except Exception:
         selected = []
 
-
-
     # build final hits in the chosen order
     final_hits = []
     for item in selected:
         try:
             id_int = int(item.get("id", -1))
             reason = str(item.get("reason", ""))
-        except(TypeError, ValueError):
+        except (TypeError, ValueError):
             continue
         if 0 <= id_int < len(META):
-            final_hits.append({"score": 0.0, "meta": META[id_int], "why" : reason})
+            final_hits.append({"score": 0.0, "meta": META[id_int], "why": reason})
 
     # fallback if LLM fails: just take top k
     if not final_hits:
@@ -232,6 +243,8 @@ def recommend(body: RecommendRequest):
                       for i, s in top[:body.final_k]]
 
     return {"hits": final_hits}
+
+
 @app.post("/clarify", response_model=ClarifyResponse)
 def clarify(body: ClarifyRequest):
     q = body.q.strip()
@@ -272,6 +285,7 @@ def clarify(body: ClarifyRequest):
     refined = (data.get("refined_query") or q).strip()
     return {"action": "search", "refined_query": refined}
 
+
 @app.post("/detect_intent", response_model=IntentResponse)
 def detect_intent(body: IntentRequest):
     system = (
@@ -283,7 +297,7 @@ def detect_intent(body: IntentRequest):
     )
     try:
         resp = client.chat.completions.create(
-            model= CHAT_MODEL,
+            model=CHAT_MODEL,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": (
@@ -291,8 +305,8 @@ def detect_intent(body: IntentRequest):
                     f"New message: {body.prompt}"
                 )}
             ],
-            temperature= 0.0,
-            response_format = {"type": "json_object"}
+            temperature=0.0,
+            response_format={"type": "json_object"}
         )
         data = json.loads(resp.choices[0].message.content)
         intent = data.get("intent", "new")
@@ -301,3 +315,4 @@ def detect_intent(body: IntentRequest):
         return {"intent": intent}
     except Exception:
         return {"intent": "new"}
+    
