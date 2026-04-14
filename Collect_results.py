@@ -1,4 +1,6 @@
-import requests, json, time
+import requests
+import json
+import time
 from openai import OpenAI
 from dotenv import load_dotenv
 load_dotenv()
