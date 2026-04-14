@@ -1,0 +1,409 @@
+{
+  "I need a tool to transcribe audio meetings": [
+    {
+      "name": "Meetgeek",
+      "categories": "personal assistant | transcriber | summarizer",
+      "description": "MeetGeek is an AI-powered meeting assistant designed to revolutionize how professionals manage their meetings. It offers a suite of innovative features including automatic recording, transcription, summarization, and sharing of meeting insights. Tailored for users ranging from freelancers to large enterprises, MeetGeek aims to boost productivity by automating note-taking and follow-ups, ensuring accurate and efficient capture of essential information.",
+      "price": "Free Tier: Start with basic features for free to revolutionize meetings.|Subscription Plans: Various tiers available with additional features to suit different needs.",
+      "why": "MeetGeek directly supports automatic recording and transcription of meetings, which matches your need to transcribe audio meetings. It also includes summarization and sharing, making it useful if you want more than just raw text."
+    },
+    {
+      "name": "Transkriptor",
+      "categories": "transcriber | summarizer | personal assistant",
+      "description": "Transkriptor is an innovative AI-driven transcription tool designed to convert audio into text efficiently. Whether you're transcribing meetings, interviews, or lectures, Transkriptor offers a seamless experience with its state-of-the-art artificial intelligence technology. It's tailored for individuals and professionals who need to simplify the transcription process, ensuring accuracy and speed across 100+ languages.",
+      "price": "Pro : $19.99 per month, includes 2,400 transcription minutes, fast and accurate transcriptions, meeting and voice recording, translation, collaboration tools, and mobile app access.|Team : $30 per month per seat, includes 3,000 transcription minutes per seat, shared team spaces, auto-recording with calendar integration, knowledge bases, centralized billing, and user management.|Enterprise : Custom pricing per month, includes custom seats and transcription quotas, API access, custom workflows, feature development, system integrations, knowledge base insights, and advanced security.",
+      "why": "Transkriptor is built specifically to convert audio into text efficiently, including meetings, interviews, and lectures. It also supports fast transcription and many languages, which is helpful for varied meeting audio."
+    },
+    {
+      "name": "Tldv",
+      "categories": "transcriber | summarizer | sales assistant",
+      "description": "tldv, available at tldv.io, is an AI-driven notetaker designed to transform the way meetings are documented and analyzed. It offers seamless recording, transcription, and summarization of meetings held on platforms like Zoom, Microsoft Teams, and Google Meet. Tailored for professionals and organizations looking to enhance productivity, tldv simplifies capturing key insights and action points, making it an invaluable tool for efficient meeting management.",
+      "price": "Free Tier: Offers a no-time-limit free plan, allowing users to explore all features.",
+      "why": "tldv offers seamless recording and transcription for meetings on Zoom, Microsoft Teams, and Google Meet. Its free tier makes it a strong budget-friendly option if you want to start transcribing meetings at no cost."
+    },
+    {
+      "name": "Otter Ai",
+      "categories": "summarizer | personal assistant | transcriber",
+      "description": "Otter.ai is an innovative AI-powered tool designed to transform how meetings are documented and analyzed. It offers real-time transcription and automated note-taking capabilities, making it a powerful asset for businesses, educators, and media professionals. With its advanced AI Meeting Agent suite, Otter.ai simplifies the often tedious task of capturing meeting details, ensuring no information is missed and everyone stays informed.",
+      "price": "Basic : $0 per month. Includes 300 transcription minutes (30 minutes per conversation), real-time meeting summaries in English, French, or Spanish, Otter AI Chat, and Zoom/Meet integration for automatic note-taking.|Pro : $16.99 per month per user. Offers 1,200 monthly transcription minutes (90 minutes per conversation), advanced search and playback, team collaboration features, and import support for up to 10 audio/video files each month.|Business : $30 per month per user. Unlocks 6,000 monthly transcription minutes (4 hours per conversation), admin insights, priority support, and unlimited file imports, plus connects up to 3 concurrent meetings for live transcription.|Enterprise : Custom pricing. Designed for organizations needing SSO, deployment controls, domain capture, OtterPilot for Sales, video replay, and advanced security. Requires scheduling a demo for access.",
+      "why": "Otter.ai provides real-time transcription and automatic note-taking for meetings, which fits your transcription need well. It also has a free basic plan, so you can try it without paying upfront."
+    },
+    {
+      "name": "Fireflies Ai",
+      "categories": "transcriber | summarizer | personal assistant",
+      "description": "Fireflies.ai is a cutting-edge AI notetaker designed to transcribe, summarize, analyze, and manage voice conversations across various platforms like Google Meet, Teams, and Zoom. As a professional deeply embedded in the digital transformation era, I found Fireflies.ai not only simplifies meeting management but also enhances productivity by automating routine tasks, allowing users to focus on more strategic activities.",
+      "price": "Free Tier: Start with no cost, providing limited AI summaries and 800 mins of storage per seat.|Pro Tier: Priced at $10 per seat/month, billed annually, offering unlimited transcription and AI summaries.|Business Tier: Available at $19 per seat/month, billed annually, includes advanced features like video screen capture and team insights.|Enterprise Tier: Custom pricing for large-scale needs, including dedicated support and custom data retention.",
+      "why": "Fireflies.ai is designed to transcribe voice conversations across common meeting platforms like Google Meet, Teams, and Zoom. It includes a free tier and is focused on meeting transcription, making it a practical choice for audio meetings."
+    }
+  ],
+  "I need a free AI tool to help me write essays": [
+    {
+      "name": "Perfectessaywriterai",
+      "categories": "writing generators | education | research",
+      "description": "Perfect Essay Writer is an AI-powered tool aimed at revolutionizing the essay writing process. By leveraging advanced algorithms, it provides students , educators, and professionals with the ability to generate high-quality essays on a wide range of topics within seconds. Designed to enhance productivity in writing tasks, Perfect Essay Writer simplifies the often daunting task of essay composition, making it accessible and stress-free.",
+      "price": "Free Access: Perfect Essay Writer is available for use at no cost.",
+      "why": "This tool is explicitly free to use and is designed for generating essays, which matches your need for a free AI essay-writing helper. It also targets students and academic writing, making it a strong fit for essay tasks."
+    },
+    {
+      "name": "Myessaywriter Ai",
+      "categories": "writing generators | education | students",
+      "description": "In the vast sea of AI-driven academic tools, MyEssayWriter.ai emerges as a formidable ally for students, educators, and professionals alike, aiming to streamline the essay writing process. At its core, MyEssayWriter.ai is designed to alleviate the stress associated with writing and structuring essays. By leveraging advanced AI technologies, this tool assists users in generating high-quality, plagiarism-free essays that adhere to academic standards, making it an indispensable resource for anyone looking to enhance their writing efficiency and quality.",
+      "price": "Free Tier: Start with a complimentary trial, accessing all tools with a 1500-word limit.|Basic Tier: Priced at $9.99 per month, offering up to 1500 words per essay.|Pro Tier: At $14.99 per month, this plan offers unlimited essays and additional features like a 50% discount on custom essay orders.|Advanced Tier: Best value at $99.99 per month, including all features from other tiers and four months free on an annual subscription.",
+      "why": "MyEssayWriter.ai offers a free tier, so you can start without paying. Its core purpose is essay generation and academic writing support, which aligns closely with writing essays."
+    },
+    {
+      "name": "Aithor",
+      "categories": "writing generators | research | paraphrasing",
+      "description": "In the ever-evolving landscape of digital content creation, Aithor emerges as a cutting-edge AI tool designed to revolutionize the way we approach writing and paraphrasing online essays and papers. Aimed at students, educators, content creators, and professionals in various fields, Aithor simplifies the daunting task of generating high-quality, original content while maintaining academic integrity.",
+      "price": "Free Tier: Experience Aithor with a basic feature set at no cost.|Pro Tier: The Pro Tier starts at $24.99 per month.",
+      "why": "Aithor includes a free tier and is built for generating essays and papers. Its focus on academic writing and originality makes it suitable for essay drafting."
+    },
+    {
+      "name": "Jenni",
+      "categories": "writing generators | research | education",
+      "description": "In the bustling world of academic and professional writing, Jenni emerges as a cutting-edge AI-powered text editor designed to transform the way we approach writing, editing, and citing documents. This tool is not just another text editor; it is engineered to assist users in crafting well-researched papers, enhancing productivity, and maintaining accuracy in citations across various formatting styles, including APA, MLA, and more. Whether you're a student, a researcher, or a professional, Jenni promises to make your writing experience smoother and more efficient.",
+      "price": "Free Version: Start with a basic version of Jenni at no cost - ideal for users who want to test its capabilities.|Premium Plans: Detailed pricing is available on the Jenni website, tailored to meet different needs, from individual academic use to institutional licenses.",
+      "why": "Jenni has a free version and is aimed at academic writing, including research and citation support. That makes it useful if you want help drafting essays with a more school-focused workflow."
+    },
+    {
+      "name": "Paperpal",
+      "categories": "writing generators | research | education",
+      "description": "In my quest to explore and review the latest AI tools that are reshaping how we approach tasks, I recently turned my attention to Paperpal. This tool positions itself as a comprehensive assistant for academic writing, promising to enhance the writing experience with science-backed language suggestions, plagiarism checks, and research features. Designed for students, academics, and researchers, Paperpal aims to streamline the writing process, making it faster, more accurate, and more efficient.",
+      "price": "Free Tier: Paperpal offers a free version with limited features, suitable for casual users.|Paperpal Prime: The premium subscription starts with access to advanced features, including unlimited plagiarism checks and comprehensive language suggestions.",
+      "why": "Paperpal offers a free tier and is designed for academic writing assistance. It can help improve essay quality with language suggestions and research-oriented features."
+    }
+  ],
+  "I need a tool to generate images from text": [
+    {
+      "name": "Craiyon",
+      "categories": "cartoon generators | text to image | fun tools",
+      "description": "Craiyon, formerly known as DALL-E Mini, is an innovative AI tool designed to generate images from textual descriptions. This remarkable application leverages advanced machine learning algorithms to transform written prompts into visually compelling artwork. Primarily targeted at creative professionals, hobbyists, and educators, Craiyon simplifies the process of creating unique images by simply typing a descriptive phrase.",
+      "price": "Free Access: 2 Pro generations per day and unlimited Lite generations (both with watermarks).|Supporter: $12 per month. Get 120 Pro credits for top-quality images, unlimited Lite image generation, no ads or watermarks, and no attribution needed\u2014though generated images remain public.|Professional: $24 per month. Includes 250 Pro credits, private image generation, fastest processing, unlimited Lite images, no ads, no attribution, and early access to new features.|Enterprise: Custom pricing. Designed for teams needing fully customizable models, custom integrations, high-volume usage, API access, and dedicated support.",
+      "why": "Craiyon directly matches your need because it is specifically a text-to-image tool that generates images from written prompts. It also has a free access option, which makes it a good starting point if you want to try image generation without paying upfront."
+    },
+    {
+      "name": "Imagine Anything",
+      "categories": "text to image | image generators | design generators",
+      "description": "Imagine Anything is a cutting-edge AI tool designed to transform the way we interact with digital content creation. At its core, Imagine Anything leverages powerful AI algorithms to generate high-quality images from textual descriptions, making it an invaluable asset for professionals across various industries who require quick, customizable visual content.",
+      "price": "Free Tier: Get started with Imagine Anything with a generous free tier allowing basic image generation.|Pro Tier: The Pro tier starts at $9.99 per month, offering advanced features and higher output resolutions.",
+      "why": "Imagine Anything is built to transform textual descriptions into images, so it fits your request very closely. It offers a free tier and a low-cost Pro plan, giving you flexibility if you want to start free and upgrade later."
+    },
+    {
+      "name": "Dreamstudio",
+      "categories": "text to image | portrait generators | design generators",
+      "description": "DreamStudio is a cutting-edge AI tool that leverages advanced machine learning algorithms to empower users in creating stunning visual content. Designed for artists, designers, and creative professionals, it simplifies the process of generating high-quality images from textual descriptions. This innovative platform is built to enhance creativity and streamline workflows in visual arts.",
+      "price": "Free Tier: Explore DreamStudio with limited functionality at no cost.|Pro Tier: Full access starts at $10 per month.",
+      "why": "DreamStudio is a text-to-image tool designed for generating high-quality images from prompts. It includes a free tier and paid access starting at a reasonable monthly price, which suits users who want to test the tool before subscribing."
+    },
+    {
+      "name": "Canva Text To Image",
+      "categories": "text to image | marketing | design generators",
+      "description": "Canva Text-to-Image is an innovative tool designed to transform words into compelling visuals. It leverages advanced AI to interpret text input and create images that represent the described concepts. Aimed at marketers, designers, educators, and anyone in need of quick visual content, Canva Text-to-Image streamlines the graphic creation process in a user-friendly and intuitive manner.",
+      "price": "Free Version: Canva offers a basic version of Text-to-Image that's included with the free Canva account.|Subscription Plans: Additional features and capabilities are available through Canva Pro and Canva for Enterprise plans.",
+      "why": "Canva Text To Image directly supports generating visuals from text, so it matches your need well. The free Canva account includes basic text-to-image access, making it a convenient no-cost option."
+    },
+    {
+      "name": "Freepik Ai Image Generator",
+      "categories": "text to image | e-commerce | image generators",
+      "description": "Freepik AI Image Generator revolutionizes the way we create visuals by transforming textual descriptions into stunning images in real time. Designed for creatives, marketers, and professionals, this tool simplifies the process of generating high-quality images, offering a variety of modes and customizable presets to refine the output. With the power of artificial intelligence, users can effortlessly turn their ideas into captivating visuals without needing advanced technical skills.",
+      "price": "Free Tier: Experience Freepik AI Image Generator with a limit of 20 generations per day.|Premium Subscription: Offers unlimited generations and access to all stock resources and tools.",
+      "why": "Freepik AI Image Generator is explicitly a text-to-image tool and is designed for creating images from textual descriptions. It includes a free tier with daily generation limits, which gives you a free way to generate images from text."
+    }
+  ],
+  "I need an AI tool to help me write and debug Python code": [
+    {
+      "name": "Replit",
+      "categories": "code assistant | education | low-code/no-code",
+      "description": "Replit AI is a cutting-edge tool designed to enhance coding and software development through artificial intelligence. At its core, Replit AI aims to streamline the coding process, making it faster, more efficient, and accessible to both beginners and seasoned developers. This platform stands out by integrating AI directly into the coding environment, which not only assists in writing code but also in debugging and optimizing it.",
+      "price": "Free Tier: Explore Replit AI with a basic set of features at no cost.|Pro Tier: Advanced features and capabilities start at $7 per month.",
+      "why": "Replit directly matches your need because it helps write code and includes debugging and optimization support inside the coding environment. It also has a free tier, which makes it a strong budget-friendly option to start with."
+    },
+    {
+      "name": "Warp Ai",
+      "categories": "code assistant | workflows",
+      "description": "Warp AI is a cutting-edge tool designed to integrate artificial intelligence seamlessly with your command line terminal. Its primary function is to simplify and enhance the user experience for developers by providing AI-driven command suggestions, error explanations, and workflow automation directly within the terminal environment. This tool is a boon for developers looking to streamline their coding and debugging processes, offering a blend of ease and efficiency that is tailored for both novice and experienced coders alike.",
+      "price": "Free Tier: Experience Warp AI with up to 40 requests per month at no cost.|Team Tier: Unlock higher request limits and additional features for your team. Visit warp.dev/pricing for more details.",
+      "why": "Warp AI is a good fit if you want help debugging Python from the terminal, since it provides AI-driven command suggestions and error explanations. Its free tier also lets you try it without paying upfront."
+    },
+    {
+      "name": "Cursor",
+      "categories": "code assistant",
+      "description": "Cursor is an innovative AI-powered code editor designed to enhance developer productivity and streamline the coding process. By integrating advanced AI capabilities directly into the development environment, Cursor offers features like AI-driven code completion and natural language coding commands. It aims to transform how developers interact with their codebase, making coding faster and more intuitive.",
+      "price": "Free Version: Explore Cursor\u2019s basic features at no cost.|Pro Version: Access advanced features and enhanced support with the Pro version. Contact Cursor for detailed pricing information.",
+      "why": "Cursor is specifically a code editor with AI code completion and natural language coding commands, which is useful for writing Python efficiently. It is well aligned with coding workflows, though the pricing details are less explicit than some other options."
+    },
+    {
+      "name": "Amazon Q Developer",
+      "categories": "code assistant | education | ai chatbots",
+      "description": "Amazon Q Developer is a generative AI-powered assistant designed to revolutionize software development. Available through Amazon Web Services, it offers a comprehensive suite of tools to help developers and IT professionals build, operate, and transform software efficiently. By streamlining tasks such as coding, testing, and documentation, Amazon Q Developer simplifies the software development lifecycle, making it a valuable asset for those seeking to enhance productivity and reduce operational costs.",
+      "price": "Free : $0 per month. Includes basic code suggestions, public CLI completions, license reviews, and limited monthly access to advanced features like IDE chat (50 uses), AWS queries (25), and code transformations (1,000 lines).|Pro : $19 per month per user. Unlocks higher limits across all features, custom code suggestions, enterprise access controls, and added support for SQL generation and complex app upgrades.",
+      "why": "Amazon Q Developer offers code suggestions, IDE chat, and code transformations, which can help both write and debug Python code. It also includes a free tier with limited access, making it a reasonable no-cost starting point."
+    },
+    {
+      "name": "Monica",
+      "categories": "ai chatbots | code assistant | writing generators",
+      "description": "Monica is an all-in-one AI assistant designed to revolutionize how we interact with digital content, whether for chatting, writing, coding, or searching. Utilizing cutting-edge AI models such as GPT-4o, Claude 3.5, and Gemini 1.5, Monica aims to simplify and enhance user experiences across multiple platforms, including browser extensions for Chrome and Edge, as well as desktop and mobile applications. This tool is perfect for professionals and individuals seeking to streamline their workflows, offering features that range from AI-assisted chat and writing to sophisticated code assistance.",
+      "price": "Free Tier: Offers a free usage tier with daily limits, perfect for casual users to explore Monica's features.",
+      "why": "Monica includes code assistance alongside chat and writing features, so it can help generate Python snippets and troubleshoot code. It has a free usage tier, which fits if you want an accessible general AI assistant with coding support."
+    }
+  ],
+  "I need a tool to create presentations automatically": [
+    {
+      "name": "Gamma",
+      "categories": "presentations | copywriting | startup tools",
+      "description": "Gamma is an AI presentation, document, and web-page creator that turns plain text or existing files into polished, interactive decks in under a minute. It focuses on visual storytelling, using large language and image models to generate content structure, design, and on-brand layouts with minimal manual formatting. Aimed at knowledge workers, educators, marketers, founders, and sales teams, it replaces traditional slide tools with a card-based format that feels closer to editing a modern doc than wrestling with PowerPoint.",
+      "price": "Free : $0 per month; includes up to 10 cards per prompt, 400 credits at signup, basic presentations, documents, websites, social posts, images, imports from PDF and PPTX, and exports to PDF, PPTX, PNG, and Google Slides.|Plus : $10 per seat per month; includes everything in Free plus up to 20 cards per prompt, 1,000 monthly credits, removal of Gamma branding, and access to advanced AI image models.|Pro : $25 per seat per month; includes everything in Plus plus up to 60 cards per prompt, 4,000 monthly credits, premium AI image models, custom branding and fonts, detailed analytics and advanced sharing, publishing to up to 10 custom domains, API access, and workspace templates.|Ultra : $100 per seat per month; includes everything in Pro plus up to 75 cards per prompt, 20,000 monthly credits, access to the most advanced AI models for text, image, and video, publishing to up to 100 custom domains, and early access to new features.",
+      "why": "Gamma directly creates polished presentations from plain text or existing files in under a minute, which matches automatic presentation creation very well. It also offers a free tier, making it a strong budget-friendly option."
+    },
+    {
+      "name": "Magicslides",
+      "categories": "presentations | students | teachers",
+      "description": "MagicSlides is an AI presentation maker that turns plain text, topics, URLs, documents, images, and even YouTube videos into editable slide decks in seconds. Powered by Gemini AI and exposed across web, Google Slides, Chrome, Figma, ChatGPT and more, it focuses on skipping the blank-slide stage so users can start from a structured, designed presentation instead of a rough outline. It supports 136+ languages and includes an AI chat assistant that can create, rewrite, and extend slides directly inside the deck.",
+      "price": "Free: $0 per month; includes 3 presentations per month (30 slides max), 2,500 characters per presentation, up to 10 slides per presentation, watermark included, PDF & PowerPoint exports, and 1 Clone Slide.|Essential: $8 per month; includes 10 presentations per month (100 slides max), 8,000 characters per presentation, up to 10 slides per presentation, no watermark, PDF/PowerPoint/Google Slides exports, and 10 Clone Slides per month.|Pro: $16 per month; includes 50 presentations per month (750 slides max), 12,000 characters per presentation, up to 15 slides per presentation, no watermark, PDF/PowerPoint/Google Slides exports, and 50 Clone Slides per month.|Premium: $29 per month; includes unlimited standard presentations plus 50 premium per month, 100,000 characters per presentation, up to 50 slides per presentation, no watermark, PDF/PowerPoint/Google Slides exports, and 100 Clone Slides per month.",
+      "why": "MagicSlides turns text, topics, URLs, documents, images, and YouTube videos into editable slide decks automatically. Its free plan and broad input support make it a very good fit for fast presentation generation."
+    },
+    {
+      "name": "Decktopus Ai",
+      "categories": "presentations | design generators | education",
+      "description": "Decktopus AI emerges as a transformative tool in the realm of presentation creation, leveraging artificial intelligence to redefine how professionals craft their slides. With its claim as the world's #1 AI-Powered Presentation Generator, Decktopus AI is designed for a broad spectrum of users, from sales professionals and marketing managers to founders and agencies. It simplifies the traditionally time-consuming process of presentation design, allowing users to focus more on content delivery rather than the intricacies of slide creation.",
+      "price": "Pro Annual Access - $14.99/month 750 AI Credits/month Includes: PDF/PPT Export, Presentation Analytics, Sharing Link, Form Response Notifications, Slide & Speaker Notes, Tips & QA Generation|750 AI Credits/month|Includes: PDF/PPT Export, Presentation Analytics, Sharing Link, Form Response Notifications, Slide & Speaker Notes, Tips & QA Generation|Business Annual Access - $49.99/month 1000 AI Credits/month Includes: All Pro features + Brand Features, Advanced Form Response, Webhook, Custom Domain, Team & Organization|1000 AI Credits/month|Includes: All Pro features + Brand Features, Advanced Form Response, Webhook, Custom Domain, Team & Organization",
+      "why": "Decktopus AI is built specifically to automate presentation creation and reduce manual slide design work. It has a lower-cost Pro plan and includes export and presentation-focused features that suit this need."
+    },
+    {
+      "name": "Slidesai",
+      "categories": "presentations | education | marketing",
+      "description": "In the digital age, where presentations are a crucial part of professional and educational communication, SlidesAI emerges as a groundbreaking tool designed to revolutionize the way we create presentation slides. By harnessing the power of artificial intelligence, SlidesAI transforms the tedious task of slide creation into a seamless, efficient process. This tool is particularly designed for individuals and professionals who seek to save time, enhance productivity, and elevate the quality of their presentations without the need for advanced design skills.",
+      "price": "Basic Plan: Free, offering 3 presentations per month, 2500 character input per presentation, and 10 AI credits per month.|Pro Plan: $10/month, including 10 presentations per month, 6000 character input per presentation, and 50 AI credits.|Premium Plan: $20/month for unlimited presentations, 12000 character input per presentation, and 100 AI credits.",
+      "why": "SlidesAI is designed to transform the slide-making process into a quick AI-driven workflow, generating presentations efficiently from text. It also includes a free plan, which is helpful if you want to start without paying."
+    },
+    {
+      "name": "Snapdeck",
+      "categories": "presentations",
+      "description": "Snapdeck is a versatile AI tool designed to simplify the creation of presentations and decks. Tailored for individuals and professionals, it offers a streamlined way to generate visually appealing and informative presentations. Whether you're preparing for a business meeting, a class project, or a creative pitch, Snapdeck aims to ease the burden of crafting slides from scratch.",
+      "price": "Free: $0 per month. Includes up to 20 credits per month, 3 basic themes, standard processing, no overage option, and community support.|Plus: $10 per month (promo, normally $15). Includes up to 300 credits per month, all themes, $5 per 100 credits overage, priority processing, and direct email support.|Pro: $100 per month. Includes up to 3000 credits per month, all themes, $5 per 200 credits overage, top priority processing, and direct email support.",
+      "why": "Snapdeck is an AI tool focused on simplifying the creation of presentations and decks, so it matches the core need of automatic presentation generation. It also provides a free tier, giving you a no-cost way to try it first."
+    }
+  ],
+  "I need a free AI tool to help me learn a new language": [
+    {
+      "name": "Duolingo",
+      "categories": "education | travel | students",
+      "description": "Duolingo is a dynamic language learning platform that has transformed the way millions of people around the world acquire new languages. Designed for learners from all walks of life, this tool simplifies language learning through gamified lessons and intuitive interactions. Whether you're a beginner looking to pick up basic phrases for a vacation, or a seasoned language learner aiming to brush up on your grammar, Duolingo offers a personalized learning experience that adjusts to your pace and style.",
+      "price": "Free Tier: Full access to all language courses with no cost.|Duolingo Plus: Starts at $6.99 per month for an ad-free experience, offline lessons, and progress tracking.",
+      "why": "Duolingo is completely free and is specifically built for language learning, with full access to language courses at no cost. It is a strong fit if you want a no-cost, structured way to start learning a new language."
+    },
+    {
+      "name": "Talkpal",
+      "categories": "education | ai chatbots | translator",
+      "description": "TalkPal is an innovative AI-powered language tutor designed to provide an immersive learning experience for those who wish to master new languages. With the use of GPT-powered technology, it offers users the opportunity to engage in unlimited conversations on a plethora of topics, enhancing their language skills across listening, speaking, reading, and writing. It is not just a learning tool but a comprehensive language partner that adapts to your individual pace and learning style.",
+      "price": "Basic Plan: Free access with limited features and a 10-minute daily limit.|Premium 1 Month: $9.99 per month for unlimited practice and advanced features.|Premium 12 Months: $4.99 per month (billed annually) for the same unlimited access and features as the monthly plan.",
+      "why": "TalkPal offers a free access tier and is designed as an AI language tutor with conversation practice. Its focus on speaking, listening, reading, and writing makes it a good match for learning through interactive practice."
+    },
+    {
+      "name": "Quazel",
+      "categories": "education | translator",
+      "description": "Quazel is an innovative AI language tutor designed to fit right in your pocket. This cutting-edge tool is aimed at language learners of all levels, offering personalized and interactive lessons that adapt to the user's pace and learning style. As someone who has explored numerous language learning apps and tools, I'm excited to share my insights on what makes Quazel a standout choice for anyone looking to master a new language.",
+      "price": "Free Trial: Start with a free version to explore basic features.|Premium Subscription: Unlock advanced lessons and features with a monthly or yearly subscription.",
+      "why": "Quazel includes a free version and is purpose-built as an AI language tutor for learners of all levels. It provides personalized, interactive lessons that adapt to your pace, which suits language learning well."
+    },
+    {
+      "name": "Praktika Ai",
+      "categories": "avatars | education",
+      "description": "Praktika is an innovative language-learning application that leverages generative AI avatars to provide an immersive English learning experience. It focuses on conversation-first learning, offering a unique blend of technology and education to help users gain fluency in English through interactive sessions with AI avatars.",
+      "price": "",
+      "why": "Praktika Ai is focused on language learning through conversation-first practice with AI avatars. While the pricing details are unclear, its core features align closely with immersive language practice."
+    },
+    {
+      "name": "Langotalk",
+      "categories": "education | personal assistant | ai chatbots",
+      "description": "Langotalk is a state-of-the-art language learning tool powered by AI, designed to revolutionize the way people acquire new languages. It offers personalized, chat-based language learning experiences, enabling users to immerse themselves in their chosen language 24/7. With a focus on conversational interaction with AI, Langotalk provides a natural and effective method for language acquisition, catering to individuals who seek a convenient, cost-effective, and engaging approach to mastering a new language.",
+      "price": "Free Trial: Langotalk offers a 7-day free trial for users to experience the platform before committing.|Subscription Options: Specific pricing plans may vary, so users are encouraged to visit the official website for up-to-date information.",
+      "why": "Langotalk is designed specifically for AI-powered language learning and offers personalized chat-based practice. It has a free trial, making it a viable option to try for free before deciding whether to pay."
+    }
+  ],
+  "I need a tool to edit and enhance videos": [
+    {
+      "name": "Capcut",
+      "categories": "video editing | video enhancer | text to speech",
+      "description": "CapCut is a versatile video editing application designed to elevate your video content creation experience. Available on multiple platforms, including iOS and MacOS, CapCut offers a comprehensive suite of editing tools that cater to both beginners and advanced users. This tool is perfect for those looking to enhance their video editing capabilities with features that simplify complex editing tasks. Whether you're a content creator on TikTok, a YouTuber, or just someone who enjoys making videos, CapCut provides an intuitive interface and powerful features to bring your creative visions to life.",
+      "price": "Free Tier: Offers a wide range of features without cost.|Pro Monthly Subscription: Available for $7.99 per month, providing access to premium features and additional effects.",
+      "why": "CapCut matches your need for both video editing and video enhancement, with a broad feature set for trimming, effects, and polishing footage. It also has a free tier, which is useful if you want to try before paying."
+    },
+    {
+      "name": "Adobe Premiere Pro",
+      "categories": "video editing | social media | video enhancer",
+      "description": "Adobe Premiere Pro is a leading video editing software that sets the standard in the multimedia industry. Designed for professionals, it enables users to create visually stunning videos with precision and creativity. From basic editing and trimming to advanced effects, audio mixing, and color grading, Premiere Pro offers a comprehensive suite of tools suitable for both beginners and seasoned professionals. Its integration of AI-driven features enhances workflow efficiency, making it indispensable for serious video production.",
+      "price": "Individual Plan: Starts at $20.99 per month.|Business Plan: Tailored plans for teams starting at $33.99 per month per license.",
+      "why": "Adobe Premiere Pro is a strong fit for editing videos with advanced tools like effects, audio mixing, and color grading, which also support enhancement work. It is a professional-grade option, though it is not free."
+    },
+    {
+      "name": "Davinci Resolve",
+      "categories": "video editing | video enhancer | audio editing",
+      "description": "DaVinci Resolve 19 is not just any video editing software; it's a comprehensive suite designed for high-end film and television post-production. Combining editing, color correction, visual effects, motion graphics, and audio post-production all in one software tool, DaVinci Resolve simplifies the post-production process, allowing you to stay in one program from start to finish. Aimed at professionals in the industry as well as enthusiastic amateurs, its robust feature set is crafted to handle projects from large cinema productions to quick-paced television content.",
+      "price": "DaVinci Resolve Free: A robust version available for free, with some limitations compared to the Studio version.|DaVinci Resolve Studio: Priced at $295, includes advanced features like the DaVinci Neural Engine and additional Resolve FX.",
+      "why": "DaVinci Resolve fits well because it combines video editing with powerful enhancement features like color correction, visual effects, and audio post-production. It also offers a free version, making it a good budget-friendly choice."
+    },
+    {
+      "name": "Powerdirector",
+      "categories": "video editing | video enhancer",
+      "description": "As a seasoned video editor and tech enthusiast, I've had the opportunity to test out various video editing software, and PowerDirector by CyberLink has consistently stood out. This tool is designed to cater to both amateur and professional video creators, offering a rich array of editing features combined with the power of AI to streamline the video creation process. Whether you're looking to produce high-quality video content for social media, corporate presentations, or creative filmmaking, PowerDirector provides a comprehensive suite of tools that makes video editing accessible and efficient.",
+      "price": "Free Tier: PowerDirector Essential offers core functionalities without a time limit.|Subscription Plans: Starting from $4.58 per month, users can access the full suite of features, including premium plugins and effects.",
+      "why": "PowerDirector matches your request for editing and enhancing videos, with AI-assisted tools and a full suite of editing features. It includes a free tier and affordable paid plans, so it works well for different budgets."
+    },
+    {
+      "name": "Topaz Labs",
+      "categories": "image editing | video editing | video enhancer",
+      "description": "Topaz Labs is a cutting-edge software company specializing in AI-driven photo and video enhancement tools. With a strong emphasis on professional-grade quality, Topaz Labs offers a suite of products designed to transform ordinary images and footage into visually stunning masterpieces. Their tools leverage advanced AI algorithms to enhance clarity, stabilize video, upscale images, and much more, making them an indispensable asset for photographers, videographers, and digital artists.",
+      "price": "Photo AI: Starts at $199 for a one-time purchase.|Video AI: Available for $299, offering comprehensive video enhancement capabilities.|Gigapixel AI: Priced at $99, specializing in image upscaling.",
+      "why": "Topaz Labs is especially strong for video enhancement, with tools for clarity improvement, stabilization, and upscaling. While it is more focused on enhancement than general editing, it complements your need to improve video quality."
+    }
+  ],
+  "I need an AI tool to manage my social media posts": [
+    {
+      "name": "Robopost Ai",
+      "categories": "social media | marketing | image generators",
+      "description": "In the ever-evolving world of digital marketing and social media management, staying ahead with engaging, timely, and relevant content is key. This is where Robopost AI comes into play. Designed primarily for marketers, influencers, and businesses, Robopost AI is a robust tool that automates the generation and scheduling of social media posts. By leveraging advanced AI technologies, it helps users overcome creative hurdles such as writer's block by generating fresh post ideas and crafting compelling content with specific tones. Moreover, its integration with Dall-E allows for the creation of stunning visuals, enhancing the overall impact of your social media presence.",
+      "price": "Free Tier: Get started with Robopost AI at no cost, with basic features.|Pro Tier: Advanced features and increased limits available from $9.99 per month.",
+      "why": "Robopost Ai directly matches your need to manage social media posts by automating both post generation and scheduling. It also has a free tier, which makes it a good starting option if you want to try before paying."
+    },
+    {
+      "name": "Postsyncer",
+      "categories": "social media",
+      "description": "PostSyncer is a social media management tool that centralizes planning, creation, publishing, and analysis across major platforms such as Instagram, TikTok, YouTube, X, LinkedIn, Facebook, Pinterest, Threads, Telegram, and Bluesky. It combines a visual scheduler with an AI content engine that can turn links, PDFs, images, videos, and text into ready-to-post content, including short-form videos and carousels. Built for creators, teams, and agencies, it aims to make posting frequently across many accounts far less painful.",
+      "price": "Starter Plan : $19 per month; includes 10 social accounts, unlimited posts and drafts, unlimited team members, 1 workspace, 200 AI credits per month, 10 GB storage, basic analytics, basic unified inbox, AI content tools, light API access, bulk scheduling, and priority support.|Pro Plan : $49 per month; includes 10 social accounts, unlimited posts and drafts, unlimited team members, 1 workspace, 1,000 AI credits per month, 50 GB storage, advanced analytics, advanced unified inbox, AI content tools, moderate API access, bulk scheduling, and priority support.|Pro Plus Plan : $49 per month (discounted from $99); includes 10 social accounts, unlimited posts and drafts, unlimited team members, 3 workspaces, 2,000 AI credits per month, unlimited storage, advanced analytics, advanced unified inbox, 3M+ video library, heavy API access, bulk scheduling, and priority support.",
+      "why": "PostSyncer is a strong fit because it centralizes planning, creation, publishing, and analysis across many major social platforms. Its visual scheduler, AI content engine, and bulk scheduling features are especially useful for managing posts efficiently."
+    },
+    {
+      "name": "Postsam",
+      "categories": "social media | marketing",
+      "description": "PostSam is designed to transform social media management and content creation. It aims to automate and enhance social media presence through AI-driven technology, making it a go-to tool for individuals and businesses looking to boost their online engagement with minimal effort. It offers features that create, schedule, and publish viral content, making social media management a breeze for users who want to maintain a strong online presence without dedicating hours to the task.",
+      "price": "Free: $0 per month; includes core AI creation, limited scheduling, and one campaign.|Pro: $19.99 per month; includes unlimited scheduling, advanced AI creation, unlimited accounts, end-to-end automation, multiple campaigns, and team collaboration.|Enterprise: Custom pricing; includes custom integrations, advanced analytics, and a dedicated manager.",
+      "why": "PostSam offers AI-driven social media creation, scheduling, and publishing, which aligns closely with managing posts end to end. The free plan gives you a low-risk way to test core creation and scheduling features before upgrading."
+    },
+    {
+      "name": "Postly",
+      "categories": "social media | marketing | image editing",
+      "description": "When it comes to managing our social media presence, the challenges are as diverse as they are daunting. That's where Postly comes in \u2013 a tool designed to streamline the intricacies of social media management. At its core, Postly is an AI-powered social media planner and scheduler that promises to transform your marketing strategy. It's crafted to cater to the needs of businesses, influencers, and social media managers looking to maximize their reach and engagement across multiple platforms.",
+      "price": "Free Tier: Postly offers a free trial that allows users to experience its core features.|Paid Plans: Paid subscriptions come with additional features, like Bulk Posting and advanced analytics.",
+      "why": "Postly is designed as an AI-powered social media planner and scheduler, making it well suited for organizing and publishing posts across multiple platforms. It also includes a free trial, so you can evaluate whether its workflow fits your needs."
+    },
+    {
+      "name": "Socialbee",
+      "categories": "social media | marketing",
+      "description": "SocialBee is a social media management platform that combines AI-assisted content planning, post creation, scheduling, engagement, and analytics in one workspace. Its standout AI angle comes from its Social Media Copilot and built-in content tools, which help users generate post ideas, shape posting strategies, customize captions for different networks, and keep publishing organized without living inside a spreadsheet all week.",
+      "price": "Bootstrap : $29 per month; connect up to 5 social profiles; 1 user per workspace; 1 workspace; analytics up to 3 months of data; 14-day free trial ($0).|Accelerate : $49 per month; connect up to 10 social profiles; 1 user per workspace; 1 workspace; analytics up to 2 years of data; 14-day free trial ($0).|Pro : $99 per month; connect up to 25 social profiles; 3 users per workspace; 5 workspaces; analytics up to 2 years of data; 14-day free trial ($0).",
+      "why": "SocialBee combines AI-assisted content planning, post creation, scheduling, engagement, and analytics in one workspace. That makes it a practical choice if you want not just to manage posts, but also keep your posting strategy organized over time."
+    }
+  ],
+  "I need a free AI tool to help me with university assignments": [
+    {
+      "name": "Perfectessaywriterai",
+      "categories": "writing generators | education | research",
+      "description": "Perfect Essay Writer is an AI-powered tool aimed at revolutionizing the essay writing process. By leveraging advanced algorithms, it provides students , educators, and professionals with the ability to generate high-quality essays on a wide range of topics within seconds. Designed to enhance productivity in writing tasks, Perfect Essay Writer simplifies the often daunting task of essay composition, making it accessible and stress-free.",
+      "price": "Free Access: Perfect Essay Writer is available for use at no cost.",
+      "why": "This tool is explicitly free and focused on essay writing, which directly matches university assignment help. It is a strong fit if you need quick academic writing support without paying."
+    },
+    {
+      "name": "Studyx",
+      "categories": "education | research | writing generators",
+      "description": "StudyX has emerged as a groundbreaking AI learning assistant designed to revolutionize how we approach learning and academic research. With its comprehensive suite of tools, including AI-driven chatbots for instant homework help, access to over 200 million research papers, and an AI writing generator, StudyX caters to a wide audience ranging from students to professionals seeking to enhance their learning efficiency. Its compatibility with desktop and mobile platforms, alongside a browser extension that integrates seamlessly into any Learning Management System (LMS), makes it a versatile and indispensable tool for learners and educators.",
+      "price": "Free Tier: Limited access to AI tools and resources.|Subscription Plans: Detailed pricing not available; users are encouraged to visit StudyX website for the latest information.",
+      "why": "StudyX offers a free tier and is built for students with homework help, research access, and an AI writing generator. That makes it well suited for a range of university assignment tasks beyond just essay drafting."
+    },
+    {
+      "name": "Homeworkify",
+      "categories": "education | students | ai chatbots",
+      "description": "Homeworkify.im is a cutting-edge AI-powered platform designed to assist students with their homework across various subjects. Leveraging the advanced capabilities of GPT-4o technology, Homeworkify.im provides precise and instant answers to questions submitted in text, image, or file formats. Unlike other similar platforms, Homeworkify.im ensures high-quality support and versatility, making it an invaluable resource for students seeking reliable academic assistance.",
+      "price": "Free: Experience Homeworkify.im for absolutely free.",
+      "why": "Homeworkify is completely free and designed to help students with homework across subjects. It supports text, image, and file inputs, which is useful for university assignments in different formats."
+    },
+    {
+      "name": "Doctrina Ai",
+      "categories": "education | students | summarizer",
+      "description": "In the ever-evolving landscape of educational technology, Doctrina emerges as a cutting-edge AI platform designed to enhance the learning and teaching experience . At its core, Doctrina is an AI Education Suite that leverages artificial intelligence to assist both students and educators with various academic tasks. From summarizing class notes to crafting essays and designing interactive quizzes, Doctrina aims to amplify the educational process while upholding the values of active learning and critical thinking.",
+      "price": "Free : $0 per month. Access unlimited quizzes and essay creation, but note enrichment, exam creation, and AI chat features are not included.|Premium : $10 one-time payment. Unlock full access for life\u2014including quizzes, essays, enriched notes, exams, and both chat and talk features with AI.",
+      "why": "Doctrina AI has a free plan that includes unlimited quizzes and essay creation, making it useful for assignment preparation and writing. Its education-focused features are a good match for student academic work."
+    },
+    {
+      "name": "Jungleai",
+      "categories": "education | students | teachers",
+      "description": "JungleAI, formerly known as Wisdolia, is an AI-powered tool designed to revolutionize the way students prepare for exams by generating flashcards and multiple-choice questions in seconds. This tool is particularly useful for students looking to save time and enhance their study efficiency. With JungleAI, you can effortlessly convert lecture slide decks, PDFs, webpages, PowerPoint presentations, YouTube videos, textbooks, study guides, and even notes into smart flashcards and case questions, making it a versatile aid for academic success.",
+      "price": "Free: $0 per month. Includes up to 10 generations per month across 30 pages per document, 30 minutes per video, 4 advanced question types per month, and 1 diagram question. While reviewing, allows 8 AI explanations and chats per hour.|Super Learner: $12 per month. Includes unlimited generations across pages, videos, and diagram questions, plus 3x more questions overall. While reviewing, provides AI explanations on every question and unlimited chats. Also includes the ability to export cards to Anki.",
+      "why": "JungleAI offers a free tier and helps students study by turning course materials into flashcards and questions. While it is more study-focused than writing-focused, it can still support university assignments by helping you understand and review course content."
+    }
+  ],
+  "I need a tool to generate a logo for my startup": [
+    {
+      "name": "Wix Logo Maker",
+      "categories": "logo generator | design generators | startup tools",
+      "description": "Wix Logo Maker is an intuitive, AI-powered tool designed to help individuals and businesses create professional logos effortlessly. This tool revolutionizes logo design by offering a seamless, user-friendly experience. Whether you're a startup, freelancer, or established business, Wix Logo Maker simplifies the process of crafting a unique logo that aligns perfectly with your brand identity.",
+      "price": "Free Tier: Create and experiment with logo designs at no cost.|Paid Plans: Options available for purchasing high-resolution files and additional customization features.",
+      "why": "This tool is explicitly built for logo generation and is aimed at startups, which matches your need closely. It also offers a free tier, so you can experiment before paying for high-resolution files or extra customization."
+    },
+    {
+      "name": "Namecheap Logo Maker",
+      "categories": "logo generator",
+      "description": "When it comes to branding, a logo is the cornerstone that speaks volumes about a business, and creating one that's both professional and impactful can be a daunting task. Enter Namecheap Logo Maker, an AI-powered tool designed to streamline the logo creation process. With its intuitive interface and rich feature set, it demystifies design for entrepreneurs, bloggers, and small business owners who seek to craft a unique identity without the hefty price tag of professional design services.",
+      "price": "Free Tier: Namecheap Logo Maker is available at no cost, providing free access to all users.|Disclaimer: For the most accurate and current pricing details, refer to the official Namecheap Logo Maker website.",
+      "why": "Namecheap Logo Maker is a dedicated logo generator with a free tier, making it a strong fit if you want to create a startup logo without upfront cost. Its AI-powered workflow is designed to help entrepreneurs produce a professional logo quickly and easily."
+    },
+    {
+      "name": "Logoai",
+      "categories": "logo generator",
+      "description": "LogoAI emerges as a cutting-edge tool in the digital branding world, redefining logo design for businesses and individuals. This AI-powered platform takes logo creation to new heights, offering a simplified process with smart AI technology that not only generates logos but also incorporates design best practices. Tailored for entrepreneurs, small businesses, and marketing professionals, LogoAI promises professionalism, automation, and aesthetic appeal in logo design.",
+      "price": "Free Tier: Limited design options available for users to explore the platform.|Pro Tier: Access to all features and unlimited designs, with competitive pricing.",
+      "why": "LogoAI focuses specifically on AI logo creation and is tailored for entrepreneurs and small businesses. It offers a free tier with limited options, which is useful if you want to test designs before upgrading."
+    },
+    {
+      "name": "Logopony",
+      "categories": "logo generator | design generators",
+      "description": "When it comes to crafting the perfect logo for your brand, the process can be daunting. This is where Logopony enters the scene, a tool that embodies innovation in logo creation. It is an online logo maker that harnesses artificial intelligence to provide users with a seamless and intuitive design experience. Designed for entrepreneurs, small business owners, and startups, Logopony simplifies the task of logo design, making it accessible to anyone regardless of design skills.",
+      "price": "Single Logo Purchase: Users can buy a single logo design with high-resolution files.|Subscription Model: Access to multiple designs and full brand kits with a monthly subscription.",
+      "why": "Logopony is designed for startups and small business owners who need an easy logo creation process. It also supports single-logo purchase and brand kits, which fits a startup that may want both a logo and broader branding assets."
+    },
+    {
+      "name": "Shopify Logo Maker",
+      "categories": "logo generator | design generators | e-commerce",
+      "description": "Shopify Logo Maker is an innovative, free tool designed to help entrepreneurs and small business owners create professional logos effortlessly. With its user-friendly interface and a vast library of templates, Shopify Logo Maker allows users to design high-quality logos that align with their brand identity without any prior design experience. This tool is perfect for those looking to establish a strong brand presence quickly and cost-effectively.",
+      "price": "Free Tier: Experience Shopify Logo Maker at no cost, with full access to all features and templates.",
+      "why": "Shopify Logo Maker is a free logo tool with full access to features and templates, so it is a good budget-friendly option. It is intended for entrepreneurs and small business owners who want a professional logo quickly without design experience."
+    }
+  ],
+  "I need a free AI tool to build a website without coding": [
+    {
+      "name": "Hubspot Ai Website Generator",
+      "categories": "website builders | startup tools | marketing",
+      "description": "HubSpot AI Website Generator is a cutting-edge tool designed to transform the way businesses build their online presence. It leverages artificial intelligence to simplify the process of creating a single-page website by using intuitive prompts. This tool is particularly beneficial for startups and small businesses looking to establish their digital footprint without the need for extensive coding knowledge. By automating the labor-intensive aspects of web design, HubSpot AI Website Generator allows users to focus on what truly matters\u2014growing their business.",
+      "price": "Free: Experience HubSpot AI Website Generator with no cost involved.",
+      "why": "This is a free AI website generator that creates a single-page website from prompts, which matches your no-coding requirement well. It is explicitly designed for startups and small businesses that want to build a site without technical skills."
+    },
+    {
+      "name": "Mobirise Ai Website Builder",
+      "categories": "website builders | design generators | low-code/no-code",
+      "description": "In the ever-evolving landscape of web design, the Mobirise AI Website Builder emerges as a groundbreaking tool that significantly simplifies the process of creating websites. Leveraging artificial intelligence, this online generator crafts aesthetically pleasing, highly functional sites tailored to the user's specific prompts and preferences. Designed with non-techies in mind, it offers a streamlined, efficient design solution that demystifies the complexities of web development. Its ability to generate unlimited AI designs optimized for both mobile devices and Google, while ensuring users retain full ownership of their websites, sets a new standard in the realm of web design tools.",
+      "price": "Free Tier: Start with Mobirise AI Website Builder at no cost.|Premium Extensions: For advanced features and functionalities, premium extensions are available for purchase.",
+      "why": "This tool offers a free tier and is built for non-techies to generate websites from prompts. It focuses on AI-generated, functional sites without requiring coding, making it a strong fit for your needs."
+    },
+    {
+      "name": "Wegic",
+      "categories": "website builders | design generators | education",
+      "description": "Wegic is a groundbreaking AI tool that is transforming the way we think about website design and development. At its core, Wegic is an AI web designer and developer that works alongside you, making the process of creating a website as easy as having a conversation. With the support of three amazing assistants, this tool promises to bring any website vision to life, whether it's for a small flower shop, a personal resume, or a professional photography studio. The concept of building your site through simple chat interactions is not just innovative but incredibly user-friendly, catering to both individuals with specific ideas and those seeking inspiration and guidance.",
+      "price": "Free Tier: Wegic offers a basic version free of charge, allowing users to explore its capabilities without financial commitment.",
+      "why": "Wegic has a free basic version and lets you build a website through simple chat interactions. That makes it especially suitable if you want a no-code, conversational way to create a site for free."
+    },
+    {
+      "name": "Dora Ai",
+      "categories": "website builders | design generators | marketing",
+      "description": "Dora AI emerges as a groundbreaking tool in the realm of website creation, setting itself apart by offering a platform where sites beyond imagination are just a prompt away. Aimed at both individuals and professionals, Dora AI simplifies the process of website development by leveraging AI to analyze prompts, craft original designs, and generate responsive layouts. This tool is designed for those looking to cut down on time, costs, and enhance efficiency in creating unique and visually appealing websites.",
+      "price": "Free Tier: Start with 120 free credits to generate sites, no credit card required.|Subscription Plans: Additional credits can be purchased through various Dora plan options.",
+      "why": "Dora AI provides a free tier with 120 credits and no credit card required, so you can start building without upfront cost. It generates responsive websites from prompts, which aligns closely with a no-coding workflow."
+    },
+    {
+      "name": "Webwave",
+      "categories": "website builders | seo | marketing",
+      "description": "WebWave is a groundbreaking website builder that transforms the way individuals and businesses create websites. Offering a unique blend of design freedom and advanced AI-driven functionalities, WebWave empowers users to craft custom websites without needing to write a single line of code. Designed for creative professionals, entrepreneurs, and anyone looking to establish an online presence, it simplifies the web design process while maintaining high-quality, professional results.",
+      "price": "Free Tier: Offers a free plan with essential features to get started on WebWave.|Premium Plan: Starting at approximately $3.5 per month, providing access to advanced features and custom domain hosting.|Business Plan: Available for around $5 per month, catering to users with more extensive website needs.",
+      "why": "WebWave includes a free plan and is described as allowing users to create custom websites without writing code. Its AI-driven website building makes it a practical free option for building a site visually and without programming."
+    }
+  ]
+}

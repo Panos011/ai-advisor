@@ -1,0 +1,14 @@
+{
+  "comai": {
+    "avg_precision_at_5": 1.0,
+    "avg_diversity": 0.447,
+    "gini": 0.018,
+    "avg_latency_s": 3.53
+  },
+  "gpt": {
+    "avg_precision_at_5": 0.855,
+    "avg_diversity": 0.491,
+    "gini": 0.067,
+    "avg_latency_s": 3.24
+  }
+}

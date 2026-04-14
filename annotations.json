@@ -1,0 +1,178 @@
+{
+  "I need a tool to transcribe audio meetings": {
+    "comai": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "gpt": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ]
+  },
+  "I need a free AI tool to help me write essays": {
+    "comai": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "gpt": [
+      1,
+      1,
+      1,
+      0,
+      1
+    ]
+  },
+  "I need a tool to generate images from text": {
+    "comai": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "gpt": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ]
+  },
+  "I need an AI tool to help me write and debug Python code": {
+    "comai": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "gpt": [
+      1,
+      0,
+      1,
+      0,
+      1
+    ]
+  },
+  "I need a tool to create presentations automatically": {
+    "comai": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "gpt": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ]
+  },
+  "I need a free AI tool to help me learn a new language": {
+    "comai": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "gpt": [
+      1,
+      1,
+      1,
+      0,
+      0
+    ]
+  },
+  "I need a tool to edit and enhance videos": {
+    "comai": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "gpt": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ]
+  },
+  "I need an AI tool to manage my social media posts": {
+    "comai": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "gpt": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ]
+  },
+  "I need a free AI tool to help me with university assignments": {
+    "comai": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "gpt": [
+      1,
+      1,
+      1,
+      0,
+      0
+    ]
+  },
+  "I need a tool to generate a logo for my startup": {
+    "comai": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "gpt": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ]
+  },
+  "I need a free AI tool to build a website without coding": {
+    "comai": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "gpt": [
+      1,
+      0,
+      1,
+      1,
+      1
+    ]
+  }
+}

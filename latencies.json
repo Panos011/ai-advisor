@@ -1,0 +1,46 @@
+{
+  "I need a tool to transcribe audio meetings": {
+    "comai": 4.35,
+    "gpt": 3.6
+  },
+  "I need a free AI tool to help me write essays": {
+    "comai": 3.43,
+    "gpt": 3.73
+  },
+  "I need a tool to generate images from text": {
+    "comai": 4.22,
+    "gpt": 3.18
+  },
+  "I need an AI tool to help me write and debug Python code": {
+    "comai": 3.24,
+    "gpt": 3.01
+  },
+  "I need a tool to create presentations automatically": {
+    "comai": 3.4,
+    "gpt": 3.12
+  },
+  "I need a free AI tool to help me learn a new language": {
+    "comai": 3.71,
+    "gpt": 2.81
+  },
+  "I need a tool to edit and enhance videos": {
+    "comai": 3.3,
+    "gpt": 3.22
+  },
+  "I need an AI tool to manage my social media posts": {
+    "comai": 3.5,
+    "gpt": 3.12
+  },
+  "I need a free AI tool to help me with university assignments": {
+    "comai": 3.43,
+    "gpt": 3.29
+  },
+  "I need a tool to generate a logo for my startup": {
+    "comai": 3.09,
+    "gpt": 2.91
+  },
+  "I need a free AI tool to build a website without coding": {
+    "comai": 3.2,
+    "gpt": 3.66
+  }
+}
