@@ -1,5 +1,6 @@
 import requests
 
+
 API = "https://comai-recommender-1.onrender.com"
 
 # Verifies that the system is running and has at least 1 tool
