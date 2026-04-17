@@ -2,408 +2,408 @@
   "I need a tool to transcribe audio meetings": [
     {
       "name": "Otter.ai",
-      "category": "Transcription",
-      "description": "A popular tool for transcribing meetings and conversations in real-time with speaker identification.",
-      "price": "Free tier available; paid plans start at $8.33/month.",
-      "reason": "Otter.ai is widely used for its accuracy and ease of use in transcribing audio meetings."
+      "category": "Meeting transcription",
+      "description": "An AI meeting assistant that records, transcribes, and summarizes live or uploaded audio meetings with speaker identification and searchable notes.",
+      "price": "Free plan available; paid plans start around $16.99/month",
+      "reason": "Strong fit for meeting transcription because it is designed specifically for live meetings, offers good speaker labeling, and makes transcripts easy to search and share."
+    },
+    {
+      "name": "Fireflies.ai",
+      "category": "Meeting transcription",
+      "description": "An AI notetaker that joins meetings, transcribes conversations, generates summaries, and extracts action items across popular conferencing platforms.",
+      "price": "Free plan available; paid plans start around $10/user/month",
+      "reason": "Useful if you want automatic meeting capture plus summaries and action items, with broad integrations for common video meeting tools."
     },
     {
       "name": "Rev",
-      "category": "Transcription",
-      "description": "A transcription service that offers both automated and human transcription options.",
-      "price": "Automated transcription at $0.25/minute; human transcription at $1.25/minute.",
-      "reason": "Rev provides high-quality transcriptions with quick turnaround times."
+      "category": "Transcription service",
+      "description": "Provides AI-powered transcription for audio and video files, with options for human-reviewed accuracy and downloadable transcripts.",
+      "price": "AI transcription typically starts around $0.25/minute; human transcription costs more",
+      "reason": "A good choice when accuracy matters and you may need polished transcripts from recorded meetings rather than only live note-taking."
     },
     {
       "name": "Descript",
-      "category": "Transcription & Editing",
-      "description": "A tool that combines transcription with audio and video editing capabilities.",
-      "price": "Free tier available; paid plans start at $12/month.",
-      "reason": "Descript allows users to edit audio by editing the text, making it versatile for meeting recordings."
+      "category": "Audio/video transcription and editing",
+      "description": "Transcribes audio and video, lets you edit media by editing text, and includes tools for summaries and collaboration.",
+      "price": "Free plan available; paid plans start around $12/month",
+      "reason": "Best if you want transcription plus the ability to edit recordings and repurpose meeting audio into clips or written content."
     },
     {
-      "name": "Sonix",
-      "category": "Transcription",
-      "description": "An AI-powered transcription service that supports multiple languages and offers editing tools.",
-      "price": "Plans start at $10/hour of audio.",
-      "reason": "Sonix is known for its fast and accurate transcriptions, along with a user-friendly interface."
-    },
-    {
-      "name": "Trint",
-      "category": "Transcription",
-      "description": "An AI transcription service that provides real-time transcription and collaboration features.",
-      "price": "Plans start at $15/month.",
-      "reason": "Trint is effective for teams needing to collaborate on transcriptions and offers good accuracy."
+      "name": "Notta",
+      "category": "Meeting transcription",
+      "description": "An AI transcription tool for live meetings and uploaded recordings, with speaker detection, summaries, and multi-language support.",
+      "price": "Free plan available; paid plans start around $13.49/month",
+      "reason": "A solid all-around option for transcribing meetings, especially if you need support for multiple languages and easy export options."
     }
   ],
   "I need a free AI tool to help me write essays": [
     {
-      "name": "Grammarly",
-      "category": "Writing Assistant",
-      "description": "An AI-powered writing assistant that helps with grammar, punctuation, and style suggestions.",
-      "price": "Free with premium options",
-      "reason": "Grammarly offers a free version that can help improve your essay writing by providing real-time feedback."
-    },
-    {
-      "name": "QuillBot",
-      "category": "Paraphrasing Tool",
-      "description": "An AI tool that helps you paraphrase and summarize text to enhance your writing.",
-      "price": "Free with premium options",
-      "reason": "QuillBot's free version allows you to rephrase sentences, making it easier to write essays with varied language."
-    },
-    {
-      "name": "Hemingway Editor",
-      "category": "Writing Tool",
-      "description": "A tool that helps make your writing clear and concise by highlighting complex sentences and errors.",
-      "price": "Free online version",
-      "reason": "The free online version of Hemingway Editor can help you simplify your essays and improve readability."
-    },
-    {
-      "name": "Google Docs",
-      "category": "Document Editor",
-      "description": "A cloud-based document editor that includes collaborative features and basic writing tools.",
-      "price": "Free",
-      "reason": "Google Docs is free to use and allows for easy collaboration and access to writing tools like voice typing."
-    },
-    {
       "name": "ChatGPT",
-      "category": "AI Writing Assistant",
-      "description": "An AI chatbot that can help generate ideas, outlines, and even sections of essays.",
-      "price": "Free with limitations",
-      "reason": "ChatGPT can assist you in brainstorming and drafting essays, making it a versatile tool for writing."
+      "category": "Writing Assistant",
+      "description": "A conversational AI that can help brainstorm ideas, create outlines, draft essays, and revise writing.",
+      "price": "Free tier available",
+      "reason": "Good all-around free option for essay help, especially for brainstorming, structuring arguments, and improving clarity."
+    },
+    {
+      "name": "Google Gemini",
+      "category": "Writing Assistant",
+      "description": "An AI assistant that can generate text, summarize sources, and help refine essay drafts.",
+      "price": "Free tier available",
+      "reason": "Useful for quick drafting and research-style support with a free plan."
+    },
+    {
+      "name": "Microsoft Copilot",
+      "category": "Writing Assistant",
+      "description": "An AI chat tool integrated with Microsoft services that can help generate essay ideas, outlines, and drafts.",
+      "price": "Free tier available",
+      "reason": "Strong free choice for writing support and easy access in a browser."
+    },
+    {
+      "name": "Claude",
+      "category": "Writing Assistant",
+      "description": "An AI assistant known for clear, natural writing and helpful long-form drafting support.",
+      "price": "Free tier available",
+      "reason": "Great for producing readable essay drafts and improving tone and organization."
+    },
+    {
+      "name": "Perplexity",
+      "category": "Research Assistant",
+      "description": "An AI search and answer tool that can help gather information, summarize sources, and support essay research.",
+      "price": "Free tier available",
+      "reason": "Best if you need help finding reliable information before writing your essay."
     }
   ],
   "I need a tool to generate images from text": [
     {
-      "name": "DALL-E 2",
-      "category": "Image Generation",
-      "description": "A powerful AI model developed by OpenAI that generates images from textual descriptions.",
-      "price": "Subscription-based with free tier options",
-      "reason": "Known for its high-quality and creative image outputs based on detailed text prompts."
+      "name": "DALL\u00b7E 3",
+      "category": "Text-to-Image Generator",
+      "description": "An AI image generator that creates detailed images from natural-language prompts, with strong prompt understanding and easy integration in ChatGPT and API workflows.",
+      "price": "Paid",
+      "reason": "Great for generating high-quality images from text with strong adherence to prompt details and broad creative versatility."
     },
     {
       "name": "Midjourney",
-      "category": "Image Generation",
-      "description": "An independent research lab that produces images from text prompts using advanced AI techniques.",
-      "price": "Subscription-based",
-      "reason": "Offers unique artistic styles and is popular among digital artists for its creativity."
+      "category": "Text-to-Image Generator",
+      "description": "A popular AI art tool known for producing highly stylized, visually striking images from text prompts through Discord or web-based workflows.",
+      "price": "Paid",
+      "reason": "Excellent if you want artistic, polished, and imaginative image outputs from text descriptions."
     },
     {
       "name": "Stable Diffusion",
-      "category": "Image Generation",
-      "description": "An open-source model that generates images from text, allowing for customization and local use.",
-      "price": "Free (with options for paid services)",
-      "reason": "Highly flexible and can be run locally, making it accessible for developers and artists."
+      "category": "Text-to-Image Generator",
+      "description": "An open-source text-to-image model that can be run locally or through hosted platforms, offering extensive customization and control.",
+      "price": "Free / Paid options",
+      "reason": "Best for flexibility, customization, and users who want more control over image generation settings and workflows."
     },
     {
-      "name": "DeepAI Text to Image",
-      "category": "Image Generation",
-      "description": "A simple tool that converts text descriptions into images using AI algorithms.",
-      "price": "Free with paid options for higher resolution images",
-      "reason": "User-friendly interface and quick results for basic image generation needs."
+      "name": "Adobe Firefly",
+      "category": "Text-to-Image Generator",
+      "description": "Adobe\u2019s generative AI tool for creating images from text, designed with commercial use in mind and integrated into Adobe apps.",
+      "price": "Paid",
+      "reason": "A strong choice for professional workflows, especially if you already use Adobe products and need commercially oriented outputs."
     },
     {
-      "name": "Artbreeder",
-      "category": "Image Generation",
-      "description": "A platform that allows users to create and modify images using AI, blending different images based on text inputs.",
-      "price": "Free with premium features",
-      "reason": "Encourages collaborative creativity and allows for unique image generation through user interaction."
+      "name": "Leonardo AI",
+      "category": "Text-to-Image Generator",
+      "description": "A web-based AI image generation platform that offers text-to-image creation, style presets, and tools for game assets and concept art.",
+      "price": "Free / Paid options",
+      "reason": "Useful for fast text-to-image generation with helpful presets and a friendly interface for creative projects."
     }
   ],
   "I need an AI tool to help me write and debug Python code": [
     {
       "name": "GitHub Copilot",
       "category": "Code Assistant",
-      "description": "An AI-powered code completion tool that helps you write code faster and with fewer errors by suggesting entire lines or blocks of code.",
-      "price": "Subscription-based, starting at $10/month",
-      "reason": "It integrates seamlessly with popular IDEs and can assist in writing and debugging Python code."
+      "description": "An AI pair programmer that suggests code, completes functions, and helps explain or debug Python code directly in your editor.",
+      "price": "Paid subscription with free trial",
+      "reason": "Great for writing Python faster and getting inline debugging help while you code in VS Code, JetBrains, and other popular editors."
     },
     {
-      "name": "Kite",
+      "name": "ChatGPT",
+      "category": "General AI Assistant",
+      "description": "A conversational AI that can generate Python code, explain errors, refactor scripts, and walk through debugging step by step.",
+      "price": "Free tier available; paid plans available",
+      "reason": "Useful when you want detailed explanations of bugs, alternative implementations, or help understanding Python concepts."
+    },
+    {
+      "name": "Cursor",
+      "category": "AI Code Editor",
+      "description": "An AI-powered code editor built for writing, editing, and debugging code with strong context awareness across your project.",
+      "price": "Free tier available; paid plans available",
+      "reason": "Excellent if you want an editor that can modify codebase-wide Python files and help fix issues with project context."
+    },
+    {
+      "name": "Amazon CodeWhisperer",
       "category": "Code Assistant",
-      "description": "An AI-powered coding assistant that provides code completions, documentation, and examples directly in your IDE.",
-      "price": "Free with a Pro version at $16.60/month",
-      "reason": "Kite offers Python-specific features and can help debug code with its intelligent suggestions."
+      "description": "An AI coding assistant that provides code suggestions and security-focused guidance for Python and other languages.",
+      "price": "Free tier available; paid plans available",
+      "reason": "Good for Python development if you want code generation plus security-oriented suggestions and IDE integration."
     },
     {
-      "name": "Tabnine",
-      "category": "Code Assistant",
-      "description": "An AI code completion tool that uses deep learning to provide suggestions based on your coding style and context.",
-      "price": "Free with Pro version starting at $12/month",
-      "reason": "Tabnine supports Python and can help streamline the coding and debugging process."
-    },
-    {
-      "name": "DeepCode",
-      "category": "Code Review",
-      "description": "An AI-powered code review tool that analyzes your code for bugs and vulnerabilities in real-time.",
-      "price": "Free for open-source projects, paid plans available",
-      "reason": "DeepCode helps identify issues in Python code, making debugging easier."
-    },
-    {
-      "name": "Replit",
-      "category": "Online IDE",
-      "description": "An online coding platform that includes an AI assistant to help with code suggestions and debugging in real-time.",
-      "price": "Free with premium plans starting at $7/month",
-      "reason": "Replit's collaborative environment and AI features make it ideal for writing and debugging Python code."
+      "name": "Replit Ghostwriter",
+      "category": "AI Coding Assistant",
+      "description": "An AI assistant inside Replit that helps generate, complete, and debug code in a browser-based development environment.",
+      "price": "Paid plans with trial options",
+      "reason": "A strong choice if you want to write and test Python quickly in the cloud without setting up a local environment."
     }
   ],
   "I need a tool to create presentations automatically": [
     {
+      "name": "Gamma",
+      "category": "AI presentation generator",
+      "description": "Creates polished slide decks from a prompt, outline, or pasted content, with automatic design and layout generation.",
+      "price": "Free plan available; paid plans for advanced features",
+      "reason": "Best fit if you want fast, attractive presentations with minimal manual formatting."
+    },
+    {
+      "name": "Tome",
+      "category": "AI storytelling presentation tool",
+      "description": "Generates narrative-style presentations from prompts and can turn ideas into structured slides with visuals.",
+      "price": "Free plan available; paid plans available",
+      "reason": "Great for turning a rough idea into a compelling presentation quickly."
+    },
+    {
       "name": "Beautiful.ai",
-      "category": "Presentation Software",
-      "description": "An AI-powered presentation tool that helps you create visually appealing slides quickly and easily.",
-      "price": "Starts at $12/month",
-      "reason": "Offers smart templates that adapt to your content, making presentation creation efficient."
+      "category": "AI slide design tool",
+      "description": "Uses smart templates and automated design rules to build professional presentations efficiently.",
+      "price": "Paid plans; trial availability may vary",
+      "reason": "Ideal if you want clean, business-ready slides with strong design consistency."
     },
     {
-      "name": "Canva",
-      "category": "Design Tool",
-      "description": "A versatile design platform that includes features for creating presentations with AI-assisted design suggestions.",
-      "price": "Free with premium options starting at $12.99/month",
-      "reason": "User-friendly interface with a wide range of templates and design elements."
+      "name": "Canva Magic Design",
+      "category": "AI design and presentation tool",
+      "description": "Automatically generates presentation layouts and visuals from prompts or content inside Canva.",
+      "price": "Free plan available; paid plans for premium features",
+      "reason": "Useful if you also want access to a broad design ecosystem and easy editing."
     },
     {
-      "name": "Visme",
-      "category": "Visual Content Creation",
-      "description": "A tool for creating presentations, infographics, and other visual content with AI-driven design features.",
-      "price": "Free with premium plans starting at $15/month",
-      "reason": "Offers a variety of templates and the ability to customize presentations easily."
-    },
-    {
-      "name": "Slidebean",
-      "category": "Presentation Software",
-      "description": "An AI-powered presentation tool that automatically designs your slides based on the content you provide.",
-      "price": "Starts at $8/month",
-      "reason": "Focuses on content-first design, allowing users to concentrate on their message."
-    },
-    {
-      "name": "Microsoft PowerPoint with Designer",
-      "category": "Presentation Software",
-      "description": "A classic presentation tool enhanced with AI features that suggest design layouts and styles.",
-      "price": "Part of Microsoft 365 subscription starting at $6.99/month",
-      "reason": "Familiar interface with powerful AI features to enhance presentation design."
+      "name": "Microsoft PowerPoint Copilot",
+      "category": "AI presentation assistant",
+      "description": "Helps generate, summarize, and refine presentations directly inside PowerPoint using AI.",
+      "price": "Requires Microsoft 365 and Copilot licensing",
+      "reason": "Best choice if you already use PowerPoint and want AI help within your existing workflow."
     }
   ],
   "I need a free AI tool to help me learn a new language": [
     {
       "name": "Duolingo",
       "category": "Language Learning",
-      "description": "A popular app that uses gamification to teach languages through interactive exercises.",
-      "price": "Free with optional in-app purchases",
-      "reason": "Duolingo offers a wide range of languages and is user-friendly, making it ideal for beginners."
-    },
-    {
-      "name": "Busuu",
-      "category": "Language Learning",
-      "description": "An online platform that provides language courses with interactive lessons and community feedback.",
-      "price": "Free with premium options",
-      "reason": "Busuu allows users to practice speaking with native speakers and offers personalized feedback."
+      "description": "A popular language-learning app that uses AI-driven personalization, spaced repetition, and gamified lessons to help you practice vocabulary, grammar, listening, and speaking.",
+      "price": "Free with optional paid upgrade",
+      "reason": "Great for beginners who want a free, easy-to-use tool with daily practice and adaptive lessons."
     },
     {
       "name": "Memrise",
       "category": "Language Learning",
-      "description": "A language learning app that uses spaced repetition and mnemonic techniques to help users memorize vocabulary.",
-      "price": "Free with premium features",
-      "reason": "Memrise makes learning fun with its engaging content and effective memory techniques."
+      "description": "An app focused on vocabulary and phrase learning with AI-assisted review, native-speaker videos, and personalized practice sessions.",
+      "price": "Free with optional paid upgrade",
+      "reason": "Useful for building practical vocabulary and hearing real-world pronunciation without paying upfront."
     },
     {
-      "name": "Tandem",
-      "category": "Language Exchange",
-      "description": "A language exchange app that connects users with native speakers for conversation practice.",
-      "price": "Free with optional in-app purchases",
-      "reason": "Tandem provides real-life practice opportunities and cultural exchange with native speakers."
+      "name": "Busuu",
+      "category": "Language Learning",
+      "description": "A language-learning platform offering AI-powered study plans, grammar exercises, and community feedback from native speakers.",
+      "price": "Free with optional paid upgrade",
+      "reason": "Good if you want structured lessons plus feedback, while still being able to use the core features for free."
     },
     {
-      "name": "HelloTalk",
-      "category": "Language Exchange",
-      "description": "A social networking app for language learners to connect and practice with native speakers around the world.",
-      "price": "Free with optional in-app purchases",
-      "reason": "HelloTalk allows users to chat via text, voice, and video, enhancing language skills through real conversations."
+      "name": "ChatGPT",
+      "category": "AI Tutor",
+      "description": "An AI chatbot that can act as a language tutor by generating exercises, explaining grammar, translating phrases, and simulating conversations.",
+      "price": "Free tier available",
+      "reason": "Flexible free option for practicing conversation, asking questions, and getting custom explanations at your own pace."
+    },
+    {
+      "name": "Language Reactor",
+      "category": "Language Learning",
+      "description": "A browser extension that helps you learn through Netflix and YouTube with dual subtitles, translations, and interactive vocabulary tools.",
+      "price": "Free with optional paid upgrade",
+      "reason": "Excellent for immersive learning if you want to study through videos and real native content for free."
     }
   ],
   "I need a tool to edit and enhance videos": [
     {
       "name": "Adobe Premiere Pro",
       "category": "Video Editing",
-      "description": "A professional video editing software with advanced features for editing, color correction, and audio enhancement.",
-      "price": "Starting at $20.99/month",
-      "reason": "Industry-standard tool with powerful editing capabilities and extensive support for various formats."
-    },
-    {
-      "name": "Final Cut Pro",
-      "category": "Video Editing",
-      "description": "A comprehensive video editing software for Mac users, offering advanced editing tools and a user-friendly interface.",
-      "price": "$299.99 (one-time purchase)",
-      "reason": "Optimized for Mac, it provides high-performance editing and is popular among professional filmmakers."
+      "description": "Professional video editing software with advanced trimming, color correction, audio tools, effects, and export options.",
+      "price": "Subscription",
+      "reason": "Best for full-featured editing and enhancement if you want industry-standard control over video quality."
     },
     {
       "name": "DaVinci Resolve",
-      "category": "Video Editing",
-      "description": "A professional video editing and color grading software that offers a free version with robust features.",
-      "price": "Free (with a paid version at $295)",
-      "reason": "Combines editing, color correction, and audio post-production in one tool, making it versatile for various projects."
+      "category": "Video Editing and Color Grading",
+      "description": "Powerful editor with advanced color grading, audio post-production, visual effects, and AI-assisted tools.",
+      "price": "Free plan available; paid Studio version",
+      "reason": "Excellent for enhancing video quality, especially color correction and professional finishing, with a strong free version."
     },
     {
-      "name": "Filmora",
-      "category": "Video Editing",
-      "description": "An easy-to-use video editing software with a wide range of effects, transitions, and templates.",
-      "price": "Starting at $39.99/year",
-      "reason": "Great for beginners and casual users looking for quick and effective video enhancements."
+      "name": "CapCut",
+      "category": "AI Video Editing",
+      "description": "Easy-to-use editor with AI tools for auto captions, background removal, effects, templates, and quick enhancements.",
+      "price": "Free plan available; paid tiers",
+      "reason": "Great for fast editing and enhancement, especially for social media content and beginner-friendly workflows."
     },
     {
-      "name": "InVideo",
-      "category": "Online Video Editing",
-      "description": "An online video editing platform that allows users to create and edit videos using templates and stock footage.",
-      "price": "Free (with premium plans starting at $15/month)",
-      "reason": "Accessible from any device, it simplifies video creation with a focus on marketing and social media content."
+      "name": "Descript",
+      "category": "AI Video Editing and Enhancement",
+      "description": "Text-based video editor with AI features for editing by transcript, removing filler words, and improving audio/video workflows.",
+      "price": "Free plan available; paid tiers",
+      "reason": "Useful if you want to edit videos quickly and enhance them through transcript-based editing and AI cleanup."
+    },
+    {
+      "name": "Runway",
+      "category": "AI Video Enhancement",
+      "description": "AI-powered creative suite for video editing, background removal, object removal, motion tools, and generative video features.",
+      "price": "Free plan available; paid tiers",
+      "reason": "Strong choice for AI-driven video enhancement and creative effects without needing advanced manual editing skills."
     }
   ],
   "I need an AI tool to manage my social media posts": [
     {
-      "name": "Hootsuite",
-      "category": "Social Media Management",
-      "description": "A comprehensive platform that allows you to schedule posts, track social media engagement, and analyze performance across multiple networks.",
-      "price": "Starting at $19/month",
-      "reason": "Hootsuite offers robust scheduling and analytics features, making it ideal for managing multiple social media accounts efficiently."
-    },
-    {
       "name": "Buffer",
       "category": "Social Media Management",
-      "description": "A user-friendly tool for scheduling posts, tracking engagement, and collaborating with team members on social media strategies.",
-      "price": "Starting at $15/month",
-      "reason": "Buffer's simplicity and effectiveness in scheduling and analytics make it a great choice for individuals and small businesses."
+      "description": "An AI-assisted platform for scheduling, publishing, and analyzing social media posts across multiple channels.",
+      "price": "Free plan available; paid plans start around $6/month per channel",
+      "reason": "Great for straightforward post scheduling and content planning, with AI features that help draft and repurpose posts efficiently."
     },
     {
-      "name": "Later",
+      "name": "Hootsuite",
       "category": "Social Media Management",
-      "description": "A visual content calendar that allows you to plan and schedule your social media posts with a focus on Instagram.",
-      "price": "Starting at $12.50/month",
-      "reason": "Later's visual approach to scheduling is particularly beneficial for brands that rely heavily on visual content."
+      "description": "A comprehensive social media dashboard for scheduling, monitoring, analytics, and team collaboration.",
+      "price": "Paid plans start around $99/month",
+      "reason": "Best if you want an all-in-one tool with strong publishing, monitoring, and reporting capabilities for multiple accounts."
     },
     {
       "name": "Sprout Social",
       "category": "Social Media Management",
-      "description": "An all-in-one social media management platform that offers scheduling, analytics, and customer engagement tools.",
-      "price": "Starting at $99/month",
-      "reason": "Sprout Social provides in-depth analytics and reporting features, making it suitable for businesses looking to optimize their social media strategy."
+      "description": "A premium social media management suite with publishing, engagement, analytics, and AI-powered workflow tools.",
+      "price": "Paid plans start around $249/month",
+      "reason": "Ideal for teams that need advanced analytics, collaboration, and AI assistance for managing a larger social presence."
     },
     {
-      "name": "SocialBee",
+      "name": "Later",
       "category": "Social Media Management",
-      "description": "A social media scheduling tool that helps you categorize your content and automate posting across various platforms.",
-      "price": "Starting at $19/month",
-      "reason": "SocialBee's categorization feature allows for a diverse content strategy, making it easier to maintain a balanced posting schedule."
+      "description": "A visual-first social media scheduling tool with AI caption writing, content planning, and link-in-bio features.",
+      "price": "Free plan available; paid plans start around $25/month",
+      "reason": "Excellent for Instagram, TikTok, and other visual platforms, especially if you want easy content planning and AI caption support."
+    },
+    {
+      "name": "Metricool",
+      "category": "Social Media Management",
+      "description": "An AI-enabled platform for scheduling posts, analyzing performance, and managing multiple social accounts.",
+      "price": "Free plan available; paid plans start around $18/month",
+      "reason": "A strong budget-friendly option that combines scheduling, analytics, and AI help for content optimization."
     }
   ],
   "I need a free AI tool to help me with university assignments": [
     {
-      "name": "Grammarly",
-      "category": "Writing Assistant",
-      "description": "An AI-powered writing assistant that helps improve grammar, punctuation, and style in your assignments.",
-      "price": "Free with premium options",
-      "reason": "Enhances writing quality and helps avoid common mistakes."
-    },
-    {
-      "name": "QuillBot",
-      "category": "Paraphrasing Tool",
-      "description": "An AI tool that helps you paraphrase and summarize text, making it easier to rewrite assignments.",
-      "price": "Free with premium options",
-      "reason": "Aids in avoiding plagiarism and improving text clarity."
-    },
-    {
       "name": "ChatGPT",
-      "category": "Conversational AI",
-      "description": "An AI chatbot that can assist with brainstorming ideas, answering questions, and providing explanations on various topics.",
-      "price": "Free with premium options",
-      "reason": "Provides instant help and information for your assignments."
+      "category": "General-purpose writing assistant",
+      "description": "An AI chatbot that can help brainstorm ideas, explain concepts, outline essays, and draft responses for university assignments.",
+      "price": "Free tier available",
+      "reason": "Best all-around free option for assignment help, especially for understanding topics and generating study support."
     },
     {
-      "name": "Khan Academy",
-      "category": "Educational Platform",
-      "description": "An online learning platform that offers instructional videos and practice exercises across various subjects.",
-      "price": "Free",
-      "reason": "Supports learning and understanding of complex topics relevant to assignments."
+      "name": "Google Gemini",
+      "category": "Research and writing assistant",
+      "description": "An AI assistant from Google that can help summarize information, draft text, and answer questions using a conversational interface.",
+      "price": "Free tier available",
+      "reason": "Useful for quick explanations and drafting assignment content with easy access through a Google account."
     },
     {
-      "name": "Zotero",
-      "category": "Reference Management",
-      "description": "A free tool to help you collect, organize, cite, and share research sources for your assignments.",
-      "price": "Free",
-      "reason": "Streamlines the research process and citation management."
+      "name": "Microsoft Copilot",
+      "category": "Writing and productivity assistant",
+      "description": "An AI assistant integrated with Microsoft tools that can help write, summarize, and organize assignment-related work.",
+      "price": "Free tier available",
+      "reason": "Good choice if you already use Word or other Microsoft apps for schoolwork."
+    },
+    {
+      "name": "Perplexity",
+      "category": "Research assistant",
+      "description": "An AI search tool that answers questions with cited sources, helping you find and summarize reliable information for assignments.",
+      "price": "Free tier available",
+      "reason": "Strong option for research-heavy assignments because it provides sources you can verify."
+    },
+    {
+      "name": "Claude",
+      "category": "Writing and analysis assistant",
+      "description": "An AI assistant that can help with reading comprehension, drafting, editing, and analyzing long documents or prompts.",
+      "price": "Free tier available",
+      "reason": "Helpful for polishing essays and working through longer assignment instructions clearly."
     }
   ],
   "I need a tool to generate a logo for my startup": [
     {
-      "name": "Looka",
-      "category": "Logo Design",
-      "description": "An AI-powered logo maker that allows you to create professional logos in minutes by entering your company name and preferences.",
-      "price": "Starts at $20",
-      "reason": "Looka provides a user-friendly interface and a wide variety of design options tailored to your brand."
-    },
-    {
       "name": "Canva",
-      "category": "Graphic Design",
-      "description": "A versatile design tool that includes a logo maker with customizable templates and a drag-and-drop interface.",
-      "price": "Free with premium options starting at $12.95/month",
-      "reason": "Canva offers extensive design resources and flexibility to create unique logos easily."
+      "category": "Logo Design",
+      "description": "A beginner-friendly design platform with AI-assisted logo creation, templates, and easy drag-and-drop editing.",
+      "price": "Free plan available; paid plans start at around $15/month",
+      "reason": "Great if you want to quickly generate and customize a professional-looking startup logo without design experience."
     },
     {
-      "name": "Hatchful by Shopify",
-      "category": "Logo Design",
-      "description": "A free logo generator that helps you create a logo by selecting your industry and visual style preferences.",
-      "price": "Free",
-      "reason": "Hatchful is easy to use and provides a variety of logo templates tailored to different industries."
+      "name": "Looka",
+      "category": "AI Logo Generator",
+      "description": "An AI-powered logo maker that creates logo concepts based on your brand name, style preferences, and industry.",
+      "price": "Logo packages typically start around $20+; brand kits cost more",
+      "reason": "Best for fast, polished logo ideas tailored to a startup brand identity."
     },
     {
       "name": "Tailor Brands",
-      "category": "Logo Design",
-      "description": "An AI-driven branding platform that generates logos based on your business name and style preferences.",
-      "price": "Starts at $3.99/month",
-      "reason": "Tailor Brands offers a comprehensive branding solution, including logo design, social media tools, and more."
+      "category": "Branding and Logo Creation",
+      "description": "An AI branding platform that generates logos and can extend into business cards, websites, and brand assets.",
+      "price": "Plans typically start around $9.99/month",
+      "reason": "Useful if you want a logo plus a broader startup branding toolkit in one place."
     },
     {
-      "name": "LogoMaker",
-      "category": "Logo Design",
-      "description": "An online logo design tool that allows you to create logos quickly using a library of icons and fonts.",
-      "price": "Free with paid options starting at $39.95",
-      "reason": "LogoMaker is straightforward and provides a variety of design elements to create a unique logo."
+      "name": "Brandmark",
+      "category": "AI Logo Generator",
+      "description": "An AI logo maker that produces modern logo concepts and lets you refine colors, fonts, and layouts.",
+      "price": "One-time logo packages typically start around $25",
+      "reason": "A strong option for creating sleek, startup-friendly logos with minimal effort."
+    },
+    {
+      "name": "Adobe Express",
+      "category": "Design and Logo Creation",
+      "description": "A design tool with AI features and logo templates for creating and editing brand graphics quickly.",
+      "price": "Free plan available; premium plans start around $9.99/month",
+      "reason": "Good if you want a flexible tool for logo creation plus other marketing graphics later."
     }
   ],
   "I need a free AI tool to build a website without coding": [
     {
-      "name": "Wix",
+      "name": "Wix ADI",
       "category": "Website Builder",
-      "description": "Wix is a user-friendly website builder that offers a drag-and-drop interface and AI-driven design features.",
-      "price": "Free with premium options",
-      "reason": "Wix allows users to create websites without any coding knowledge, making it ideal for beginners."
+      "description": "An AI-powered website builder that creates a site for you based on a few prompts and lets you edit it visually without coding.",
+      "price": "Free plan available",
+      "reason": "Best fit for a no-code website on a free tier, with AI-assisted setup and easy drag-and-drop editing."
     },
     {
-      "name": "Zyro",
+      "name": "Framer AI",
       "category": "Website Builder",
-      "description": "Zyro provides an AI-driven website builder that helps users create professional websites quickly.",
-      "price": "Free with premium options",
-      "reason": "Zyro's AI tools simplify the design process, allowing users to build websites easily."
+      "description": "Generates modern websites from text prompts and provides a visual editor for refining layouts, content, and styling.",
+      "price": "Free plan available",
+      "reason": "Great for quickly creating a polished website without coding, especially for landing pages and simple sites."
     },
     {
-      "name": "WordPress.com",
+      "name": "Durable",
       "category": "Website Builder",
-      "description": "WordPress.com offers a free plan for creating websites with customizable themes and a simple editor.",
-      "price": "Free with premium options",
-      "reason": "WordPress.com is accessible for non-coders and has a large community for support."
+      "description": "AI website generator that can create a business website in seconds, including copy, images, and basic structure.",
+      "price": "Free trial / limited free access",
+      "reason": "Useful if you want the fastest possible AI-generated site with minimal setup."
     },
     {
-      "name": "Site123",
+      "name": "Hostinger Website Builder",
       "category": "Website Builder",
-      "description": "Site123 is a straightforward website builder that guides users through the process of creating a website.",
-      "price": "Free with premium options",
-      "reason": "Site123's step-by-step approach makes it easy for anyone to build a website without coding."
+      "description": "A no-code website builder with AI tools for generating site content, sections, and design suggestions.",
+      "price": "Paid plans; often includes trial or money-back guarantee",
+      "reason": "Easy for beginners and includes AI assistance, though it is not fully free long-term."
     },
     {
-      "name": "Jimdo",
+      "name": "10Web AI Website Builder",
       "category": "Website Builder",
-      "description": "Jimdo uses AI to help users create websites quickly and efficiently with minimal effort.",
-      "price": "Free with premium options",
-      "reason": "Jimdo's AI features streamline the website creation process for users without coding skills."
+      "description": "AI website builder for creating WordPress-based sites from prompts or existing websites, with visual editing.",
+      "price": "Paid plans; trial/demo available",
+      "reason": "Strong option for no-code site creation with AI help, especially if you want a WordPress-style website."
     }
   ]
 }

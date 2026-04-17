@@ -68,7 +68,7 @@ for q in QUERIES:
     try:
         start = time.time()
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.4-mini",
             messages=[
                 {"role": "system", "content": GPT_SYSTEM},
                 {"role": "user", "content": q}
