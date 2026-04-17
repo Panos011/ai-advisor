@@ -47,12 +47,16 @@ def test_clarify_returns_valid_action():
     data = r.json()
     assert data["action"] in ("clarify", "search")
 
+# Verifies that system returns HTTP 400 for empty query
+
 
 def test_recommend_empty_query_returns_error():
     r = requests.post(f"{API}/recommend",
                       json={"q": "", "retrieve_k": 30, "final_k": 5},
                       timeout=30)
     assert r.status_code == 400
+
+# Verifies a recommendation request returns within 7 seconds
 
 
 def test_recommend_latency():
