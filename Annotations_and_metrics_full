@@ -1,0 +1,328 @@
+GPT 5.4
+/usr/local/bin/python3.12 /Users/panos/Library/CloudStorage/OneDrive-UniversityofGreenwich/CS Units/Final Year Project/FYP_Code/Metrics.py 
+============================================================
+For each tool enter 1 if relevant to the query, 0 if not
+============================================================
+
+QUERY: I need a tool to transcribe audio meetings
+-- ComAI --
+  Meetgeek | personal assistant | transcriber | summarizer | MeetGeek is an AI-powered meeting assistant designed to revolutionize how professionals manage their meetings. It offers a suite of innovative features including automatic recording, transcription, summarization, and sharing of meeting insights. Tailored for users ranging from freelancers to large enterprises, MeetGeek aims to boost productivity by automating note-taking and follow-ups, ensuring accurate and efficient capture of essential information. | MeetGeek is explicitly designed for meeting transcription, with automatic recording, transcription, and sharing of meeting insights. It also has a free tier, which makes it a good fit if you want to try meeting transcription without upfront cost.
+  Relevant? 1/0: 1
+  Transkriptor | transcriber | summarizer | personal assistant | Transkriptor is an innovative AI-driven transcription tool designed to convert audio into text efficiently. Whether you're transcribing meetings, interviews, or lectures, Transkriptor offers a seamless experience with its state-of-the-art artificial intelligence technology. It's tailored for individuals and professionals who need to simplify the transcription process, ensuring accuracy and speed across 100+ languages. | Transkriptor is built to convert audio into text efficiently and specifically mentions meetings as a use case. Its pricing includes transcription minutes and it supports fast, accurate transcriptions across many languages.
+  Relevant? 1/0: 1
+  Tldv | transcriber | summarizer | sales assistant | tldv, available at tldv.io, is an AI-driven notetaker designed to transform the way meetings are documented and analyzed. It offers seamless recording, transcription, and summarization of meetings held on platforms like Zoom, Microsoft Teams, and Google Meet. Tailored for professionals and organizations looking to enhance productivity, tldv simplifies capturing key insights and action points, making it an invaluable tool for efficient meeting management. | tldv offers seamless recording and transcription for meetings on Zoom, Microsoft Teams, and Google Meet. It also has a free plan with no time limit, which is useful if you need a budget-friendly option.
+  Relevant? 1/0: 1
+  Otter Ai | summarizer | personal assistant | transcriber | Otter.ai is an innovative AI-powered tool designed to transform how meetings are documented and analyzed. It offers real-time transcription and automated note-taking capabilities, making it a powerful asset for businesses, educators, and media professionals. With its advanced AI Meeting Agent suite, Otter.ai simplifies the often tedious task of capturing meeting details, ensuring no information is missed and everyone stays informed. | Otter.ai is focused on real-time transcription and automated note-taking for meetings. It includes a free basic plan and supports common meeting platforms like Zoom and Google Meet.
+  Relevant? 1/0: 1
+  Fireflies Ai | transcriber | summarizer | personal assistant | Fireflies.ai is a cutting-edge AI notetaker designed to transcribe, summarize, analyze, and manage voice conversations across various platforms like Google Meet, Teams, and Zoom. As a professional deeply embedded in the digital transformation era, I found Fireflies.ai not only simplifies meeting management but also enhances productivity by automating routine tasks, allowing users to focus on more strategic activities. | Fireflies.ai is designed to transcribe voice conversations across Google Meet, Teams, and Zoom, which matches meeting transcription needs well. It also offers a free tier, giving you a no-cost way to start transcribing meetings.
+  Relevant? 1/0: 1
+-- GPT --
+  Otter.ai | Meeting transcription | An AI meeting assistant that records, transcribes, and summarizes live or uploaded audio meetings with speaker identification and searchable notes. | Strong fit for meeting transcription because it is designed specifically for live meetings, offers good speaker labeling, and makes transcripts easy to search and share.
+  Relevant? 1/0: 1
+  Fireflies.ai | Meeting transcription | An AI notetaker that joins meetings, transcribes conversations, generates summaries, and extracts action items across popular conferencing platforms. | Useful if you want automatic meeting capture plus summaries and action items, with broad integrations for common video meeting tools.
+  Relevant? 1/0: 1
+  Rev | Transcription service | Provides AI-powered transcription for audio and video files, with options for human-reviewed accuracy and downloadable transcripts. | A good choice when accuracy matters and you may need polished transcripts from recorded meetings rather than only live note-taking.
+  Relevant? 1/0: 1
+  Descript | Audio/video transcription and editing | Transcribes audio and video, lets you edit media by editing text, and includes tools for summaries and collaboration. | Best if you want transcription plus the ability to edit recordings and repurpose meeting audio into clips or written content.
+  Relevant? 1/0: 1
+  Notta | Meeting transcription | An AI transcription tool for live meetings and uploaded recordings, with speaker detection, summaries, and multi-language support. | A solid all-around option for transcribing meetings, especially if you need support for multiple languages and easy export options.
+  Relevant? 1/0: 1
+
+QUERY: I need a free AI tool to help me write essays
+-- ComAI --
+  Perfectessaywriterai | writing generators | education | research | Perfect Essay Writer is an AI-powered tool aimed at revolutionizing the essay writing process. By leveraging advanced algorithms, it provides students , educators, and professionals with the ability to generate high-quality essays on a wide range of topics within seconds. Designed to enhance productivity in writing tasks, Perfect Essay Writer simplifies the often daunting task of essay composition, making it accessible and stress-free. | This tool is explicitly free to use and is designed for generating essays, which matches your need for a free AI essay-writing helper. It is also focused on students and academic writing, making it a strong fit for essay tasks.
+  Relevant? 1/0: 1
+  Myessaywriter Ai | writing generators | education | students | In the vast sea of AI-driven academic tools, MyEssayWriter.ai emerges as a formidable ally for students, educators, and professionals alike, aiming to streamline the essay writing process. At its core, MyEssayWriter.ai is designed to alleviate the stress associated with writing and structuring essays. By leveraging advanced AI technologies, this tool assists users in generating high-quality, plagiarism-free essays that adhere to academic standards, making it an indispensable resource for anyone looking to enhance their writing efficiency and quality. | MyEssayWriter.ai offers a free tier, so you can start without paying. It is built specifically to help with essay writing and academic structure, which aligns closely with your request.
+  Relevant? 1/0: 1
+  Flot Ai | writing generators | education | personal assistan | Flot AI is a dynamic tool designed to revolutionize the way we write, read, and memorize information, leveraging advanced artificial intelligence. This tool is crafted to assist individuals and professionals in enhancing their productivity by streamlining tasks that involve textual content. Whether you're a student needing help with memorization or a professional seeking to optimize your writing processes, Flot AI offers a suite of features to make these tasks more efficient and impactful. | Flot AI includes a free tier, giving you a no-cost way to try its writing assistance. While it is broader than essay writing, it can still help with drafting and improving written work for school.
+  Relevant? 1/0: 1
+  Aithor | writing generators | research | paraphrasing | In the ever-evolving landscape of digital content creation, Aithor emerges as a cutting-edge AI tool designed to revolutionize the way we approach writing and paraphrasing online essays and papers. Aimed at students, educators, content creators, and professionals in various fields, Aithor simplifies the daunting task of generating high-quality, original content while maintaining academic integrity. | Aithor has a free tier and is aimed at writing essays and papers. Its focus on generating original academic content makes it relevant for essay writing support.
+  Relevant? 1/0: 1
+  Paperpal | writing generators | research | education | In my quest to explore and review the latest AI tools that are reshaping how we approach tasks, I recently turned my attention to Paperpal. This tool positions itself as a comprehensive assistant for academic writing, promising to enhance the writing experience with science-backed language suggestions, plagiarism checks, and research features. Designed for students, academics, and researchers, Paperpal aims to streamline the writing process, making it faster, more accurate, and more efficient. | Paperpal offers a free version and is tailored to academic writing. It can help improve essay quality with language suggestions and research-oriented features.
+  Relevant? 1/0: 1
+-- GPT --
+  ChatGPT | Writing Assistant | A conversational AI that can help brainstorm ideas, create outlines, draft essays, and revise writing. | Good all-around free option for essay help, especially for brainstorming, structuring arguments, and improving clarity.
+  Relevant? 1/0: 1
+  Google Gemini | Writing Assistant | An AI assistant that can generate text, summarize sources, and help refine essay drafts. | Useful for quick drafting and research-style support with a free plan.
+  Relevant? 1/0: 1
+  Microsoft Copilot | Writing Assistant | An AI chat tool integrated with Microsoft services that can help generate essay ideas, outlines, and drafts. | Strong free choice for writing support and easy access in a browser.
+  Relevant? 1/0: 1
+  Claude | Writing Assistant | An AI assistant known for clear, natural writing and helpful long-form drafting support. | Great for producing readable essay drafts and improving tone and organization.
+  Relevant? 1/0: 1
+  Perplexity | Research Assistant | An AI search and answer tool that can help gather information, summarize sources, and support essay research. | Best if you need help finding reliable information before writing your essay.
+  Relevant? 1/0: 1
+
+QUERY: I need a tool to generate images from text
+-- ComAI --
+  Craiyon | cartoon generators | text to image | fun tools | Craiyon, formerly known as DALL-E Mini, is an innovative AI tool designed to generate images from textual descriptions. This remarkable application leverages advanced machine learning algorithms to transform written prompts into visually compelling artwork. Primarily targeted at creative professionals, hobbyists, and educators, Craiyon simplifies the process of creating unique images by simply typing a descriptive phrase. | Craiyon directly matches your need because it is specifically a text-to-image tool that generates images from written prompts. It also has a free access option, which makes it a good starting point if you want to try image generation without paying upfront.
+  Relevant? 1/0: 1
+  Imagine Anything | text to image | image generators | design generato | Imagine Anything is a cutting-edge AI tool designed to transform the way we interact with digital content creation. At its core, Imagine Anything leverages powerful AI algorithms to generate high-quality images from textual descriptions, making it an invaluable asset for professionals across various industries who require quick, customizable visual content. | Imagine Anything is built for transforming textual descriptions into images, so it fits your request very closely. It also offers a free tier, with a paid plan available if you later need higher resolution or more advanced features.
+  Relevant? 1/0: 1
+  Dreamstudio | text to image | portrait generators | design gener | DreamStudio is a cutting-edge AI tool that leverages advanced machine learning algorithms to empower users in creating stunning visual content. Designed for artists, designers, and creative professionals, it simplifies the process of generating high-quality images from textual descriptions. This innovative platform is built to enhance creativity and streamline workflows in visual arts. | Dreamstudio is explicitly a text-to-image tool designed to create images from prompts. It includes a free tier and a paid option, giving you flexibility depending on how much you want to generate.
+  Relevant? 1/0: 1
+  Canva Text To Image | text to image | marketing | design generators | Canva Text-to-Image is an innovative tool designed to transform words into compelling visuals. It leverages advanced AI to interpret text input and create images that represent the described concepts. Aimed at marketers, designers, educators, and anyone in need of quick visual content, Canva Text-to-Image streamlines the graphic creation process in a user-friendly and intuitive manner. | Canva Text To Image directly supports generating visuals from text, which matches your need well. The free version included with a Canva account makes it accessible if you want to start at no cost.
+  Relevant? 1/0: 1
+  Stable Diffusion Web | image generators | text to image | prompt generato | Stable Diffusion Web is an innovative AI-driven platform that revolutionizes the way we create images. By leveraging the power of the Stable Diffusion XL model, it transforms text prompts into stunning, photo-realistic images. Designed for artists, graphic designers, and anyone with a creative spark, this tool simplifies the art creation process, allowing users to generate high-quality images effortlessly and in seconds. | Stable Diffusion Web is a text-to-image platform that turns prompts into images and offers a free tier. It is a strong fit if you want a straightforward image generator with no initial cost.
+  Relevant? 1/0: 1
+-- GPT --
+  DALL·E 3 | Text-to-Image Generator | An AI image generator that creates detailed images from natural-language prompts, with strong prompt understanding and easy integration in ChatGPT and API workflows. | Great for generating high-quality images from text with strong adherence to prompt details and broad creative versatility.
+  Relevant? 1/0: 1
+  Midjourney | Text-to-Image Generator | A popular AI art tool known for producing highly stylized, visually striking images from text prompts through Discord or web-based workflows. | Excellent if you want artistic, polished, and imaginative image outputs from text descriptions.
+  Relevant? 1/0: 1
+  Stable Diffusion | Text-to-Image Generator | An open-source text-to-image model that can be run locally or through hosted platforms, offering extensive customization and control. | Best for flexibility, customization, and users who want more control over image generation settings and workflows.
+  Relevant? 1/0: 1
+  Adobe Firefly | Text-to-Image Generator | Adobe’s generative AI tool for creating images from text, designed with commercial use in mind and integrated into Adobe apps. | A strong choice for professional workflows, especially if you already use Adobe products and need commercially oriented outputs.
+  Relevant? 1/0: 1
+  Leonardo AI | Text-to-Image Generator | A web-based AI image generation platform that offers text-to-image creation, style presets, and tools for game assets and concept art. | Useful for fast text-to-image generation with helpful presets and a friendly interface for creative projects.
+  Relevant? 1/0: 1
+
+QUERY: I need an AI tool to help me write and debug Python code
+-- ComAI --
+  Replit | code assistant | education | low-code/no-code | Replit AI is a cutting-edge tool designed to enhance coding and software development through artificial intelligence. At its core, Replit AI aims to streamline the coding process, making it faster, more efficient, and accessible to both beginners and seasoned developers. This platform stands out by integrating AI directly into the coding environment, which not only assists in writing code but also in debugging and optimizing it. | Replit directly matches your need because it helps write code and includes debugging and optimization support in the coding environment. It also has a free tier, which is useful if you want to try it without paying first.
+  Relevant? 1/0: 1
+  Warp Ai | code assistant | workflows | Warp AI is a cutting-edge tool designed to integrate artificial intelligence seamlessly with your command line terminal. Its primary function is to simplify and enhance the user experience for developers by providing AI-driven command suggestions, error explanations, and workflow automation directly within the terminal environment. This tool is a boon for developers looking to streamline their coding and debugging processes, offering a blend of ease and efficiency that is tailored for both novice and experienced coders alike. | Warp AI is a strong fit for debugging Python because it provides error explanations and command suggestions directly in the terminal. Its free tier makes it a budget-friendly option for coding assistance.
+  Relevant? 1/0: 1
+  Cursor | code assistant | Cursor is an innovative AI-powered code editor designed to enhance developer productivity and streamline the coding process. By integrating advanced AI capabilities directly into the development environment, Cursor offers features like AI-driven code completion and natural language coding commands. It aims to transform how developers interact with their codebase, making coding faster and more intuitive. | Cursor is an AI-powered code editor with code completion and natural-language coding commands, which can help you write Python faster. It is specifically a code assistant, so it aligns well with debugging and editing workflows.
+  Relevant? 1/0: 1
+  Copilot | code assistant | low-code/no-code | education | Copilot is an innovative AI tool developed by GitHub that acts as your AI pair programmer. It revolutionizes the coding experience by offering real-time code suggestions, contextualized assistance, and advanced code completion. Designed for developers across various industries, Copilot simplifies software development tasks by integrating seamlessly with popular IDEs like Visual Studio Code, JetBrains, and more. | Copilot is designed as an AI pair programmer and offers real-time code suggestions and contextual assistance, which is useful for writing Python code. It also has a free tier with limited usage, giving you a low-cost way to test it.
+  Relevant? 1/0: 1
+  Deepnote | code assistant | research | Deepnote AI is a cutting-edge tool designed to revolutionize how data projects are managed and executed. It offers a unique AI-powered notebook system that provides contextual assistance throughout your data analysis journey. From automating the creation of notebooks to offering intelligent code suggestions and explanations, Deepnote AI is tailored for data scientists, analysts, and anyone involved in data-driven projects who seeks to enhance productivity and accuracy in their work. | Deepnote AI provides contextual code suggestions and explanations inside an AI-powered notebook environment, which can help with both writing and debugging Python. It includes a free tier, making it a reasonable option if you want to work in notebook-based Python projects.
+  Relevant? 1/0: 1
+-- GPT --
+  GitHub Copilot | Code Assistant | An AI pair programmer that suggests code, completes functions, and helps explain or debug Python code directly in your editor. | Great for writing Python faster and getting inline debugging help while you code in VS Code, JetBrains, and other popular editors.
+  Relevant? 1/0: 1
+  ChatGPT | General AI Assistant | A conversational AI that can generate Python code, explain errors, refactor scripts, and walk through debugging step by step. | Useful when you want detailed explanations of bugs, alternative implementations, or help understanding Python concepts.
+  Relevant? 1/0: 1
+  Cursor | AI Code Editor | An AI-powered code editor built for writing, editing, and debugging code with strong context awareness across your project. | Excellent if you want an editor that can modify codebase-wide Python files and help fix issues with project context.
+  Relevant? 1/0: 1
+  Amazon CodeWhisperer | Code Assistant | An AI coding assistant that provides code suggestions and security-focused guidance for Python and other languages. | Good for Python development if you want code generation plus security-oriented suggestions and IDE integration.
+  Relevant? 1/0: 1
+  Replit Ghostwriter | AI Coding Assistant | An AI assistant inside Replit that helps generate, complete, and debug code in a browser-based development environment. | A strong choice if you want to write and test Python quickly in the cloud without setting up a local environment.
+  Relevant? 1/0: 1
+
+QUERY: I need a tool to create presentations automatically
+-- ComAI --
+  Gamma | presentations | copywriting | startup tools | Gamma is an AI presentation, document, and web-page creator that turns plain text or existing files into polished, interactive decks in under a minute. It focuses on visual storytelling, using large language and image models to generate content structure, design, and on-brand layouts with minimal manual formatting. Aimed at knowledge workers, educators, marketers, founders, and sales teams, it replaces traditional slide tools with a card-based format that feels closer to editing a modern doc than wrestling with PowerPoint. | Gamma directly creates polished presentations from text or existing files in under a minute, which matches your need for automatic presentation creation very well. It also has a free tier, so you can try it without upfront cost.
+  Relevant? 1/0: 1
+  Magicslides | presentations | students | teachers | MagicSlides is an AI presentation maker that turns plain text, topics, URLs, documents, images, and even YouTube videos into editable slide decks in seconds. Powered by Gemini AI and exposed across web, Google Slides, Chrome, Figma, ChatGPT and more, it focuses on skipping the blank-slide stage so users can start from a structured, designed presentation instead of a rough outline. It supports 136+ languages and includes an AI chat assistant that can create, rewrite, and extend slides directly inside the deck. | MagicSlides turns text, URLs, documents, images, and even YouTube videos into editable slide decks automatically. Its free plan makes it a strong budget-friendly option for automated presentation generation.
+  Relevant? 1/0: 1
+  Slidesai | presentations | education | marketing | In the digital age, where presentations are a crucial part of professional and educational communication, SlidesAI emerges as a groundbreaking tool designed to revolutionize the way we create presentation slides. By harnessing the power of artificial intelligence, SlidesAI transforms the tedious task of slide creation into a seamless, efficient process. This tool is particularly designed for individuals and professionals who seek to save time, enhance productivity, and elevate the quality of their presentations without the need for advanced design skills. | SlidesAI is built specifically to transform the slide-making process into a fast AI-driven workflow, generating presentations automatically from input text. It offers a free basic plan, which is useful if you want to start at no cost.
+  Relevant? 1/0: 1
+  Decktopus Ai | presentations | design generators | education | Decktopus AI emerges as a transformative tool in the realm of presentation creation, leveraging artificial intelligence to redefine how professionals craft their slides. With its claim as the world's #1 AI-Powered Presentation Generator, Decktopus AI is designed for a broad spectrum of users, from sales professionals and marketing managers to founders and agencies. It simplifies the traditionally time-consuming process of presentation design, allowing users to focus more on content delivery rather than the intricacies of slide creation. | Decktopus AI is focused on AI-powered presentation generation and is designed to simplify slide creation for users who want to automate the process. It includes a free trial, letting you test whether its automation fits your workflow.
+  Relevant? 1/0: 1
+  Wondershare Presentory | presentations | education | image generators | Wondershare Presentory revolutionizes the art of presentation creation, offering an AI-powered solution that transforms the way we craft and deliver presentations. Designed for professionals, educators, and anyone looking to simplify the presentation process, it leverages the power of AI to generate captivating content and stunning visuals without the need for extensive design skills. By integrating advanced features like GPT-4, Presentory ensures that users can create engaging, professional-grade presentations with ease. | Wondershare Presentory uses AI to generate presentation content and visuals, making it a good match for automatic presentation creation. The free trial gives you a low-risk way to evaluate it before paying.
+  Relevant? 1/0: 1
+-- GPT --
+  Gamma | AI presentation generator | Creates polished slide decks from a prompt, outline, or pasted content, with automatic design and layout generation. | Best fit if you want fast, attractive presentations with minimal manual formatting.
+  Relevant? 1/0: 1
+  Tome | AI storytelling presentation tool | Generates narrative-style presentations from prompts and can turn ideas into structured slides with visuals. | Great for turning a rough idea into a compelling presentation quickly.
+  Relevant? 1/0: 0
+  Beautiful.ai | AI slide design tool | Uses smart templates and automated design rules to build professional presentations efficiently. | Ideal if you want clean, business-ready slides with strong design consistency.
+  Relevant? 1/0: 1
+  Canva Magic Design | AI design and presentation tool | Automatically generates presentation layouts and visuals from prompts or content inside Canva. | Useful if you also want access to a broad design ecosystem and easy editing.
+  Relevant? 1/0: 1
+  Microsoft PowerPoint Copilot | AI presentation assistant | Helps generate, summarize, and refine presentations directly inside PowerPoint using AI. | Best choice if you already use PowerPoint and want AI help within your existing workflow.
+  Relevant? 1/0: 1
+
+QUERY: I need a free AI tool to help me learn a new language
+-- ComAI --
+  Duolingo | education | travel | students | Duolingo is a dynamic language learning platform that has transformed the way millions of people around the world acquire new languages. Designed for learners from all walks of life, this tool simplifies language learning through gamified lessons and intuitive interactions. Whether you're a beginner looking to pick up basic phrases for a vacation, or a seasoned language learner aiming to brush up on your grammar, Duolingo offers a personalized learning experience that adjusts to your pace and style. | Duolingo is fully free and directly focused on language learning, making it a strong match for your request. It offers structured lessons across many languages, so it works well for beginners and ongoing practice.
+  Relevant? 1/0: 1
+  Talkpal | education | ai chatbots | translator | TalkPal is an innovative AI-powered language tutor designed to provide an immersive learning experience for those who wish to master new languages. With the use of GPT-powered technology, it offers users the opportunity to engage in unlimited conversations on a plethora of topics, enhancing their language skills across listening, speaking, reading, and writing. It is not just a learning tool but a comprehensive language partner that adapts to your individual pace and learning style. | TalkPal includes a free access tier and is specifically built as an AI language tutor. Its conversation practice and feedback features make it useful for learning speaking, listening, reading, and writing.
+  Relevant? 1/0: 1
+  Quazel | education | translator | Quazel is an innovative AI language tutor designed to fit right in your pocket. This cutting-edge tool is aimed at language learners of all levels, offering personalized and interactive lessons that adapt to the user's pace and learning style. As someone who has explored numerous language learning apps and tools, I'm excited to share my insights on what makes Quazel a standout choice for anyone looking to master a new language. | Quazel offers a free version and is designed as an AI language tutor for personalized, interactive lessons. It fits your need for a no-cost tool to help learn a new language.
+  Relevant? 1/0: 1
+  Praktika Ai | avatars | education | Praktika is an innovative language-learning application that leverages generative AI avatars to provide an immersive English learning experience. It focuses on conversation-first learning, offering a unique blend of technology and education to help users gain fluency in English through interactive sessions with AI avatars. | Praktika AI is focused on language learning through AI conversation, which is helpful for practicing real-life speaking. Although the pricing details are unclear, it is clearly aimed at English learners and conversational practice.
+  Relevant? 1/0: 1
+  Langotalk | education | personal assistant | ai chatbots | Langotalk is a state-of-the-art language learning tool powered by AI, designed to revolutionize the way people acquire new languages. It offers personalized, chat-based language learning experiences, enabling users to immerse themselves in their chosen language 24/7. With a focus on conversational interaction with AI, Langotalk provides a natural and effective method for language acquisition, catering to individuals who seek a convenient, cost-effective, and engaging approach to mastering a new language. | Langotalk is built for AI-powered language learning with personalized chat-based practice available 24/7. It has a free trial rather than a permanently free plan, but it is still relevant if you want to test an AI language-learning tool at no cost first.
+  Relevant? 1/0: 1
+-- GPT --
+  Duolingo | Language Learning | A popular language-learning app that uses AI-driven personalization, spaced repetition, and gamified lessons to help you practice vocabulary, grammar, listening, and speaking. | Great for beginners who want a free, easy-to-use tool with daily practice and adaptive lessons.
+  Relevant? 1/0: 1
+  Memrise | Language Learning | An app focused on vocabulary and phrase learning with AI-assisted review, native-speaker videos, and personalized practice sessions. | Useful for building practical vocabulary and hearing real-world pronunciation without paying upfront.
+  Relevant? 1/0: 1
+  Busuu | Language Learning | A language-learning platform offering AI-powered study plans, grammar exercises, and community feedback from native speakers. | Good if you want structured lessons plus feedback, while still being able to use the core features for free.
+  Relevant? 1/0: 1
+  ChatGPT | AI Tutor | An AI chatbot that can act as a language tutor by generating exercises, explaining grammar, translating phrases, and simulating conversations. | Flexible free option for practicing conversation, asking questions, and getting custom explanations at your own pace.
+  Relevant? 1/0: 1
+  Language Reactor | Language Learning | A browser extension that helps you learn through Netflix and YouTube with dual subtitles, translations, and interactive vocabulary tools. | Excellent for immersive learning if you want to study through videos and real native content for free.
+  Relevant? 1/0: 1
+
+QUERY: I need a tool to edit and enhance videos
+-- ComAI --
+  Capcut | video editing | video enhancer | text to speech | CapCut is a versatile video editing application designed to elevate your video content creation experience. Available on multiple platforms, including iOS and MacOS, CapCut offers a comprehensive suite of editing tools that cater to both beginners and advanced users. This tool is perfect for those looking to enhance their video editing capabilities with features that simplify complex editing tasks. Whether you're a content creator on TikTok, a YouTuber, or just someone who enjoys making videos, CapCut provides an intuitive interface and powerful features to bring your creative visions to life. | CapCut matches both editing and enhancement needs directly, with a free tier that makes it accessible if you want to try before paying. It also offers a broad feature set for beginners and advanced users across multiple platforms.
+  Relevant? 1/0: 1
+  Hitpaw Edimakor | video editing | video enhancer | social media | In today’s fast-paced digital world, video content creation has become a cornerstone for both personal and professional communication. Enter HitPaw Edimakor, a sophisticated AI-powered video editor designed to streamline the editing process while enhancing creativity and productivity. From budding YouTubers to seasoned marketing professionals, HitPaw Edimakor offers an array of features that simplify video editing without sacrificing quality or control. | HitPaw Edimakor is explicitly built as an AI-powered video editor and enhancer, so it fits your request very closely. Its free trial and monthly plan give you a low-risk way to test the tool before committing.
+  Relevant? 1/0: 1
+  Powerdirector | video editing | video enhancer | As a seasoned video editor and tech enthusiast, I've had the opportunity to test out various video editing software, and PowerDirector by CyberLink has consistently stood out. This tool is designed to cater to both amateur and professional video creators, offering a rich array of editing features combined with the power of AI to streamline the video creation process. Whether you're looking to produce high-quality video content for social media, corporate presentations, or creative filmmaking, PowerDirector provides a comprehensive suite of tools that makes video editing accessible and efficient. | PowerDirector provides comprehensive video editing plus AI-based enhancement features, making it a strong all-around choice for editing and improving footage. It also has a free tier, which is useful if budget matters.
+  Relevant? 1/0: 1
+  Davinci Resolve | video editing | video enhancer | audio editing | DaVinci Resolve 19 is not just any video editing software; it's a comprehensive suite designed for high-end film and television post-production. Combining editing, color correction, visual effects, motion graphics, and audio post-production all in one software tool, DaVinci Resolve simplifies the post-production process, allowing you to stay in one program from start to finish. Aimed at professionals in the industry as well as enthusiastic amateurs, its robust feature set is crafted to handle projects from large cinema productions to quick-paced television content. | DaVinci Resolve is a full post-production suite with editing, color correction, effects, and audio tools, so it covers video editing very well. Its free version is a strong option if you want powerful capabilities without upfront cost.
+  Relevant? 1/0: 1
+  Topaz Video Ai | video editing | video enhancer | image editing | In the world of video editing and enhancement, Topaz Video AI stands as a formidable tool, designed to unleash the full potential of your footage. This advanced AI-driven software promises to transform ordinary videos into cinematic masterpieces with features such as upscaling to 16K, noise reduction, and frame rate conversion. Aimed at both professional filmmakers and hobbyists, Topaz Video AI simplifies the complex process of video enhancement, making every shot not just better, but near perfect. | Topaz Video AI is highly focused on video enhancement, including upscaling, noise reduction, and frame-rate conversion. If enhancing footage is a major priority, it complements editing tools especially well.
+  Relevant? 1/0: 1
+-- GPT --
+  Adobe Premiere Pro | Video Editing | Professional video editing software with advanced trimming, color correction, audio tools, effects, and export options. | Best for full-featured editing and enhancement if you want industry-standard control over video quality.
+  Relevant? 1/0: 1
+  DaVinci Resolve | Video Editing and Color Grading | Powerful editor with advanced color grading, audio post-production, visual effects, and AI-assisted tools. | Excellent for enhancing video quality, especially color correction and professional finishing, with a strong free version.
+  Relevant? 1/0: 1
+  CapCut | AI Video Editing | Easy-to-use editor with AI tools for auto captions, background removal, effects, templates, and quick enhancements. | Great for fast editing and enhancement, especially for social media content and beginner-friendly workflows.
+  Relevant? 1/0: 1
+  Descript | AI Video Editing and Enhancement | Text-based video editor with AI features for editing by transcript, removing filler words, and improving audio/video workflows. | Useful if you want to edit videos quickly and enhance them through transcript-based editing and AI cleanup.
+  Relevant? 1/0: 1
+  Runway | AI Video Enhancement | AI-powered creative suite for video editing, background removal, object removal, motion tools, and generative video features. | Strong choice for AI-driven video enhancement and creative effects without needing advanced manual editing skills.
+  Relevant? 1/0: 1
+
+QUERY: I need an AI tool to manage my social media posts
+-- ComAI --
+  Robopost Ai | social media | marketing | image generators | In the ever-evolving world of digital marketing and social media management, staying ahead with engaging, timely, and relevant content is key. This is where Robopost AI comes into play. Designed primarily for marketers, influencers, and businesses, Robopost AI is a robust tool that automates the generation and scheduling of social media posts. By leveraging advanced AI technologies, it helps users overcome creative hurdles such as writer's block by generating fresh post ideas and crafting compelling content with specific tones. Moreover, its integration with Dall-E allows for the creation of stunning visuals, enhancing the overall impact of your social media presence. | Robopost Ai directly matches your need to manage social media posts by automating both generation and scheduling. It also has a free tier, which makes it a low-risk option to start with.
+  Relevant? 1/0: 1
+  Postsyncer | social media | PostSyncer is a social media management tool that centralizes planning, creation, publishing, and analysis across major platforms such as Instagram, TikTok, YouTube, X, LinkedIn, Facebook, Pinterest, Threads, Telegram, and Bluesky. It combines a visual scheduler with an AI content engine that can turn links, PDFs, images, videos, and text into ready-to-post content, including short-form videos and carousels. Built for creators, teams, and agencies, it aims to make posting frequently across many accounts far less painful. | PostSyncer is a strong fit if you want a full social media management tool, not just post creation. It supports planning, publishing, scheduling, and analysis across many platforms, with AI content tools included.
+  Relevant? 1/0: 1
+  Postsam | social media | marketing | PostSam is designed to transform social media management and content creation. It aims to automate and enhance social media presence through AI-driven technology, making it a go-to tool for individuals and businesses looking to boost their online engagement with minimal effort. It offers features that create, schedule, and publish viral content, making social media management a breeze for users who want to maintain a strong online presence without dedicating hours to the task. | PostSam offers AI-driven creation, scheduling, and publishing, which aligns closely with managing social media posts end to end. Its free plan also gives you a budget-friendly way to try core features first.
+  Relevant? 1/0: 1
+  Postly | social media | marketing | image editing | When it comes to managing our social media presence, the challenges are as diverse as they are daunting. That's where Postly comes in – a tool designed to streamline the intricacies of social media management. At its core, Postly is an AI-powered social media planner and scheduler that promises to transform your marketing strategy. It's crafted to cater to the needs of businesses, influencers, and social media managers looking to maximize their reach and engagement across multiple platforms. | Postly is designed as an AI-powered planner and scheduler for social media, making it well suited for post management. It also includes a free trial and paid upgrades for bulk posting and analytics.
+  Relevant? 1/0: 1
+  Socialbee | social media | marketing | SocialBee is a social media management platform that combines AI-assisted content planning, post creation, scheduling, engagement, and analytics in one workspace. Its standout AI angle comes from its Social Media Copilot and built-in content tools, which help users generate post ideas, shape posting strategies, customize captions for different networks, and keep publishing organized without living inside a spreadsheet all week. | SocialBee combines AI-assisted content planning, post creation, scheduling, engagement, and analytics in one workspace. That makes it a good choice if you want a more complete social media management workflow.
+  Relevant? 1/0: 1
+-- GPT --
+  Buffer | Social Media Management | An AI-assisted platform for scheduling, publishing, and analyzing social media posts across multiple channels. | Great for straightforward post scheduling and content planning, with AI features that help draft and repurpose posts efficiently.
+  Relevant? 1/0: 1
+  Hootsuite | Social Media Management | A comprehensive social media dashboard for scheduling, monitoring, analytics, and team collaboration. | Best if you want an all-in-one tool with strong publishing, monitoring, and reporting capabilities for multiple accounts.
+  Relevant? 1/0: 1
+  Sprout Social | Social Media Management | A premium social media management suite with publishing, engagement, analytics, and AI-powered workflow tools. | Ideal for teams that need advanced analytics, collaboration, and AI assistance for managing a larger social presence.
+  Relevant? 1/0: 1
+  Later | Social Media Management | A visual-first social media scheduling tool with AI caption writing, content planning, and link-in-bio features. | Excellent for Instagram, TikTok, and other visual platforms, especially if you want easy content planning and AI caption support.
+  Relevant? 1/0: 1
+  Metricool | Social Media Management | An AI-enabled platform for scheduling posts, analyzing performance, and managing multiple social accounts. | A strong budget-friendly option that combines scheduling, analytics, and AI help for content optimization.
+  Relevant? 1/0: 1
+
+QUERY: I need a free AI tool to help me with university assignments
+-- ComAI --
+  Perfectessaywriterai | writing generators | education | research | Perfect Essay Writer is an AI-powered tool aimed at revolutionizing the essay writing process. By leveraging advanced algorithms, it provides students , educators, and professionals with the ability to generate high-quality essays on a wide range of topics within seconds. Designed to enhance productivity in writing tasks, Perfect Essay Writer simplifies the often daunting task of essay composition, making it accessible and stress-free. | This tool is free to use and is directly aimed at essay writing, which fits university assignments well. It can help generate structured academic content quickly for students.
+  Relevant? 1/0: 1
+  Studyx | education | research | writing generators | StudyX has emerged as a groundbreaking AI learning assistant designed to revolutionize how we approach learning and academic research. With its comprehensive suite of tools, including AI-driven chatbots for instant homework help, access to over 200 million research papers, and an AI writing generator, StudyX caters to a wide audience ranging from students to professionals seeking to enhance their learning efficiency. Its compatibility with desktop and mobile platforms, alongside a browser extension that integrates seamlessly into any Learning Management System (LMS), makes it a versatile and indispensable tool for learners and educators. | StudyX offers a free tier and includes homework help, writing generation, and research support. That makes it a strong all-around option for university assignments that may require both writing and source finding.
+  Relevant? 1/0: 1
+  Homeworkify | education | students | ai chatbots | Homeworkify.im is a cutting-edge AI-powered platform designed to assist students with their homework across various subjects. Leveraging the advanced capabilities of GPT-4o technology, Homeworkify.im provides precise and instant answers to questions submitted in text, image, or file formats. Unlike other similar platforms, Homeworkify.im ensures high-quality support and versatility, making it an invaluable resource for students seeking reliable academic assistance. | Homeworkify is completely free and is designed specifically to help students with homework across subjects. It supports text, image, and file inputs, which is useful for a wide range of university assignment tasks.
+  Relevant? 1/0: 1
+  Doctrina Ai | education | students | summarizer | In the ever-evolving landscape of educational technology, Doctrina emerges as a cutting-edge AI platform designed to enhance the learning and teaching experience . At its core, Doctrina is an AI Education Suite that leverages artificial intelligence to assist both students and educators with various academic tasks. From summarizing class notes to crafting essays and designing interactive quizzes, Doctrina aims to amplify the educational process while upholding the values of active learning and critical thinking. | Doctrina has a free plan that includes unlimited quizzes and essay creation. It is built for educational use, so it can support both writing assignments and study preparation.
+  Relevant? 1/0: 1
+  Jungleai | education | students | teachers | JungleAI, formerly known as Wisdolia, is an AI-powered tool designed to revolutionize the way students prepare for exams by generating flashcards and multiple-choice questions in seconds. This tool is particularly useful for students looking to save time and enhance their study efficiency. With JungleAI, you can effortlessly convert lecture slide decks, PDFs, webpages, PowerPoint presentations, YouTube videos, textbooks, study guides, and even notes into smart flashcards and case questions, making it a versatile aid for academic success. | JungleAI has a free tier and is useful for turning course materials into study aids like flashcards and questions. While it is more study-focused than writing-focused, it can still help with understanding assignment material and preparing responses.
+  Relevant? 1/0: 1
+-- GPT --
+  ChatGPT | General-purpose writing assistant | An AI chatbot that can help brainstorm ideas, explain concepts, outline essays, and draft responses for university assignments. | Best all-around free option for assignment help, especially for understanding topics and generating study support.
+  Relevant? 1/0: 1
+  Google Gemini | Research and writing assistant | An AI assistant from Google that can help summarize information, draft text, and answer questions using a conversational interface. | Useful for quick explanations and drafting assignment content with easy access through a Google account.
+  Relevant? 1/0: 1
+  Microsoft Copilot | Writing and productivity assistant | An AI assistant integrated with Microsoft tools that can help write, summarize, and organize assignment-related work. | Good choice if you already use Word or other Microsoft apps for schoolwork.
+  Relevant? 1/0: 1
+  Perplexity | Research assistant | An AI search tool that answers questions with cited sources, helping you find and summarize reliable information for assignments. | Strong option for research-heavy assignments because it provides sources you can verify.
+  Relevant? 1/0: 1
+  Claude | Writing and analysis assistant | An AI assistant that can help with reading comprehension, drafting, editing, and analyzing long documents or prompts. | Helpful for polishing essays and working through longer assignment instructions clearly.
+  Relevant? 1/0: 1
+
+QUERY: I need a tool to generate a logo for my startup
+-- ComAI --
+  Wix Logo Maker | logo generator | design generators | startup tools | Wix Logo Maker is an intuitive, AI-powered tool designed to help individuals and businesses create professional logos effortlessly. This tool revolutionizes logo design by offering a seamless, user-friendly experience. Whether you're a startup, freelancer, or established business, Wix Logo Maker simplifies the process of crafting a unique logo that aligns perfectly with your brand identity. | Wix Logo Maker is directly built for generating professional logos and is aimed at startups and businesses. It also offers a free tier to experiment before paying for high-resolution files and extra customization.
+  Relevant? 1/0: 1
+  Namecheap Logo Maker | logo generator | When it comes to branding, a logo is the cornerstone that speaks volumes about a business, and creating one that's both professional and impactful can be a daunting task. Enter Namecheap Logo Maker, an AI-powered tool designed to streamline the logo creation process. With its intuitive interface and rich feature set, it demystifies design for entrepreneurs, bloggers, and small business owners who seek to craft a unique identity without the hefty price tag of professional design services. | Namecheap Logo Maker is a free AI-powered logo generator, which fits a startup looking to create a logo without upfront cost. Its interface is designed to help entrepreneurs make a professional logo quickly and easily.
+  Relevant? 1/0: 1
+  Logoai | logo generator | LogoAI emerges as a cutting-edge tool in the digital branding world, redefining logo design for businesses and individuals. This AI-powered platform takes logo creation to new heights, offering a simplified process with smart AI technology that not only generates logos but also incorporates design best practices. Tailored for entrepreneurs, small businesses, and marketing professionals, LogoAI promises professionalism, automation, and aesthetic appeal in logo design. | LogoAI is specifically focused on AI logo creation and includes design best practices to produce polished results. It offers a free tier for limited exploration and paid access for unlimited designs.
+  Relevant? 1/0: 1
+  Logopony | logo generator | design generators | When it comes to crafting the perfect logo for your brand, the process can be daunting. This is where Logopony enters the scene, a tool that embodies innovation in logo creation. It is an online logo maker that harnesses artificial intelligence to provide users with a seamless and intuitive design experience. Designed for entrepreneurs, small business owners, and startups, Logopony simplifies the task of logo design, making it accessible to anyone regardless of design skills. | Logopony is an AI logo maker designed for startups and small business owners, making it a strong match for a new company branding need. It supports both single-logo purchase and subscription options, giving flexibility depending on budget.
+  Relevant? 1/0: 1
+  Shopify Logo Maker | logo generator | design generators | e-commerce | Shopify Logo Maker is an innovative, free tool designed to help entrepreneurs and small business owners create professional logos effortlessly. With its user-friendly interface and a vast library of templates, Shopify Logo Maker allows users to design high-quality logos that align with their brand identity without any prior design experience. This tool is perfect for those looking to establish a strong brand presence quickly and cost-effectively. | Shopify Logo Maker is a free tool that lets users create professional logos with full access to features and templates. Since you need a startup logo, its no-cost entry and simple workflow make it a practical option.
+  Relevant? 1/0: 1
+-- GPT --
+  Canva | Logo Design | A beginner-friendly design platform with AI-assisted logo creation, templates, and easy drag-and-drop editing. | Great if you want to quickly generate and customize a professional-looking startup logo without design experience.
+  Relevant? 1/0: 1
+  Looka | AI Logo Generator | An AI-powered logo maker that creates logo concepts based on your brand name, style preferences, and industry. | Best for fast, polished logo ideas tailored to a startup brand identity.
+  Relevant? 1/0: 1
+  Tailor Brands | Branding and Logo Creation | An AI branding platform that generates logos and can extend into business cards, websites, and brand assets. | Useful if you want a logo plus a broader startup branding toolkit in one place.
+  Relevant? 1/0: 1
+  Brandmark | AI Logo Generator | An AI logo maker that produces modern logo concepts and lets you refine colors, fonts, and layouts. | A strong option for creating sleek, startup-friendly logos with minimal effort.
+  Relevant? 1/0: 1
+  Adobe Express | Design and Logo Creation | A design tool with AI features and logo templates for creating and editing brand graphics quickly. | Good if you want a flexible tool for logo creation plus other marketing graphics later.
+  Relevant? 1/0: 1
+
+QUERY: I need a free AI tool to build a website without coding
+-- ComAI --
+  Hubspot Ai Website Generator | website builders | startup tools | marketing | HubSpot AI Website Generator is a cutting-edge tool designed to transform the way businesses build their online presence. It leverages artificial intelligence to simplify the process of creating a single-page website by using intuitive prompts. This tool is particularly beneficial for startups and small businesses looking to establish their digital footprint without the need for extensive coding knowledge. By automating the labor-intensive aspects of web design, HubSpot AI Website Generator allows users to focus on what truly matters—growing their business. | This is free and specifically built to create a website with AI prompts, which matches your no-coding requirement well. It is especially suitable if you want a simple single-page site quickly.
+  Relevant? 1/0: 1
+  Mobirise Ai Website Builder | website builders | design generators | low-code/no | In the ever-evolving landscape of web design, the Mobirise AI Website Builder emerges as a groundbreaking tool that significantly simplifies the process of creating websites. Leveraging artificial intelligence, this online generator crafts aesthetically pleasing, highly functional sites tailored to the user's specific prompts and preferences. Designed with non-techies in mind, it offers a streamlined, efficient design solution that demystifies the complexities of web development. Its ability to generate unlimited AI designs optimized for both mobile devices and Google, while ensuring users retain full ownership of their websites, sets a new standard in the realm of web design tools. | This offers a free tier and is designed for non-technical users to generate websites with AI. It also emphasizes no-code use and full website ownership, which is useful for building without coding.
+  Relevant? 1/0: 1
+  Wegic | website builders | design generators | education | Wegic is a groundbreaking AI tool that is transforming the way we think about website design and development. At its core, Wegic is an AI web designer and developer that works alongside you, making the process of creating a website as easy as having a conversation. With the support of three amazing assistants, this tool promises to bring any website vision to life, whether it's for a small flower shop, a personal resume, or a professional photography studio. The concept of building your site through simple chat interactions is not just innovative but incredibly user-friendly, catering to both individuals with specific ideas and those seeking inspiration and guidance. | Wegic has a free basic version and lets you build a website through chat, so you do not need coding skills. Its conversational workflow makes it a strong fit for someone who wants an easy AI website builder.
+  Relevant? 1/0: 1
+  Dora Ai | website builders | design generators | marketing | Dora AI emerges as a groundbreaking tool in the realm of website creation, setting itself apart by offering a platform where sites beyond imagination are just a prompt away. Aimed at both individuals and professionals, Dora AI simplifies the process of website development by leveraging AI to analyze prompts, craft original designs, and generate responsive layouts. This tool is designed for those looking to cut down on time, costs, and enhance efficiency in creating unique and visually appealing websites. | Dora AI includes free credits with no credit card required, making it a good free option to start building a site. It is focused on prompt-based website generation and responsive layouts, which fits a no-code workflow.
+  Relevant? 1/0: 1
+  B12Io | website builders | e-commerce | marketing | B12 is an AI-first website builder and client engagement suite that creates full websites, online stores, or simple web apps from a short text description. It targets service-based businesses that want a professional online presence plus built-in tools for intake, scheduling, billing, and email. Its AI website agents extend across popular assistants so users can go from idea to launch in minutes. | B12 offers a free plan that lets you build and host a site at no cost, so it meets the budget requirement. It uses AI to create full websites from text descriptions, which is ideal if you want to avoid coding.
+  Relevant? 1/0: 1
+-- GPT --
+  Wix ADI | Website Builder | An AI-powered website builder that creates a site for you based on a few prompts and lets you edit it visually without coding. | Best fit for a no-code website on a free tier, with AI-assisted setup and easy drag-and-drop editing.
+  Relevant? 1/0: 0
+  Framer AI | Website Builder | Generates modern websites from text prompts and provides a visual editor for refining layouts, content, and styling. | Great for quickly creating a polished website without coding, especially for landing pages and simple sites.
+  Relevant? 1/0: 1
+  Durable | Website Builder | AI website generator that can create a business website in seconds, including copy, images, and basic structure. | Useful if you want the fastest possible AI-generated site with minimal setup.
+  Relevant? 1/0: 1
+  Hostinger Website Builder | Website Builder | A no-code website builder with AI tools for generating site content, sections, and design suggestions. | Easy for beginners and includes AI assistance, though it is not fully free long-term.
+  Relevant? 1/0: 1
+  10Web AI Website Builder | Website Builder | AI website builder for creating WordPress-based sites from prompts or existing websites, with visual editing. | Strong option for no-code site creation with AI help, especially if you want a WordPress-style website.
+  Relevant? 1/0: 1
+
+============================================================
+PER QUERY RESULTS
+============================================================
+
+Q: I need a tool to transcribe audio meetings
+  ComAI  P@5:1.00  Div:0.267  Time:3.18s
+  GPT    P@5:1.00  Div:0.600  Time:2.65s
+
+Q: I need a free AI tool to help me write essays
+  ComAI  P@5:1.00  Div:0.400  Time:2.95s
+  GPT    P@5:1.00  Div:0.400  Time:1.88s
+
+Q: I need a tool to generate images from text
+  ComAI  P@5:1.00  Div:0.533  Time:2.66s
+  GPT    P@5:1.00  Div:0.200  Time:2.18s
+
+Q: I need an AI tool to help me write and debug Python cod
+  ComAI  P@5:1.00  Div:0.455  Time:3.55s
+  GPT    P@5:1.00  Div:0.800  Time:2.61s
+
+Q: I need a tool to create presentations automatically
+  ComAI  P@5:1.00  Div:0.600  Time:3.3s
+  GPT    P@5:0.80  Div:1.000  Time:1.9s
+
+Q: I need a free AI tool to help me learn a new language
+  ComAI  P@5:1.00  Div:0.538  Time:3.08s
+  GPT    P@5:1.00  Div:0.400  Time:2.3s
+
+Q: I need a tool to edit and enhance videos
+  ComAI  P@5:1.00  Div:0.429  Time:2.62s
+  GPT    P@5:1.00  Div:1.000  Time:2.05s
+
+Q: I need an AI tool to manage my social media posts
+  ComAI  P@5:1.00  Div:0.364  Time:2.69s
+  GPT    P@5:1.00  Div:0.200  Time:2.3s
+
+Q: I need a free AI tool to help me with university assign
+  ComAI  P@5:1.00  Div:0.467  Time:2.5s
+  GPT    P@5:1.00  Div:1.000  Time:2.18s
+
+Q: I need a tool to generate a logo for my startup
+  ComAI  P@5:1.00  Div:0.400  Time:2.68s
+  GPT    P@5:1.00  Div:0.800  Time:2.3s
+
+Q: I need a free AI tool to build a website without coding
+  ComAI  P@5:1.00  Div:0.467  Time:2.72s
+  GPT    P@5:0.80  Div:0.200  Time:2.26s
+
+============================================================
+AGGREGATE RESULTS
+============================================================
+              ComAI       GPT
+Precision@5:  1.000       0.964
+Diversity:    0.447       0.600
+Gini:         0.018       0.131
+Avg latency:  2.90s      2.24s
+
+Saved metrics_results.json

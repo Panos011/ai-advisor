@@ -292,6 +292,7 @@ with left:
                 with st.chat_message("assistant"):
                     st.markdown(f"Error calling API: {err}")
                 st.session_state.messages.append({"role": "assistant", "content": f"Error calling API: {err}"})
+                st.rerun()
             else:
                 st.session_state.last_error = None
 
@@ -319,6 +320,7 @@ with left:
                         "type": "results",
                         "result_index": len(st.session_state.results_history) - 1
                     })
+                    st.rerun()
 
 # Pop-over window
 with st.popover("Saved tools"):
