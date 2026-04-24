@@ -80,7 +80,7 @@ if "api_warmed" not in st.session_state:
     st.session_state.api_warmed = True
 
 
-def render_results(hits):
+def render_results(hits, history_idx=0):
     for idx, h in enumerate(hits):
         m = h.get("meta", {}) or {}
         score = float(h.get("score", 0.0))
@@ -99,7 +99,7 @@ def render_results(hits):
             with top[1]:
                 saved = tid in st.session_state.saved
                 label = "✅ Saved" if saved else "⭐ Save"
-                if st.button(label, key=f"save_{tid}_{idx}"):
+                if st.button(label, key=f"save_{history_idx}_{tid}_{idx}"):
                     if not saved:
                         st.session_state.saved[tid] = m
                     else:
@@ -217,7 +217,7 @@ with left:
             idx = message.get("result_index", -1)
             if 0 <= idx < len(st.session_state.results_history):
                 with st.chat_message("assistant"):
-                    render_results(st.session_state.results_history[idx])
+                    render_results(st.session_state.results_history[idx], history_idx=idx)
 
 
     def passes_filters(meta: dict) -> bool:
