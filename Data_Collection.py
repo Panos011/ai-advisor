@@ -9,7 +9,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib.parse import quote_plus
 from urllib3.util.retry import Retry
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit, parse_qsl
 from bs4 import BeautifulSoup
 SCRAPER_KEY = os.getenv("SCRAPERAPI_KEY")
 OUTPUT_CSV = "AI_tools.csv"
@@ -87,6 +87,135 @@ def fetch(url: str, tries: int = 4):
             time.sleep(1.5 + i)
 
     raise last_err if last_err else RuntimeError("fetch failed")
+
+
+# ── Logo helpers ──────────────────────────────────────────────────────────────
+# Maps a download response's Content-Type header to a file extension.
+_CONTENT_TYPE_EXT = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/svg+xml": "svg",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "image/x-icon": "ico",
+    "image/vnd.microsoft.icon": "ico",
+}
+
+
+def extract_logo_url(soup) -> str:
+    """
+    Return the tool's logo URL.
+
+    Primary method — score every <img> on the page and keep the highest. A real
+    Futurepedia tool logo shows three signals:
+      - card class:  aspect-square + rounded-xl + object-fill
+      - alt text ending in 'logo' (but NOT the Futurepedia site header logo)
+      - hosted on cdn.futurepedia.io / cdn2.futurepedia.io (not the /api/og card)
+    Site chrome (/_next/image, futurepedia-logo*) is pushed negative, so it can
+    never win by accident.
+
+    Fallback — og:image, unwrapping its embedded &image= parameter if present.
+    """
+    best = None  # (score, url)
+    for img in soup.find_all("img", src=True):
+        src = img.get("src", "")
+        alt = (img.get("alt", "") or "").strip().lower()
+        cls = " ".join(img.get("class", [])).lower()
+        if not src or src.startswith("data:"):
+            continue
+
+        score = 0
+        if "aspect-square" in cls and "rounded-xl" in cls and "object-fill" in cls:
+            score += 3
+        if alt.endswith("logo") and "futurepedia" not in alt:
+            score += 2
+        if ("cdn2.futurepedia.io" in src or "cdn.futurepedia.io" in src) and "/api/og" not in src:
+            score += 2
+        if "/_next/image" in src or "futurepedia-logo" in src.lower():
+            score -= 5
+
+        if score > 0 and (best is None or score > best[0]):
+            best = (score, urljoin(URL, src))
+
+    if best:
+        return best[1]
+
+    # Last resort: og:image (a social card, not a clean logo). Unwrap the
+    # embedded image= param so we at least get a direct CDN image.
+    og = soup.find("meta", property="og:image")
+    if og and og.get("content"):
+        content = og["content"].strip()
+        parsed = urlsplit(content)
+        if "/api/og" in parsed.path:
+            params = dict(parse_qsl(parsed.query))
+            embedded = params.get("image")
+            if embedded:
+                return embedded
+        return content
+
+    return ""
+
+
+def detect_image_ext(content: bytes, content_type: str = "") -> str:
+    """
+    Decide the real image format from the bytes (magic numbers) first, then the
+    Content-Type header, then fall back to png. Never trust the URL extension:
+    Futurepedia's CDN rasterises '.svg?w=256' URLs into PNG, so the URL lies.
+    """
+    head = content[:16]
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if head.startswith(b"GIF87a") or head.startswith(b"GIF89a"):
+        return "gif"
+    if head[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "webp"
+    if head.startswith(b"\x00\x00\x01\x00"):
+        return "ico"
+    # SVG is text — look for an <svg root near the start (allow leading <?xml/BOM)
+    sniff = content[:512].lstrip().lower()
+    if sniff.startswith(b"<?xml") or sniff.startswith(b"<svg") or b"<svg" in sniff[:200]:
+        return "svg"
+
+    ct = (content_type or "").split(";")[0].strip().lower()
+    if ct in _CONTENT_TYPE_EXT:
+        return _CONTENT_TYPE_EXT[ct]
+
+    return "png"
+
+
+def download_logo_file(logo_url: str, slug: str) -> str:
+    """
+    Download the logo to LOGO_DIR/<slug>.<ext>, naming the file by its TRUE
+    format (see detect_image_ext). Returns the saved relative path, or "" on
+    failure. Removes any stale wrong-extension copy left by a previous run.
+    """
+    if not logo_url:
+        return ""
+    try:
+        r = session.get(logo_url, timeout=15)
+        if r.status_code != 200 or not r.content:
+            return ""
+        ext = detect_image_ext(r.content, r.headers.get("Content-Type", ""))
+
+        # Clean up any earlier copy saved under a different (wrong) extension
+        for old_ext in ("png", "jpg", "jpeg", "svg", "webp", "gif", "ico"):
+            stale = os.path.join(LOGO_DIR, f"{slug}.{old_ext}")
+            if old_ext != ext and os.path.exists(stale):
+                try:
+                    os.remove(stale)
+                except OSError:
+                    pass
+
+        path = os.path.join(LOGO_DIR, f"{slug}.{ext}")
+        with open(path, "wb") as f:
+            f.write(r.content)
+        return path
+    except Exception as e:
+        print(f"[logo download failed] {e}")
+        return ""
 
 
 def get_category_slugs() -> list[str]:
@@ -212,6 +341,8 @@ for path in PATHS:
 with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as csvfile:
     fieldnames = [
         "Name",
+        "Logo_URL",
+        "Logo_File",
         "Source_URL",
         "Rating",
         "Description",
@@ -248,6 +379,15 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as csvfile:
             return re.sub(r'[^a-z0-9]+', '-', (s or "").lower()).strip("-")
 
         slug = slugify(ToolName)
+
+        # Logo: scored <img> match (og:image fallback), saved locally by true format.
+        # Logo_URL  -> remote CDN link (for the deployed chatbot)
+        # Logo_File -> local cached path logos/<slug>.<ext> (offline / fallback)
+        LogoURL = extract_logo_url(soup)
+        print(f"Logo: {LogoURL}")
+        LogoFile = download_logo_file(LogoURL, slug)
+        if LogoFile:
+            print(f"Logo saved: {LogoFile}")
 
         # "How We Rated It" list
         h3Rating = soup.find(id="how-we-rated-it")
@@ -372,6 +512,8 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as csvfile:
             print(UniqueValue)
         writer.writerow({
             "Name": ToolName,
+            "Logo_URL": LogoURL,
+            "Logo_File": LogoFile,
             "Source_URL": url,
             "Rating": Rating,
             "Description": ToolDescription,
