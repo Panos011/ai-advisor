@@ -1,9 +1,7 @@
 .env
-logos_test/
 __pycache__/
 *.pyc
 *.DS_Store
 venv/
 .venv/
-
 .idea/
