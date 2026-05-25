@@ -19,6 +19,7 @@ meta = []
 for _, r in df.iterrows():
     meta.append({
         "Name": r.get("Name", ""),
+        "Logo_URL": r.get("Logo_URL", ""),
         "Tool_link": r.get("Tool_link", ""),
         "Categories": r.get("Categories", ""),
         "Price": r.get("Price", ""),
