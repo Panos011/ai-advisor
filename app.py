@@ -46,6 +46,24 @@ def parse_categories(raw):
     return [c.strip() for c in re.split(r"[|,/]", str(raw)) if c.strip()]
 
 
+def render_logo(meta, size=44):
+    """Show the tool's logo, or its initials if there's no logo."""
+    logo_url = (meta.get("Logo_URL") or "").strip()
+    if logo_url:
+        st.image(logo_url, width=size)
+        return
+    # fallback: initials badge
+    name = meta.get("Name", "?")
+    parts = name.split()
+    initials = (parts[0][0] + parts[1][0]).upper() if len(parts) >= 2 else name[:2].upper()
+    st.markdown(
+        f"<div style='width:{size}px;height:{size}px;border-radius:10px;"
+        f"background:#e0e7ff;display:flex;align-items:center;justify-content:center;"
+        f"font-weight:700;color:#3730a3;'>{initials}</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def is_free(price_text: str) -> bool:
     return "free" in (price_text or "").lower()
 
@@ -93,9 +111,9 @@ def render_results(hits, history_idx=0):
         tid = tool_id_from_meta(m)
 
         with st.container(border=True):
-            top = st.columns([6, 2])
+            top = st.columns([1, 5, 2])
             with top[0]:
-                st.markdown(f"**{name}**")
+                render_logo(m)
             with top[1]:
                 saved = tid in st.session_state.saved
                 label = "✅ Saved" if saved else "⭐ Save"
