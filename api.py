@@ -1,10 +1,12 @@
 import os
 import json
+import logging
+import re
 import faiss
 import numpy as np
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException
-from openai import OpenAI
+from openai import OpenAI, OpenAIError
 from typing import Literal, Optional, List, Dict, Any
 
 # INDEX_PATH contains the veector for each tool, META_PATH contains the metadata for each tool
@@ -12,6 +14,8 @@ INDEX_PATH = "index/tools.faiss"
 META_PATH = "index/meta.jsonl"
 EMB_MODEL = os.getenv("EMB_MODEL", "text-embedding-3-small")
 CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-5.4-mini")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+logger = logging.getLogger(__name__)
 
 # Tiny app with two doors /health and /search
 app = FastAPI(title="AI Tools Search API")
@@ -21,7 +25,7 @@ index = faiss.read_index(INDEX_PATH)
 with open(META_PATH, "r", encoding="utf-8") as f:
     META = [json.loads(line) for line in f]
 
-client = OpenAI()
+client = OpenAI(api_key=OPENAI_API_KEY or "missing")
 
 
 class IntentRequest(BaseModel):
@@ -71,7 +75,7 @@ class ClarifyResponse(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"ok": True, "items": len(META)}
+    return {"ok": True, "items": len(META), "openai_configured": bool(OPENAI_API_KEY)}
 #  It turns texts into numbers so computer can measure closeness
 
 
@@ -80,6 +84,55 @@ def embed(texts: list[str]) -> np.ndarray:
     vecs = np.array([d.embedding for d in resp.data], dtype="float32")
     faiss.normalize_L2(vecs)
     return vecs
+
+
+def query_terms(text: str) -> list[str]:
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    stopwords = {
+        "a", "an", "and", "are", "as", "at", "be", "for", "from", "i", "in",
+        "is", "it", "me", "my", "of", "on", "or", "that", "the", "to",
+        "tool", "tools", "with", "you"
+    }
+    return [w for w in words if len(w) > 2 and w not in stopwords]
+
+
+def meta_text(meta: dict) -> str:
+    fields = (
+        "Name", "Categories", "Description", "Features", "Pros", "Cons",
+        "Use_cases", "Price"
+    )
+    return " ".join(str(meta.get(field, "")) for field in fields).lower()
+
+
+def keyword_search(q: str, k: int) -> list[SearchHit]:
+    terms = query_terms(q)
+    if not terms:
+        return []
+
+    scored = []
+    for idx, meta in enumerate(META):
+        text = meta_text(meta)
+        name = str(meta.get("Name", "")).lower()
+        categories = str(meta.get("Categories", "")).lower()
+        score = 0.0
+        for term in terms:
+            if term in name:
+                score += 5.0
+            if term in categories:
+                score += 3.0
+            score += min(text.count(term), 5)
+        if score > 0:
+            scored.append((score, idx))
+
+    scored.sort(reverse=True, key=lambda item: item[0])
+    return [
+        {
+            "score": float(score),
+            "meta": META[idx],
+            "why": "Matched locally because the AI ranking service is temporarily unavailable.",
+        }
+        for score, idx in scored[:k]
+    ]
 
 # Decision logic to reduce bias and promote fairness #
 
@@ -144,7 +197,13 @@ def search(body: SearchRequest):
     q = body.q.strip()
     if not q:
         raise HTTPException(status_code=400, detail="Query 'q' is empty")
-    vec = embed([q])
+
+    try:
+        vec = embed([q])
+    except OpenAIError:
+        logger.exception("OpenAI embedding request failed; using keyword search fallback")
+        return {"hits": keyword_search(q, body.k)}
+
     scores, ids = index.search(vec, min(body.k, len(META)))
     hits = []
     for score, id_ in zip(scores[0].tolist(), ids[0].tolist()):
@@ -161,7 +220,12 @@ def recommend(body: RecommendRequest):
     if not q:
         raise HTTPException(status_code=400, detail="Query 'q' is empty")
 
-    vec = embed([q])
+    try:
+        vec = embed([q])
+    except OpenAIError:
+        logger.exception("OpenAI embedding request failed; using keyword recommendation fallback")
+        return {"hits": keyword_search(q, body.final_k)}
+
     scores, ids = index.search(vec, min(body.retrieve_k, len(META)))
     candidates = []
     for score, id_ in zip(scores[0].tolist(), ids[0].tolist()):
@@ -189,38 +253,43 @@ def recommend(body: RecommendRequest):
 
     candidates = mmr_rerank(candidates, candidate_embeddings, lambda_=0.7, top_k=30)
 
-    resp = client.chat.completions.create(
-        model=CHAT_MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are an AI tool recommender. You will receive a user's needs and a numbered list of candidate tools."
-                    "Critical Evaluation Rules:"
-                    "1. Evaluate only based on how well each tool's described features match the user's stated needs"
-                    "2.Do not favour tools based on popularity, brand recognition or how often you seen them in your training data"
-                    "3. A lesser-known tool that matching perfectly a user's needs its always a better choice to a well-known tool that partially matches"
-                    "4. Consider the user's budget constraints. If they have not specified consider having at least 1 free option"
-                    "5. Treat every candidate tool equally credible regardless of whether you recognise the name"
-                    "6. Do not favour tools based on their position in the list. A tool at at the last place is as valid as the tool in the first place\n"
-                    "Return ONLY valid JSON, no markdown, no extra text:\n"
-                    '{"selected": [{"id": <integer>, "reason": "<two sentences why this fits>"}, ...]}'
-                )
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Query: {q}\n\n"
-                    f"Select exactly {body.final_k} tools from these candidates:\n"
-                    f"{json.dumps(candidates, ensure_ascii=False)}"
-                )
-            }
-        ],
-        temperature=0.2,
-        response_format={"type": "json_object"}  # forces valid JSON every time
-    )
+    resp = None
     try:
-        data = json.loads(resp.choices[0].message.content)
+        resp = client.chat.completions.create(
+            model=CHAT_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an AI tool recommender. You will receive a user's needs and a numbered list of candidate tools."
+                        "Critical Evaluation Rules:"
+                        "1. Evaluate only based on how well each tool's described features match the user's stated needs"
+                        "2.Do not favour tools based on popularity, brand recognition or how often you seen them in your training data"
+                        "3. A lesser-known tool that matching perfectly a user's needs its always a better choice to a well-known tool that partially matches"
+                        "4. Consider the user's budget constraints. If they have not specified consider having at least 1 free option"
+                        "5. Treat every candidate tool equally credible regardless of whether you recognise the name"
+                        "6. Do not favour tools based on their position in the list. A tool at at the last place is as valid as the tool in the first place\n"
+                        "Return ONLY valid JSON, no markdown, no extra text:\n"
+                        '{"selected": [{"id": <integer>, "reason": "<two sentences why this fits>"}, ...]}'
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Query: {q}\n\n"
+                        f"Select exactly {body.final_k} tools from these candidates:\n"
+                        f"{json.dumps(candidates, ensure_ascii=False)}"
+                    )
+                }
+            ],
+            temperature=0.2,
+            response_format={"type": "json_object"}  # forces valid JSON every time
+        )
+    except OpenAIError:
+        logger.exception("OpenAI chat request failed; returning FAISS fallback recommendations")
+
+    try:
+        data = json.loads(resp.choices[0].message.content) if resp else {}
         selected = data.get("selected", [])
     except Exception:
         selected = []
