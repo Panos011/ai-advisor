@@ -87,7 +87,15 @@ def embed(texts: list[str]) -> np.ndarray:
 
 
 def query_terms(text: str) -> list[str]:
-    words = re.findall(r"[a-z0-9]+", text.lower())
+    normalized = text.lower().strip()
+    intent_aliases = {
+        "research": "research search summarize market competitor analysis web data insights",
+        "create": "create content writing design image video presentation copywriting social media",
+        "automate": "automate automation workflow integration no-code agent scheduling productivity",
+        "measure": "measure analytics reporting dashboard metrics tracking seo marketing performance",
+    }
+    expanded = f"{normalized} {intent_aliases.get(normalized, '')}"
+    words = re.findall(r"[a-z0-9]+", expanded)
     stopwords = {
         "a", "an", "and", "are", "as", "at", "be", "for", "from", "i", "in",
         "is", "it", "me", "my", "of", "on", "or", "that", "the", "to",
@@ -114,13 +122,23 @@ def keyword_search(q: str, k: int) -> list[SearchHit]:
         text = meta_text(meta)
         name = str(meta.get("Name", "")).lower()
         categories = str(meta.get("Categories", "")).lower()
+        description = str(meta.get("Description", "")).lower()
         score = 0.0
         for term in terms:
             if term in name:
-                score += 5.0
+                score += 8.0
             if term in categories:
-                score += 3.0
-            score += min(text.count(term), 5)
+                score += 6.0
+            if term in description:
+                score += 2.0
+            score += min(text.count(term), 4) * 0.5
+
+        if "free" in terms and "free" in str(meta.get("Price", "")).lower():
+            score += 4.0
+        if any(term in terms for term in ("business", "marketing", "competitor", "social", "seo")):
+            if any(term in categories for term in ("fitness", "health", "fun tools", "dating")):
+                score -= 8.0
+
         if score > 0:
             scored.append((score, idx))
 
@@ -129,7 +147,7 @@ def keyword_search(q: str, k: int) -> list[SearchHit]:
         {
             "score": float(score),
             "meta": META[idx],
-            "why": "Matched locally because the AI ranking service is temporarily unavailable.",
+            "why": "Recommended from local tool categories and descriptions.",
         }
         for score, idx in scored[:k]
     ]
