@@ -68,6 +68,17 @@ def health(request: Request):
     return service(request).health()
 
 
+@app.get("/")
+def root(request: Request):
+    health_payload = service(request).health()
+    return {
+        "name": "AI Tools Search API",
+        "ok": health_payload["ok"],
+        "health": "/health",
+        "metrics": "/metrics",
+    }
+
+
 @app.get("/metrics")
 def metrics(request: Request):
     recommender = service(request)

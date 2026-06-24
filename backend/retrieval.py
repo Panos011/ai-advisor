@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 MAX_REASON_CHARS = 180
 MAX_DESCRIPTION_CHARS = 220
 MAX_PRICE_CHARS = 160
+TEXT_FORMAT_VERSION = "display-v3"
 
 
 @dataclass
@@ -184,51 +185,146 @@ def best_evidence(q: str, meta: dict[str, Any]) -> str:
 def local_reason(q: str, meta: dict[str, Any]) -> str:
     name = str(meta.get("Name", "This tool")).strip() or "This tool"
     goal = request_goal(q)
-    evidence = best_evidence(q, meta)
     price = str(meta.get("Price", "")).lower()
 
-    if evidence:
-        reason = f"Good for {goal}: {evidence}."
-    else:
-        reason = f"Good match for {goal} based on its tool description."
+    reason = f"Good for {goal} {reason_signal(goal, meta)}."
 
     if "free" in price:
         reason += " Free option available."
     return sanitize_reason(reason, name=name, query=q)
 
 
-def compact_text(value: Any, max_chars: int) -> str:
+def normalize_display_text(value: Any) -> str:
     text = " ".join(str(value or "").split())
-    if len(text) <= max_chars:
-        return text
+    text = re.sub(r"\b(?:consultant|advisor)\s+view\s*[:\-]\s*", "", text, flags=re.IGNORECASE)
+    text = text.replace("...", "")
+    text = text.replace("..", ".")
+    text = re.sub(r"\s+([.,;:])", r"\1", text)
+    return " ".join(text.split()).strip(" -:")
 
-    shortened = text[: max_chars + 1].rsplit(" ", 1)[0].rstrip(".,;:")
-    return f"{shortened}..."
+
+def human_join(items: list[str]) -> str:
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return f"{', '.join(items[:-1])}, and {items[-1]}"
+
+
+def category_list(meta: dict[str, Any], limit: int = 3) -> list[str]:
+    raw = str(meta.get("Categories", ""))
+    categories = [c.strip() for c in re.split(r"[|,/]", raw) if c.strip()]
+    return categories[:limit]
+
+
+def reason_signal(goal: str, meta: dict[str, Any]) -> str:
+    text = meta_text(meta)
+    categories = set(tokens(str(meta.get("Categories", ""))))
+
+    if "meeting" in goal:
+        if any(term in text for term in ("private", "privacy", "local", "self-hosted", "secure", "security", "compliance")):
+            return "with privacy-focused meeting support"
+        if any(term in text for term in ("transcrib", "summar", "record")):
+            return "for transcription and summaries"
+        return "for meeting workflows"
+
+    if "writing blog posts" in goal:
+        if "seo" in categories or "seo" in text:
+            return "with SEO-focused writing support"
+        if any(term in text for term in ("blog", "article", "content")):
+            return "for blog and article drafting"
+        return "from its writing features"
+
+    if "writing content" in goal:
+        if "copywriting" in categories:
+            return "for copywriting and content drafts"
+        if "seo" in text:
+            return "with SEO writing support"
+        return "from its content-writing features"
+
+    if "generating images" in goal:
+        return "from its image generation features"
+
+    if "creating presentations" in goal:
+        return "from its presentation creation features"
+
+    if "coding and debugging" in goal:
+        return "from its coding assistance features"
+
+    if "researching information" in goal:
+        return "from its research and analysis features"
+
+    cats = category_list(meta, limit=2)
+    if cats:
+        return f"because it focuses on {human_join(cats)}"
+    return "based on its listed features"
+
+
+def first_complete_sentence(value: Any, max_chars: int) -> str:
+    text = normalize_display_text(value)
+    if not text:
+        return ""
+
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+    for sentence in sentences:
+        if len(sentence) <= max_chars:
+            return ensure_terminal_punctuation(sentence)
+
+    if len(text) <= max_chars:
+        return ensure_terminal_punctuation(text)
+    return ""
+
+
+def ensure_terminal_punctuation(text: str) -> str:
+    cleaned = normalize_display_text(text)
+    if not cleaned:
+        return ""
+    if not re.search(r"[.!?]$", cleaned):
+        cleaned += "."
+    return cleaned
+
+
+def short_description(meta: dict[str, Any]) -> str:
+    sentence = first_complete_sentence(meta.get("Description", ""), MAX_DESCRIPTION_CHARS)
+    if sentence:
+        return sentence
+
+    name = str(meta.get("Name", "This tool")).strip() or "This tool"
+    categories = category_list(meta)
+    if categories:
+        return f"{name} is an AI tool for {human_join(categories)}."
+    return f"{name} is an AI tool with features listed by the provider."
+
+
+def short_price(meta: dict[str, Any]) -> str:
+    price = normalize_display_text(meta.get("Price", ""))
+    if not price:
+        return ""
+
+    first_plan = price.split("|", 1)[0].strip()
+    sentence = first_complete_sentence(first_plan, MAX_PRICE_CHARS)
+    if sentence:
+        return sentence
+    if len(first_plan) <= MAX_PRICE_CHARS:
+        return ensure_terminal_punctuation(first_plan)
+    if "free" in price.lower():
+        return "Free option available."
+    return "Pricing details are available from the provider."
 
 
 def compact_meta(meta: dict[str, Any]) -> dict[str, Any]:
     compacted = dict(meta)
-    compacted["Description"] = compact_text(compacted.get("Description", ""), MAX_DESCRIPTION_CHARS)
-    compacted["Price"] = compact_text(compacted.get("Price", ""), MAX_PRICE_CHARS)
+    compacted["Description"] = short_description(compacted)
+    compacted["Price"] = short_price(compacted)
     return compacted
 
 
 def sanitize_reason(reason: Any, name: str = "This tool", query: str = "") -> str:
-    text = " ".join(str(reason or "").split())
+    text = normalize_display_text(reason)
     if not text:
         return local_reason(query, {"Name": name})
-
-    banned_prefixes = (
-        "consultant view:",
-        "consultant view -",
-        "advisor view:",
-        "advisor view -",
-    )
-    lowered = text.lower()
-    for prefix in banned_prefixes:
-        if lowered.startswith(prefix):
-            text = text[len(prefix):].strip()
-            break
 
     query_clean = " ".join(str(query or "").split())
     if query_clean:
@@ -243,17 +339,17 @@ def sanitize_reason(reason: Any, name: str = "This tool", query: str = "") -> st
     for pattern in leakage_patterns:
         text = re.sub(pattern, "", text, flags=re.IGNORECASE)
 
-    text = text.replace("..", ".")
-    text = re.sub(r"\s+([.,;:])", r"\1", text)
-    text = " ".join(text.split()).strip(" -:")
+    text = normalize_display_text(text)
 
     if not text:
         text = f"{name} matches this request based on its listed features."
 
-    if not re.search(r"[.!?]$", text):
-        text += "."
+    sentence = first_complete_sentence(text, MAX_REASON_CHARS)
+    if sentence:
+        return sentence
 
-    return compact_text(text, MAX_REASON_CHARS)
+    goal = request_goal(query)
+    return f"{name} matches {goal} based on its listed features."
 
 
 def keyword_search(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -427,7 +523,7 @@ class RecommendationService:
 
     def recommend(self, q: str, retrieve_k: int, final_k: int) -> dict[str, Any]:
         self.metrics.increment("recommend_requests")
-        cache_key = f"{self.settings.emb_model}:{self.settings.chat_model}:{retrieve_k}:{final_k}:{q}"
+        cache_key = f"{TEXT_FORMAT_VERSION}:{self.settings.emb_model}:{self.settings.chat_model}:{retrieve_k}:{final_k}:{q}"
         cached = self.recommend_cache.get(cache_key)
         if cached is not None:
             self.metrics.increment("recommend_cache_hit")

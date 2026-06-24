@@ -47,7 +47,13 @@ class FakeChatCompletions:
         content = json.dumps(
             {
                 "selected": [
-                    {"id": 0, "reason": "Tool A fits the requested writing task with matching evidence."},
+                    {
+                        "id": 0,
+                        "reason": (
+                            "Consultant view: Tool A fits the requested writing task with matching evidence. "
+                            "Return recommendations as a decision shortlist."
+                        ),
+                    },
                     {"id": 1, "reason": "Tool B is a backup match for the requested task."},
                 ]
             }
@@ -112,6 +118,7 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(len(response["hits"]), 1)
         self.assertEqual(response["hits"][0]["meta"]["Name"], "Writerly")
         self.assertIn("writing", response["hits"][0]["why"].lower())
+        self.assertNotIn("...", response["hits"][0]["why"])
 
     def test_recommendation_results_are_cached(self):
         client = FakeClient()
@@ -135,6 +142,7 @@ class BackendUnitTests(unittest.TestCase):
         )
         self.assertNotIn("Consultant view", reason)
         self.assertNotIn("Return recommendations", reason)
+        self.assertNotIn("...", reason)
 
         fallback = local_reason(query, {
             "Name": "Hyprnote",
@@ -142,13 +150,18 @@ class BackendUnitTests(unittest.TestCase):
         })
         self.assertIn("private meeting notes", fallback)
         self.assertNotIn("Return recommendations", fallback)
+        self.assertNotIn("...", fallback)
 
-    def test_returned_descriptions_are_compact(self):
+    def test_returned_text_is_compact_without_ellipses(self):
         service = make_service()
         response = service.recommend("I need a writing tool", retrieve_k=2, final_k=2)
+        reason = response["hits"][0]["why"]
         description = response["hits"][0]["meta"]["Description"]
-        self.assertLessEqual(len(description), 223)
-        self.assertTrue(description.endswith("..."))
+        self.assertLessEqual(len(description), 220)
+        self.assertNotIn("...", description)
+        self.assertNotIn("...", reason)
+        self.assertNotIn("Consultant view", reason)
+        self.assertNotIn("Return recommendations", reason)
 
 
 if __name__ == "__main__":
