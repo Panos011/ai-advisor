@@ -44,15 +44,37 @@ class SearchRequest(BaseModel):
         return _clean_required_text(value)
 
 
+class DecisionFilters(BaseModel):
+    budget: Literal["any", "free", "freemium", "paid"] = "any"
+    privacy: Literal["standard", "privacy-first", "local-first"] = "standard"
+    integrations: list[str] = Field(default_factory=list)
+    categories: list[str] = Field(default_factory=list)
+    platforms: list[str] = Field(default_factory=list)
+    skill_level: Literal["any", "beginner", "intermediate", "advanced"] = "any"
+
+    @field_validator("integrations", "categories", "platforms")
+    @classmethod
+    def clean_string_lists(cls, value: list[str]) -> list[str]:
+        return [item.strip() for item in value if item and item.strip()]
+
+
 class RecommendRequest(BaseModel):
     q: str = Field(..., min_length=1, max_length=MAX_QUERY_LENGTH)
     retrieve_k: int = Field(30, ge=1, le=100)
     final_k: int = Field(5, ge=1, le=10)
+    filters: DecisionFilters = Field(default_factory=DecisionFilters)
+    mode: str = Field("balanced", max_length=40)
 
     @field_validator("q")
     @classmethod
     def clean_query(cls, value: str) -> str:
         return _clean_required_text(value)
+
+    @field_validator("mode")
+    @classmethod
+    def clean_mode(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        return cleaned or "balanced"
 
     @model_validator(mode="after")
     def validate_k_values(self) -> "RecommendRequest":
@@ -65,6 +87,9 @@ class SearchHit(BaseModel):
     score: float
     meta: dict[str, Any]
     why: str | None = None
+    tradeoff: str | None = None
+    best_for: str | None = None
+    fit_label: Literal["Strong match", "Good match", "Possible match"] | None = None
 
 
 class RecommendResponse(BaseModel):

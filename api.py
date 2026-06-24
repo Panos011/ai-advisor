@@ -95,7 +95,13 @@ def search(body: SearchRequest, request: Request):
 
 @app.post("/recommend", response_model=RecommendResponse)
 def recommend(body: RecommendRequest, request: Request):
-    return service(request).recommend(body.q, body.retrieve_k, body.final_k)
+    return service(request).recommend(
+        body.q,
+        body.retrieve_k,
+        body.final_k,
+        filters=getattr(body, "filters", None),
+        mode=getattr(body, "mode", "balanced"),
+    )
 
 
 @app.post("/clarify", response_model=ClarifyResponse)

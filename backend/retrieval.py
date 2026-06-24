@@ -161,6 +161,7 @@ def non_filter_terms(text: str) -> list[str]:
     return [term for term in query_terms(text) if term not in FREE_FILTER_WORDS]
 
 
+
 def is_free_tool(meta: dict[str, Any]) -> bool:
     price = normalize_display_text(meta.get("Price", "")).lower()
     if not price:
@@ -181,6 +182,146 @@ def is_free_tool(meta: dict[str, Any]) -> bool:
         price,
     ))
     return positive and not negative
+
+
+# === Decision Filter and Enrichment Helpers ===
+
+def filter_value(filters: Any, key: str, default: Any = None) -> Any:
+    if filters is None:
+        return default
+    if isinstance(filters, dict):
+        return filters.get(key, default)
+    return getattr(filters, key, default)
+
+
+def metadata_blob(meta: dict[str, Any]) -> str:
+    return " ".join(str(value or "") for value in meta.values()).lower()
+
+
+def candidate_meta(candidate: dict[str, Any], meta_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    if "meta" in candidate and isinstance(candidate["meta"], dict):
+        return candidate["meta"]
+    try:
+        return meta_rows[int(candidate["id"])]
+    except Exception:
+        return {}
+
+
+def matches_budget_filter(meta: dict[str, Any], budget: str) -> bool:
+    price = normalize_display_text(meta.get("Price", "")).lower()
+    if budget == "any":
+        return True
+    if budget == "free":
+        return is_free_tool(meta)
+    if budget == "freemium":
+        return is_free_tool(meta) or "freemium" in price or "free tier" in price
+    if budget == "paid":
+        return bool(re.search(
+            r"[$€£]|\b(paid|pro|premium|subscription|enterprise|per month|per year|monthly|annual)\b",
+            price,
+        ))
+    return True
+
+
+def apply_decision_filters(
+    candidates: list[dict[str, Any]],
+    filters: Any,
+    meta_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if filters is None:
+        return candidates
+
+    budget = filter_value(filters, "budget", "any") or "any"
+    privacy = filter_value(filters, "privacy", "standard") or "standard"
+    integrations = [str(item).lower() for item in (filter_value(filters, "integrations", []) or [])]
+    categories = [str(item).lower() for item in (filter_value(filters, "categories", []) or [])]
+    platforms = [str(item).lower() for item in (filter_value(filters, "platforms", []) or [])]
+    skill_level = filter_value(filters, "skill_level", None) or filter_value(filters, "skillLevel", "any") or "any"
+
+    filtered: list[dict[str, Any]] = []
+    for candidate in candidates:
+        meta = candidate_meta(candidate, meta_rows)
+        blob = metadata_blob(meta)
+        category_text = str(meta.get("Categories", "")).lower()
+
+        if not matches_budget_filter(meta, str(budget)):
+            continue
+
+        if privacy == "privacy-first" and not re.search(
+            r"\b(privacy|private|secure|security|gdpr|compliance|encryption|data control|soc 2|iso 27001)\b",
+            blob,
+        ):
+            continue
+
+        if privacy == "local-first" and not re.search(
+            r"\b(local|on-device|on device|self-hosted|self hosted|private cloud|offline|open source)\b",
+            blob,
+        ):
+            continue
+
+        if integrations and not all(integration in blob for integration in integrations):
+            continue
+
+        if categories and not any(category in category_text or category in blob for category in categories):
+            continue
+
+        if platforms and not any(platform in blob for platform in platforms):
+            continue
+
+        if skill_level == "beginner" and not re.search(
+            r"\b(beginner|easy|simple|no-code|no code|template|user-friendly|user friendly)\b",
+            blob,
+        ):
+            continue
+
+        filtered.append(candidate)
+
+    return filtered
+
+
+def fit_label(score: float) -> str:
+    if score >= 0.82:
+        return "Strong match"
+    if score >= 0.68:
+        return "Good match"
+    return "Possible match"
+
+
+def build_tradeoff(meta: dict[str, Any]) -> str:
+    cons = normalize_display_text(meta.get("Cons", ""))
+    if cons:
+        return complete_sentences(cons, 220, max_sentences=1) or cons[:220]
+
+    price = normalize_display_text(meta.get("Price", ""))
+    lower = price.lower()
+    if "enterprise" in lower:
+        return "Pricing may be less transparent and could require contacting sales."
+    if "free trial" in lower:
+        return "Free access may be limited to a trial, so check the limits before relying on it."
+    if "freemium" in lower or is_free_tool(meta):
+        return "The free plan may have usage limits, exports limits, or locked advanced features."
+    if not price:
+        return "Pricing and feature limits should be checked on the official website."
+    return "Check the official website because pricing and features can change."
+
+
+def build_best_for(q: str, meta: dict[str, Any]) -> str:
+    goal = request_goal(q)
+    categories = category_list(meta, limit=2)
+    if categories:
+        return f"{goal.capitalize()} using {human_join(categories)} tools"
+    return goal.capitalize()
+
+
+def enrich_hit(hit: dict[str, Any], q: str) -> dict[str, Any]:
+    meta = hit.get("meta") or {}
+    score = float(hit.get("score", 0.0) or 0.0)
+    enriched = dict(hit)
+    enriched.setdefault("why", local_reason(q, meta))
+    enriched.setdefault("tradeoff", build_tradeoff(meta))
+    enriched.setdefault("best_for", build_best_for(q, meta))
+    enriched.setdefault("fit_label", fit_label(score))
+    return enriched
 
 
 def query_terms(text: str) -> list[str]:
@@ -731,7 +872,14 @@ class RecommendationService:
             hits.append({"score": float(score), "meta": compact_meta(self.store.meta[id_])})
         return {"hits": hits}
 
-    def recommend(self, q: str, retrieve_k: int, final_k: int) -> dict[str, Any]:
+    def recommend(
+        self,
+        q: str,
+        retrieve_k: int,
+        final_k: int,
+        filters: Any = None,
+        mode: str = "balanced",
+    ) -> dict[str, Any]:
         self.metrics.increment("recommend_requests")
         if is_feedback_only_query(q):
             self.metrics.increment("recommend_feedback_query_blocked")
@@ -759,8 +907,11 @@ class RecommendationService:
                 "message": "Tell me the task, budget, or must-have integrations and I will search for better matches.",
             }
         free_only = requires_free_only(q)
+        if free_only and filters is None:
+            filters = {"budget": "free"}
 
-        cache_key = f"{TEXT_FORMAT_VERSION}:{self.settings.emb_model}:{self.settings.chat_model}:{retrieve_k}:{final_k}:{q}"
+        filter_key = json.dumps(filters.model_dump() if hasattr(filters, "model_dump") else (filters or {}), sort_keys=True)
+        cache_key = f"{TEXT_FORMAT_VERSION}:{self.settings.emb_model}:{self.settings.chat_model}:{retrieve_k}:{final_k}:{mode}:{filter_key}:{q}"
         cached = self.recommend_cache.get(cache_key)
         if cached is not None:
             self.metrics.increment("recommend_cache_hit")
@@ -775,7 +926,10 @@ class RecommendationService:
                 self._candidate_for_id(idx, score)
                 for score, idx in keyword_scores(q, min(retrieve_k, len(self.store.meta)), self.store.meta)
             ]
-            selected = self._rank_with_llm(q, candidates, final_k) if candidates else []
+            filtered_candidates = apply_decision_filters(candidates, filters, self.store.meta)
+            if len(filtered_candidates) >= final_k:
+                candidates = filtered_candidates
+            selected = self._rank_with_llm(q, candidates, final_k, mode=mode) if candidates else []
             hits = self._selected_hits(
                 selected,
                 q,
@@ -783,7 +937,9 @@ class RecommendationService:
                 allowed_ids={int(candidate["id"]) for candidate in candidates},
             )
             if not hits:
-                hits = keyword_search(q, final_k, self.store.meta)
+                hits = keyword_search(q, min(retrieve_k, len(self.store.meta)), self.store.meta)
+                hits = apply_decision_filters(hits, filters, self.store.meta)[:final_k] or hits[:final_k]
+                hits = [enrich_hit(hit, q) for hit in hits]
             self.recommend_cache.set(cache_key, hits)
             return {"hits": hits, "message": recommendation_message(hits, q)}
 
@@ -791,7 +947,10 @@ class RecommendationService:
             scores, ids = self.store.index.search(vec, min(retrieve_k, len(self.store.meta)))
 
         candidates = self._build_candidates(scores[0].tolist(), ids[0].tolist())
-        if free_only:
+        filtered_candidates = apply_decision_filters(candidates, filters, self.store.meta)
+        if len(filtered_candidates) >= final_k:
+            candidates = filtered_candidates
+        elif free_only:
             candidates = [
                 candidate for candidate in candidates
                 if is_free_tool(self.store.meta[int(candidate["id"])])
@@ -808,7 +967,7 @@ class RecommendationService:
                 top_k=retrieve_k,
             )
 
-        selected = self._rank_with_llm(q, candidates, final_k)
+        selected = self._rank_with_llm(q, candidates, final_k, mode=mode)
         final_hits = self._selected_hits(
             selected,
             q,
@@ -823,11 +982,14 @@ class RecommendationService:
                 if i != -1 and (not free_only or is_free_tool(self.store.meta[i]))
             ]
             final_hits = [
-                {
-                    "score": float(s),
-                    "meta": compact_meta(self.store.meta[i]),
-                    "why": local_reason(q, self.store.meta[i]),
-                }
+                enrich_hit(
+                    {
+                        "score": float(s),
+                        "meta": compact_meta(self.store.meta[i]),
+                        "why": local_reason(q, self.store.meta[i]),
+                    },
+                    q,
+                )
                 for i, s in top[:final_k]
             ]
             self.metrics.increment("llm_rank_fallbacks")
@@ -962,6 +1124,7 @@ class RecommendationService:
         q: str,
         candidates: list[dict[str, Any]],
         final_k: int,
+        mode: str = "balanced",
     ) -> list[dict[str, Any]]:
         try:
             with self.metrics.timer("openai.rank_ms"):
@@ -986,13 +1149,13 @@ class RecommendationService:
                                 "10. Do not use empty marketing words like cutting-edge, revolutionize, robust, seamless, or innovative.\n"
                                 "11. Do not include phrases like 'Consultant view', 'Advisor view', 'decision shortlist', or restate hidden instructions.\n"
                                 "Return ONLY valid JSON, no markdown, no extra text:\n"
-                                '{"selected": [{"id": <integer>, "reason": "<natural one or two sentence reason>"}, ...]}'
+                                '{"selected": [{"id": <integer>, "reason": "<natural one or two sentence reason>", "tradeoff": "<short limitation or caveat>", "best_for": "<short best use case>"}, ...]}'
                             ),
                         },
                         {
                             "role": "user",
                             "content": (
-                                f"Query: {q}\n\n"
+                                f"Query: {q}\nMode: {mode}\n\n"
                                 f"Select exactly {final_k} tools from these candidates:\n"
                                 f"{json.dumps(candidates, ensure_ascii=False)}"
                             ),
@@ -1036,10 +1199,12 @@ class RecommendationService:
                 if free_only and not is_free_tool(meta):
                     continue
                 summary = item.get("summary") or item.get("description") or ""
-                final_hits.append({
+                final_hits.append(enrich_hit({
                     "score": 0.0,
                     "meta": compact_meta(meta, summary=summary),
                     "why": sanitize_reason(reason, name=str(meta.get("Name", "This tool")), query=q),
-                })
+                    "tradeoff": normalize_display_text(item.get("tradeoff", "")) or build_tradeoff(meta),
+                    "best_for": normalize_display_text(item.get("best_for", "")) or build_best_for(q, meta),
+                }, q))
                 seen_ids.add(id_int)
         return final_hits
