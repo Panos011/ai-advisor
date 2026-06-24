@@ -17,7 +17,24 @@ from backend.settings import Settings
 logger = logging.getLogger(__name__)
 
 MAX_REASON_CHARS = 320
-TEXT_FORMAT_VERSION = "display-v6"
+TEXT_FORMAT_VERSION = "display-v7"
+
+
+INSTRUCTION_LEAK_PATTERNS = (
+    r"\bact\s+(?:like|as)\s+(?:a|an)?\s*[^.?!]{0,80}(?:consultant|advisor|expert)[^.?!]*[.?!]?",
+    r"\bprioritize tools with[^.?!]*[.?!]?",
+    r"\breturn recommendations as[^.?!]*[.?!]?",
+    r"\bdecision shortlist with[^.?!]*[.?!]?",
+    r"\bfit,\s*tradeoffs,\s*and practical next steps:?",
+)
+
+FEEDBACK_PATTERNS = (
+    r"\bwtf\b",
+    r"\bwhat\s+the\s+fuck\b",
+    r"\b(?:this|that|it)\s+(?:doesn'?t|does not|isn'?t|is not)\s+(?:work|working|right|correct)\b",
+    r"\b(?:wrong|broken|bad|nonsense|useless)\b",
+    r"\b(?:you|it)\s+(?:messed|broke)\b",
+)
 
 
 @dataclass
@@ -77,8 +94,51 @@ def _extract_vectors_from_flat_index(index: Any, expected_rows: int) -> np.ndarr
     return vectors
 
 
+def normalize_query_text(value: Any) -> str:
+    text = " ".join(str(value or "").split())
+    text = re.sub(r"\s+([?!.,;:])", r"\1", text)
+    return text.strip()
+
+
+def strip_instruction_text(value: Any) -> str:
+    text = normalize_query_text(value)
+    for pattern in INSTRUCTION_LEAK_PATTERNS:
+        text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
+    return normalize_query_text(text).strip(" -:")
+
+
+def remove_feedback_text(value: Any) -> str:
+    text = strip_instruction_text(value)
+    for pattern in FEEDBACK_PATTERNS:
+        text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
+    return normalize_query_text(text).strip(" -:")
+
+
+def is_feedback_only_query(text: str) -> bool:
+    cleaned = strip_instruction_text(text)
+    if not cleaned:
+        return False
+    has_feedback_signal = any(
+        re.search(pattern, cleaned, flags=re.IGNORECASE)
+        for pattern in FEEDBACK_PATTERNS
+    )
+    if not has_feedback_signal:
+        return False
+
+    remaining = remove_feedback_text(cleaned)
+    remaining_terms = query_terms(remaining)
+    return len(remaining_terms) <= 1
+
+
+def feedback_clarifying_question() -> str:
+    return (
+        "That looks like feedback rather than a new tool search. "
+        "Do you want me to explain the current tools, change the filters, or start a new search?"
+    )
+
+
 def query_terms(text: str) -> list[str]:
-    normalized = text.lower().strip()
+    normalized = strip_instruction_text(text).lower().strip()
     intent_aliases = {
         "research": "research search summarize market competitor analysis web data insights",
         "create": "create content writing design image video presentation copywriting social media",
@@ -94,6 +154,8 @@ def query_terms(text: str) -> list[str]:
         "is", "it", "me", "my", "of", "on", "or", "that", "the", "to",
         "ai", "best", "find", "give", "help", "like", "looking", "make",
         "need", "recommend", "show", "tool", "tools", "want", "with", "you",
+        "act", "advisor", "consultant", "expert", "practical", "software",
+        "wtf", "fuck", "fucking", "shit",
     }
     return [w for w in words if len(w) > 2 and w not in stopwords]
 
@@ -119,9 +181,9 @@ def is_writing_query(q: str) -> bool:
 
 
 def is_explanation_query(text: str) -> bool:
-    normalized = text.lower().strip()
+    normalized = normalize_query_text(text).lower().strip()
     return bool(re.search(
-        r"\b(why\s+(these|this|those)|why\s+did|explain|reason|reasons|why\s+recommended|why\s+recommend)\b",
+        r"\b(why\s+(?:these|this|those)(?:\s+(?:tools?|ones|results?|recommendations?|picks?))?\??|why\s+did|explain(?:\s+(?:these|this|those|the))?|reason|reasons|why\s+recommended|why\s+recommend)\b",
         normalized,
     ))
 
@@ -135,7 +197,9 @@ def is_refinement_query(text: str) -> bool:
 
 
 def needs_clarification(q: str) -> bool:
-    normalized = q.lower().strip()
+    if is_feedback_only_query(q):
+        return True
+    normalized = strip_instruction_text(q).lower().strip()
     terms = query_terms(normalized)
     if is_explanation_query(normalized):
         return False
@@ -153,6 +217,8 @@ def needs_clarification(q: str) -> bool:
 
 
 def default_clarifying_question(q: str) -> str:
+    if is_feedback_only_query(q):
+        return feedback_clarifying_question()
     if "free" not in q.lower() and re.search(r"\b(tool|tools|app|apps|software|ai)\b", q.lower()):
         return "What task do you want the tool to help with, and do you need a free option?"
     return "What exact task should the tool help with?"
@@ -170,7 +236,8 @@ def off_topic_for_query(q: str, categories: str) -> bool:
 
 
 def request_goal(q: str) -> str:
-    text = q.lower()
+    cleaned = strip_instruction_text(q)
+    text = cleaned.lower()
     if any(term in text for term in ("meeting", "meetings", "notetaker", "note taker", "notes")):
         if any(term in text for term in ("privacy", "private", "local", "self-hosted", "secure", "security")):
             return "private meeting notes"
@@ -193,7 +260,7 @@ def request_goal(q: str) -> str:
         return "coding and debugging"
     if "research" in text or "competitor" in text:
         return "researching information"
-    return q.strip().rstrip(".") or "your task"
+    return cleaned.strip().rstrip(".") or "your task"
 
 
 def evidence_fragments(value: str) -> list[str]:
@@ -322,6 +389,7 @@ def price_reason(meta: dict[str, Any]) -> str:
 def normalize_display_text(value: Any) -> str:
     text = " ".join(str(value or "").split())
     text = re.sub(r"\b(?:consultant|advisor)\s+view\s*[:\-]\s*", "", text, flags=re.IGNORECASE)
+    text = strip_instruction_text(text)
     text = text.replace("...", "")
     text = text.replace("..", ".")
     text = re.sub(r"\s+([.,;:])", r"\1", text)
@@ -366,13 +434,7 @@ def sanitize_reason(reason: Any, name: str = "This tool", query: str = "") -> st
     if query_clean:
         text = text.replace(query_clean, request_goal(query_clean))
 
-    leakage_patterns = [
-        r"prioritize tools with[^.?!]*[.?!]?",
-        r"return recommendations as[^.?!]*[.?!]?",
-        r"decision shortlist with[^.?!]*[.?!]?",
-        r"fit,\s*tradeoffs,\s*and practical next steps:?",
-    ]
-    for pattern in leakage_patterns:
+    for pattern in INSTRUCTION_LEAK_PATTERNS:
         text = re.sub(pattern, "", text, flags=re.IGNORECASE)
 
     text = normalize_display_text(text)
@@ -583,6 +645,10 @@ class RecommendationService:
 
     def search(self, q: str, k: int) -> dict[str, Any]:
         self.metrics.increment("search_requests")
+        q = strip_instruction_text(q)
+        if is_feedback_only_query(q):
+            return {"hits": []}
+
         try:
             vec = self.embed([q])
         except Exception as exc:
@@ -602,11 +668,24 @@ class RecommendationService:
 
     def recommend(self, q: str, retrieve_k: int, final_k: int) -> dict[str, Any]:
         self.metrics.increment("recommend_requests")
+        if is_feedback_only_query(q):
+            self.metrics.increment("recommend_feedback_query_blocked")
+            return {
+                "hits": [],
+                "message": feedback_clarifying_question(),
+            }
         if is_explanation_query(q):
             self.metrics.increment("recommend_explain_query_blocked")
             return {
                 "hits": [],
                 "message": "I can explain the current shortlist after a search, but I need the previous results to do that.",
+            }
+        q = strip_instruction_text(q)
+        if not query_terms(q):
+            self.metrics.increment("recommend_empty_query_blocked")
+            return {
+                "hits": [],
+                "message": "Tell me the task, budget, or must-have integrations and I will search for better matches.",
             }
 
         cache_key = f"{TEXT_FORMAT_VERSION}:{self.settings.emb_model}:{self.settings.chat_model}:{retrieve_k}:{final_k}:{q}"
@@ -666,8 +745,11 @@ class RecommendationService:
         return {"hits": final_hits, "message": recommendation_message(final_hits)}
 
     def clarify(self, q: str) -> dict[str, Any]:
+        if is_feedback_only_query(q):
+            return {"action": "clarify", "question": feedback_clarifying_question()}
         if is_explanation_query(q):
             return {"action": "explain"}
+        q = strip_instruction_text(q)
         if needs_clarification(q):
             return {"action": "clarify", "question": default_clarifying_question(q)}
 
@@ -710,6 +792,8 @@ class RecommendationService:
         return {"action": "search", "refined_query": refined}
 
     def detect_intent(self, prompt: str, last_query: str) -> dict[str, str]:
+        if is_feedback_only_query(prompt):
+            return {"intent": "new"}
         if last_query and is_explanation_query(prompt):
             return {"intent": "explain"}
         if last_query and is_refinement_query(prompt):

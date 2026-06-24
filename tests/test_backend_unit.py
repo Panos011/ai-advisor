@@ -148,6 +148,34 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["hits"], [])
         self.assertIn("previous results", response["message"])
 
+    def test_spaced_explanation_prompt_is_not_treated_as_search(self):
+        service = make_service()
+        intent = service.detect_intent("Why these tools ?", "I need a writing tool")
+        self.assertEqual(intent["intent"], "explain")
+
+        clarify = service.clarify("Why these tools ?")
+        self.assertEqual(clarify["action"], "explain")
+
+        response = service.recommend("Why these tools ?", retrieve_k=2, final_k=2)
+        self.assertEqual(response["hits"], [])
+        self.assertIn("previous results", response["message"])
+
+    def test_feedback_prompt_is_not_treated_as_search(self):
+        service = make_service()
+        prompt = "Wtf. Act like a practical software consultant."
+
+        intent = service.detect_intent(prompt, "Find a workflow tool")
+        self.assertEqual(intent["intent"], "new")
+
+        clarify = service.clarify(prompt)
+        self.assertEqual(clarify["action"], "clarify")
+        self.assertIn("feedback", clarify["question"])
+
+        response = service.recommend(prompt, retrieve_k=2, final_k=2)
+        self.assertEqual(response["hits"], [])
+        self.assertIn("feedback", response["message"])
+        self.assertNotIn("Software Ag", response["message"])
+
     def test_vague_prompt_clarifies_without_openai(self):
         service = make_service()
         decision = service.clarify("I need a tool")
