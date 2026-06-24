@@ -53,8 +53,13 @@ class FakeChatCompletions:
                             "Consultant view: Tool A fits the requested writing task with matching evidence. "
                             "Return recommendations as a decision shortlist."
                         ),
+                        "summary": "Writerly helps marketers draft blog posts, rewrite copy, and prepare SEO-focused content from one workspace.",
                     },
-                    {"id": 1, "reason": "Tool B is a backup match for the requested task."},
+                    {
+                        "id": 1,
+                        "reason": "Tool B is a backup match for the requested task.",
+                        "summary": "ImageBox turns text prompts into images for quick creative drafts.",
+                    },
                 ]
             }
         )
@@ -158,10 +163,17 @@ class BackendUnitTests(unittest.TestCase):
         reason = response["hits"][0]["why"]
         description = response["hits"][0]["meta"]["Description"]
         self.assertLessEqual(len(description), 220)
+        self.assertIn("marketers", description)
         self.assertNotIn("...", description)
         self.assertNotIn("...", reason)
         self.assertNotIn("Consultant view", reason)
         self.assertNotIn("Return recommendations", reason)
+
+    def test_original_description_is_preserved_without_ai_summary(self):
+        service = make_service()
+        original = service.store.meta[0]["Description"]
+        response = service.search("writing", k=1)
+        self.assertEqual(response["hits"][0]["meta"]["Description"], original)
 
 
 if __name__ == "__main__":
