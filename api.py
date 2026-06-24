@@ -25,7 +25,7 @@ index = faiss.read_index(INDEX_PATH)
 with open(META_PATH, "r", encoding="utf-8") as f:
     META = [json.loads(line) for line in f]
 
-client = OpenAI(api_key=OPENAI_API_KEY or "missing")
+client = OpenAI(api_key=OPENAI_API_KEY or "missing", timeout=20.0, max_retries=2)
 
 
 class IntentRequest(BaseModel):
@@ -95,11 +95,14 @@ def query_terms(text: str) -> list[str]:
         "measure": "measure analytics reporting dashboard metrics tracking seo marketing performance",
     }
     expanded = f"{normalized} {intent_aliases.get(normalized, '')}"
+    if re.search(r"\b(writ|blog|article|post|copy|content)\w*\b", normalized):
+        expanded += " writing writers blog article posts copywriting content seo marketing"
     words = re.findall(r"[a-z0-9]+", expanded)
     stopwords = {
         "a", "an", "and", "are", "as", "at", "be", "for", "from", "i", "in",
         "is", "it", "me", "my", "of", "on", "or", "that", "the", "to",
-        "tool", "tools", "with", "you"
+        "ai", "best", "find", "give", "help", "like", "looking", "make",
+        "need", "recommend", "show", "tool", "tools", "want", "with", "you"
     }
     return [w for w in words if len(w) > 2 and w not in stopwords]
 
@@ -112,14 +115,37 @@ def meta_text(meta: dict) -> str:
     return " ".join(str(meta.get(field, "")) for field in fields).lower()
 
 
+def tokens(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def token_count(items: list[str], term: str) -> int:
+    return sum(1 for item in items if item == term)
+
+
+def is_writing_query(q: str) -> bool:
+    return bool(re.search(r"\b(writ|blog|article|post|copy|content)\w*\b", q.lower()))
+
+
+def off_topic_for_query(q: str, categories: str) -> bool:
+    category_tokens = set(tokens(categories))
+    if is_writing_query(q):
+        allowed = {"writing", "generators", "copywriting", "seo", "marketing", "social", "media"}
+        blocked = {"fitness", "health", "travel", "dating", "music", "finance", "stock", "trading"}
+        if category_tokens & blocked:
+            return True
+        return not bool(category_tokens & allowed)
+    return False
+
+
 def local_reason(q: str, meta: dict) -> str:
     terms = query_terms(q)
     name = str(meta.get("Name", "This tool")).strip() or "This tool"
     categories = [c.strip() for c in re.split(r"[|,/]", str(meta.get("Categories", ""))) if c.strip()]
-    text = meta_text(meta)
+    text_tokens = set(tokens(meta_text(meta)))
     matched_terms = []
     for term in terms:
-        if term in text and term not in matched_terms:
+        if term in text_tokens and term not in matched_terms:
             matched_terms.append(term)
         if len(matched_terms) >= 3:
             break
@@ -150,27 +176,39 @@ def keyword_search(q: str, k: int) -> list[SearchHit]:
 
     scored = []
     for idx, meta in enumerate(META):
-        text = meta_text(meta)
+        text_items = tokens(meta_text(meta))
+        text_set = set(text_items)
         name = str(meta.get("Name", "")).lower()
         categories = str(meta.get("Categories", "")).lower()
         description = str(meta.get("Description", "")).lower()
+        category_items = tokens(categories)
+        name_items = tokens(name)
+        description_items = tokens(description)
+
+        if off_topic_for_query(q, categories):
+            continue
+
         score = 0.0
         for term in terms:
-            if term in name:
+            if term in name_items:
                 score += 8.0
-            if term in categories:
+            if term in category_items:
                 score += 6.0
-            if term in description:
+            if term in description_items:
                 score += 2.0
-            score += min(text.count(term), 4) * 0.5
+            if term in text_set:
+                score += min(token_count(text_items, term), 4) * 0.5
 
         if "free" in terms and "free" in str(meta.get("Price", "")).lower():
             score += 4.0
-        if any(term in terms for term in ("business", "marketing", "competitor", "social", "seo")):
+        if is_writing_query(q):
+            if any(term in category_items for term in ("writing", "copywriting", "seo", "marketing")):
+                score += 10.0
+        elif any(term in terms for term in ("business", "marketing", "competitor", "social", "seo")):
             if any(term in categories for term in ("fitness", "health", "fun tools", "dating")):
                 score -= 8.0
 
-        if score > 0:
+        if score >= 4.0:
             scored.append((score, idx))
 
     scored.sort(reverse=True, key=lambda item: item[0])
@@ -250,7 +288,7 @@ def search(body: SearchRequest):
     try:
         vec = embed([q])
     except OpenAIError:
-        logger.exception("OpenAI embedding request failed; using keyword search fallback")
+        logger.warning("OpenAI embedding request failed; using keyword search fallback")
         return {"hits": keyword_search(q, body.k)}
 
     scores, ids = index.search(vec, min(body.k, len(META)))
@@ -272,7 +310,7 @@ def recommend(body: RecommendRequest):
     try:
         vec = embed([q])
     except OpenAIError:
-        logger.exception("OpenAI embedding request failed; using keyword recommendation fallback")
+        logger.warning("OpenAI embedding request failed; using keyword recommendation fallback")
         return {"hits": keyword_search(q, body.final_k)}
 
     scores, ids = index.search(vec, min(body.retrieve_k, len(META)))
@@ -287,7 +325,9 @@ def recommend(body: RecommendRequest):
             "name": m.get("Name", ""),
             "categories": m.get("Categories", ""),
             "price": m.get("Price", ""),
-            "description": m.get("Description", "")
+            "description": m.get("Description", ""),
+            "features": m.get("Features", ""),
+            "pros": m.get("Pros", "")
         })
     if not candidates:
         return {"hits": []}
@@ -318,6 +358,8 @@ def recommend(body: RecommendRequest):
                         "4. Consider the user's budget constraints. If they have not specified consider having at least 1 free option"
                         "5. Treat every candidate tool equally credible regardless of whether you recognise the name"
                         "6. Do not favour tools based on their position in the list. A tool at at the last place is as valid as the tool in the first place\n"
+                        "7. Do not select a tool unless its categories, description, features, or price clearly support the user's request.\n"
+                        "8. Each reason must explicitly mention the user's requested task and the tool evidence that matches it.\n"
                         "Return ONLY valid JSON, no markdown, no extra text:\n"
                         '{"selected": [{"id": <integer>, "reason": "<two sentences why this fits>"}, ...]}'
                     )
@@ -335,7 +377,7 @@ def recommend(body: RecommendRequest):
             response_format={"type": "json_object"}  # forces valid JSON every time
         )
     except OpenAIError:
-        logger.exception("OpenAI chat request failed; returning FAISS fallback recommendations")
+        logger.warning("OpenAI chat request failed; returning FAISS fallback recommendations")
 
     try:
         data = json.loads(resp.choices[0].message.content) if resp else {}
