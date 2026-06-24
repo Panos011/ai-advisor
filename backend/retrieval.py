@@ -17,7 +17,7 @@ from backend.settings import Settings
 logger = logging.getLogger(__name__)
 
 MAX_REASON_CHARS = 320
-TEXT_FORMAT_VERSION = "display-v7"
+TEXT_FORMAT_VERSION = "display-v8"
 
 
 INSTRUCTION_LEAK_PATTERNS = (
@@ -35,6 +35,11 @@ FEEDBACK_PATTERNS = (
     r"\b(?:wrong|broken|bad|nonsense|useless)\b",
     r"\b(?:you|it)\s+(?:messed|broke)\b",
 )
+
+FREE_FILTER_WORDS = {
+    "free", "only", "ones", "one", "option", "options", "tool", "tools",
+    "app", "apps", "said", "tier", "trial", "plan", "plans",
+}
 
 
 @dataclass
@@ -137,6 +142,47 @@ def feedback_clarifying_question() -> str:
     )
 
 
+def requires_free_only(text: str) -> bool:
+    normalized = normalize_query_text(text).lower()
+    if not normalized:
+        return False
+    if re.search(r"\b(?:paid\s+only|paid\s+ones|paid\s+tools|paid\s+options|compare\s+paid|free\s+(?:and|or)\s+paid)\b", normalized):
+        return False
+    return bool(re.search(
+        r"\bfree\b|"
+        r"\b(?:only|just)\s+(?:the\s+)?free(?:\s+(?:ones|tools|apps|options))?\b|"
+        r"\b(?:no|without)\s+paid\b|"
+        r"\bdo\s+not\s+show\s+paid\b",
+        normalized,
+    ))
+
+
+def non_filter_terms(text: str) -> list[str]:
+    return [term for term in query_terms(text) if term not in FREE_FILTER_WORDS]
+
+
+def is_free_tool(meta: dict[str, Any]) -> bool:
+    price = normalize_display_text(meta.get("Price", "")).lower()
+    if not price:
+        return False
+    negative = bool(re.search(
+        r"\b(?:no|not|without)\s+(?:a\s+)?free\b|"
+        r"\bdoes\s+not\s+offer\s+(?:a\s+)?free\b|"
+        r"\bfree\s+(?:tier|plan|trial)\s+(?:is\s+)?(?:not|unavailable)\b",
+        price,
+    ))
+    positive = bool(re.search(
+        r"\bfree\b|"
+        r"\bno\s+cost\b|"
+        r"\bat\s+no\s+cost\b|"
+        r"\bwithout\s+paying\b|"
+        r"\bno\s+credit\s+card\b|"
+        r"\bopen\s+source\b",
+        price,
+    ))
+    return positive and not negative
+
+
 def query_terms(text: str) -> list[str]:
     normalized = strip_instruction_text(text).lower().strip()
     intent_aliases = {
@@ -203,6 +249,8 @@ def needs_clarification(q: str) -> bool:
     terms = query_terms(normalized)
     if is_explanation_query(normalized):
         return False
+    if requires_free_only(normalized) and not non_filter_terms(normalized):
+        return True
     if len(terms) <= 1 and re.search(r"\b(tool|tools|app|apps|software|ai)\b", normalized):
         return True
     return normalized in {
@@ -219,6 +267,8 @@ def needs_clarification(q: str) -> bool:
 def default_clarifying_question(q: str) -> str:
     if is_feedback_only_query(q):
         return feedback_clarifying_question()
+    if requires_free_only(q) and not non_filter_terms(q):
+        return "What task should the free tool help with?"
     if "free" not in q.lower() and re.search(r"\b(tool|tools|app|apps|software|ai)\b", q.lower()):
         return "What task do you want the tool to help with, and do you need a free option?"
     return "What exact task should the tool help with?"
@@ -376,7 +426,7 @@ def price_reason(meta: dict[str, Any]) -> str:
     lower = price.lower()
     if not price:
         return ""
-    if "free" in lower:
+    if is_free_tool(meta):
         return "It also has a free tier or trial, so you can test it without paying upfront."
     money = re.search(r"\$\s?\d+(?:\.\d{2})?(?:\s*/?\s*(?:month|mo|monthly|year|yr|annually))?", price, re.IGNORECASE)
     if money:
@@ -475,9 +525,16 @@ def keyword_scores(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[tupl
     terms = query_terms(q)
     if not terms:
         return []
+    free_only = requires_free_only(q)
+    ranking_terms = [term for term in terms if term not in FREE_FILTER_WORDS]
+    if free_only and not ranking_terms:
+        return []
 
     scored = []
     for idx, meta in enumerate(meta_rows):
+        if free_only and not is_free_tool(meta):
+            continue
+
         text_items = tokens(meta_text(meta))
         text_set = set(text_items)
         name = str(meta.get("Name", "")).lower()
@@ -491,7 +548,7 @@ def keyword_scores(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[tupl
             continue
 
         score = 0.0
-        for term in terms:
+        for term in ranking_terms:
             if term in name_items:
                 score += 8.0
             if term in category_items:
@@ -501,7 +558,10 @@ def keyword_scores(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[tupl
             if term in text_set:
                 score += min(token_count(text_items, term), 4) * 0.5
 
-        if "free" in terms and "free" in str(meta.get("Price", "")).lower():
+        task_score = score
+        if free_only and task_score <= 0:
+            continue
+        if "free" in terms and is_free_tool(meta):
             score += 4.0
         if is_writing_query(q):
             if any(term in category_items for term in ("writing", "copywriting", "seo", "marketing")):
@@ -528,7 +588,7 @@ def keyword_search(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[dict
     ]
 
 
-def recommendation_message(hits: list[dict[str, Any]]) -> str:
+def recommendation_message(hits: list[dict[str, Any]], query: str = "") -> str:
     names = [
         str((hit.get("meta") or {}).get("Name", "")).strip()
         for hit in hits
@@ -536,6 +596,8 @@ def recommendation_message(hits: list[dict[str, Any]]) -> str:
     ]
     names = [name for name in names if name]
     if not names:
+        if requires_free_only(query):
+            return "I could not find a strong free match. Try changing the task or allowing free trials and freemium plans."
         return "I could not find a strong match. Try adding the task, budget, and any must-have integrations."
 
     first = names[0]
@@ -648,6 +710,7 @@ class RecommendationService:
         q = strip_instruction_text(q)
         if is_feedback_only_query(q):
             return {"hits": []}
+        free_only = requires_free_only(q)
 
         try:
             vec = self.embed([q])
@@ -662,6 +725,8 @@ class RecommendationService:
         hits = []
         for score, id_ in zip(scores[0].tolist(), ids[0].tolist()):
             if id_ == -1:
+                continue
+            if free_only and not is_free_tool(self.store.meta[id_]):
                 continue
             hits.append({"score": float(score), "meta": compact_meta(self.store.meta[id_])})
         return {"hits": hits}
@@ -681,18 +746,25 @@ class RecommendationService:
                 "message": "I can explain the current shortlist after a search, but I need the previous results to do that.",
             }
         q = strip_instruction_text(q)
+        if requires_free_only(q) and not non_filter_terms(q):
+            self.metrics.increment("recommend_free_query_missing_task")
+            return {
+                "hits": [],
+                "message": "What task should the free tool help with?",
+            }
         if not query_terms(q):
             self.metrics.increment("recommend_empty_query_blocked")
             return {
                 "hits": [],
                 "message": "Tell me the task, budget, or must-have integrations and I will search for better matches.",
             }
+        free_only = requires_free_only(q)
 
         cache_key = f"{TEXT_FORMAT_VERSION}:{self.settings.emb_model}:{self.settings.chat_model}:{retrieve_k}:{final_k}:{q}"
         cached = self.recommend_cache.get(cache_key)
         if cached is not None:
             self.metrics.increment("recommend_cache_hit")
-            return {"hits": cached, "message": recommendation_message(cached)}
+            return {"hits": cached, "message": recommendation_message(cached, q)}
 
         try:
             vec = self.embed([q])
@@ -704,18 +776,28 @@ class RecommendationService:
                 for score, idx in keyword_scores(q, min(retrieve_k, len(self.store.meta)), self.store.meta)
             ]
             selected = self._rank_with_llm(q, candidates, final_k) if candidates else []
-            hits = self._selected_hits(selected, q, final_k)
+            hits = self._selected_hits(
+                selected,
+                q,
+                final_k,
+                allowed_ids={int(candidate["id"]) for candidate in candidates},
+            )
             if not hits:
                 hits = keyword_search(q, final_k, self.store.meta)
             self.recommend_cache.set(cache_key, hits)
-            return {"hits": hits, "message": recommendation_message(hits)}
+            return {"hits": hits, "message": recommendation_message(hits, q)}
 
         with self.metrics.timer("faiss.recommend_search_ms"):
             scores, ids = self.store.index.search(vec, min(retrieve_k, len(self.store.meta)))
 
         candidates = self._build_candidates(scores[0].tolist(), ids[0].tolist())
+        if free_only:
+            candidates = [
+                candidate for candidate in candidates
+                if is_free_tool(self.store.meta[int(candidate["id"])])
+            ]
         if not candidates:
-            return {"hits": [], "message": recommendation_message([])}
+            return {"hits": [], "message": recommendation_message([], q)}
 
         candidate_embeddings = self._candidate_embeddings([int(c["id"]) for c in candidates])
         with self.metrics.timer("rerank.mmr_ms"):
@@ -727,10 +809,19 @@ class RecommendationService:
             )
 
         selected = self._rank_with_llm(q, candidates, final_k)
-        final_hits = self._selected_hits(selected, q, final_k)
+        final_hits = self._selected_hits(
+            selected,
+            q,
+            final_k,
+            allowed_ids={int(candidate["id"]) for candidate in candidates},
+        )
 
         if not final_hits:
-            top = [(i, s) for i, s in zip(ids[0].tolist(), scores[0].tolist()) if i != -1]
+            top = [
+                (i, s)
+                for i, s in zip(ids[0].tolist(), scores[0].tolist())
+                if i != -1 and (not free_only or is_free_tool(self.store.meta[i]))
+            ]
             final_hits = [
                 {
                     "score": float(s),
@@ -742,7 +833,7 @@ class RecommendationService:
             self.metrics.increment("llm_rank_fallbacks")
 
         self.recommend_cache.set(cache_key, final_hits)
-        return {"hits": final_hits, "message": recommendation_message(final_hits)}
+        return {"hits": final_hits, "message": recommendation_message(final_hits, q)}
 
     def clarify(self, q: str) -> dict[str, Any]:
         if is_feedback_only_query(q):
@@ -886,6 +977,7 @@ class RecommendationService:
                                 "2. Do not favour tools based on popularity, brand recognition or how often you have seen them in training data.\n"
                                 "3. A lesser-known tool that matches the user's needs perfectly is better than a well-known partial match.\n"
                                 "4. Consider budget constraints. If unspecified, include at least 1 free option when candidates support it.\n"
+                                "4a. If the user asks for free tools, select only candidates with a free tier, free trial, no-cost plan, or open-source access.\n"
                                 "5. Treat every candidate tool as equally credible regardless of whether you recognise the name.\n"
                                 "6. Do not favour tools based on their position in the list.\n"
                                 "7. Do not select a tool unless categories, description, features, use cases, or price clearly support the request.\n"
@@ -917,9 +1009,16 @@ class RecommendationService:
             self.metrics.increment("openai_rank_errors")
             return []
 
-    def _selected_hits(self, selected: list[dict[str, Any]], q: str, limit: int) -> list[dict[str, Any]]:
+    def _selected_hits(
+        self,
+        selected: list[dict[str, Any]],
+        q: str,
+        limit: int,
+        allowed_ids: set[int] | None = None,
+    ) -> list[dict[str, Any]]:
         final_hits = []
         seen_ids = set()
+        free_only = requires_free_only(q)
         for item in selected:
             if len(final_hits) >= limit:
                 break
@@ -930,8 +1029,12 @@ class RecommendationService:
                 continue
             if id_int in seen_ids:
                 continue
+            if allowed_ids is not None and id_int not in allowed_ids:
+                continue
             if 0 <= id_int < len(self.store.meta):
                 meta = self.store.meta[id_int]
+                if free_only and not is_free_tool(meta):
+                    continue
                 summary = item.get("summary") or item.get("description") or ""
                 final_hits.append({
                     "score": 0.0,

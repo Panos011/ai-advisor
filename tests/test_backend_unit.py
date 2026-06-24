@@ -6,7 +6,7 @@ import numpy as np
 from pydantic import ValidationError
 
 from backend.metrics import RuntimeMetrics
-from backend.retrieval import RecommendationService, ToolStore, local_reason, sanitize_reason
+from backend.retrieval import RecommendationService, ToolStore, is_free_tool, local_reason, sanitize_reason
 from backend.schemas import RecommendRequest, SearchRequest
 from backend.settings import Settings
 
@@ -123,6 +123,35 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["hits"][0]["meta"]["Name"], "Writerly")
         self.assertIn("writing", response["hits"][0]["why"].lower())
         self.assertNotIn("...", response["hits"][0]["why"])
+
+    def test_free_only_recommendations_exclude_paid_tools(self):
+        service = make_service()
+        response = service.recommend("I need a free writing tool", retrieve_k=2, final_k=2)
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+
+        self.assertEqual(names, ["Writerly"])
+        self.assertTrue(all(is_free_tool(hit["meta"]) for hit in response["hits"]))
+        self.assertNotIn("ImageBox", names)
+        self.assertNotIn("$", response["hits"][0]["why"])
+
+    def test_free_only_keyword_fallback_does_not_return_paid_task_match(self):
+        service = make_service(client=FakeClient(embedding_failure=True))
+        response = service.recommend("I need a free image generator", retrieve_k=2, final_k=2)
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+
+        self.assertNotIn("ImageBox", names)
+        self.assertTrue(all(is_free_tool(hit["meta"]) for hit in response["hits"]))
+
+    def test_free_only_without_task_asks_for_task(self):
+        service = make_service()
+
+        clarify = service.clarify("I said only the free ones")
+        self.assertEqual(clarify["action"], "clarify")
+        self.assertIn("What task", clarify["question"])
+
+        response = service.recommend("I said only the free ones", retrieve_k=2, final_k=2)
+        self.assertEqual(response["hits"], [])
+        self.assertIn("What task", response["message"])
 
     def test_recommendation_results_are_cached(self):
         client = FakeClient()
