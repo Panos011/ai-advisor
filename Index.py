@@ -20,12 +20,18 @@ for _, r in df.iterrows():
     meta.append({
         "Name": r.get("Name", ""),
         "Logo_URL": r.get("Logo_URL", ""),
+        "Logo_File": r.get("Logo_File", ""),
+        "Source_URL": r.get("Source_URL", ""),
+        "Rating": r.get("Rating", ""),
         "Tool_link": r.get("Tool_link", ""),
         "Categories": r.get("Categories", ""),
         "Price": r.get("Price", ""),
         "Description": r.get("Description", ""),
+        "Features": r.get("Features", ""),
         "Pros": r.get("Pros", ""),
         "Cons": r.get("Cons", ""),
+        "Use_cases": r.get("Use_cases", ""),
+        "Unique_Value": r.get("Unique_Value", ""),
     })
 client = OpenAI()
 EMB_MODEL = "text-embedding-3-small"
@@ -52,8 +58,10 @@ index.add_with_ids(embs, ids)
 
 # Save index + metadata
 faiss.write_index(index, os.path.join(INDEX_DIR, "tools.faiss"))
+np.save(os.path.join(INDEX_DIR, "tool_vectors.npy"), embs)
 with open(os.path.join(INDEX_DIR, "meta.jsonl"), "w", encoding="utf-8") as f:
     for m in meta:
         f.write(json.dumps(m, ensure_ascii=False) + "\n")
 
 print(f"Indexed {len(meta)} tools → {INDEX_DIR}/tools.faiss")
+print(f"Saved vector matrix → {INDEX_DIR}/tool_vectors.npy")
