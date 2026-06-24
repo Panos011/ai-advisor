@@ -7,7 +7,7 @@ from openai import OpenAIError
 from pydantic import ValidationError
 
 from backend.metrics import RuntimeMetrics
-from backend.retrieval import RecommendationService, ToolStore
+from backend.retrieval import RecommendationService, ToolStore, local_reason, sanitize_reason
 from backend.schemas import RecommendRequest, SearchRequest
 from backend.settings import Settings
 
@@ -68,7 +68,7 @@ def make_service(client=None):
             "Name": "Writerly",
             "Categories": "writing | copywriting",
             "Price": "Free tier",
-            "Description": "Writing assistant for blog posts and marketing copy.",
+            "Description": "Writing assistant for blog posts and marketing copy. " * 20,
             "Features": "Drafts blog posts and rewrites content.",
             "Pros": "Useful for writing content quickly.",
             "Use_cases": "Blog writing",
@@ -122,7 +122,34 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(client.embeddings.calls, 1)
         self.assertEqual(client.chat.completions.calls, 1)
 
+    def test_reasons_do_not_expose_consultant_view_or_prompt_text(self):
+        query = (
+            "Find a privacy-first AI note taker for meetings. Prioritize tools with privacy, "
+            "security, local, self-hosted, or compliance signals. Return recommendations as a "
+            "decision shortlist with fit, tradeoffs, and practical next steps."
+        )
+        reason = sanitize_reason(
+            "Consultant view: I treated privacy as the main constraint. Return recommendations as a decision shortlist.",
+            name="Hyprnote",
+            query=query,
+        )
+        self.assertNotIn("Consultant view", reason)
+        self.assertNotIn("Return recommendations", reason)
+
+        fallback = local_reason(query, {
+            "Name": "Hyprnote",
+            "Description": "Private local-first AI notetaker for meetings.",
+        })
+        self.assertIn("private meeting notes", fallback)
+        self.assertNotIn("Return recommendations", fallback)
+
+    def test_returned_descriptions_are_compact(self):
+        service = make_service()
+        response = service.recommend("I need a writing tool", retrieve_k=2, final_k=2)
+        description = response["hits"][0]["meta"]["Description"]
+        self.assertLessEqual(len(description), 223)
+        self.assertTrue(description.endswith("..."))
+
 
 if __name__ == "__main__":
     unittest.main()
-
