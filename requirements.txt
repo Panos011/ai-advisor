@@ -12,7 +12,5 @@ python-dotenv
 openai>=1.12.0
 fastapi==0.115.6
 pydantic==2.7.4
-streamlit
 crawlee[playwright]
-
 
