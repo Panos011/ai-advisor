@@ -136,6 +136,24 @@ class BackendUnitTests(unittest.TestCase):
         self.assertNotIn("Consultant view", first["message"])
         self.assertNotIn("Advisor view", first["message"])
 
+    def test_explanation_prompt_is_not_treated_as_search(self):
+        service = make_service()
+        intent = service.detect_intent("Why these tools?", "I need a writing tool")
+        self.assertEqual(intent["intent"], "explain")
+
+        clarify = service.clarify("Why these tools?")
+        self.assertEqual(clarify["action"], "explain")
+
+        response = service.recommend("Why these tools?", retrieve_k=2, final_k=2)
+        self.assertEqual(response["hits"], [])
+        self.assertIn("previous results", response["message"])
+
+    def test_vague_prompt_clarifies_without_openai(self):
+        service = make_service()
+        decision = service.clarify("I need a tool")
+        self.assertEqual(decision["action"], "clarify")
+        self.assertIn("What task", decision["question"])
+
     def test_reasons_do_not_expose_consultant_view_or_prompt_text(self):
         query = (
             "Find a privacy-first AI note taker for meetings. Prioritize tools with privacy, "

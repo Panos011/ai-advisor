@@ -193,6 +193,35 @@ def detect_intent(prompt, last_query):
         return "new"
 
 
+def is_explanation_prompt(text: str) -> bool:
+    return bool(re.search(
+        r"\b(why\s+(these|this|those)|why\s+did|explain|reason|reasons|why\s+recommended|why\s+recommend)\b",
+        (text or "").lower(),
+    ))
+
+
+def explain_results(hits):
+    if not hits:
+        return "I need a current shortlist before I can explain the recommendations."
+
+    names = [((h.get("meta") or {}).get("Name") or "").strip() for h in hits]
+    names = [name for name in names if name]
+    if not names:
+        return "I picked these tools because their descriptions were the closest match to your request."
+
+    first = hits[0]
+    first_meta = first.get("meta", {}) or {}
+    first_name = first_meta.get("Name", names[0])
+    first_reason = (first.get("why") or "").strip()
+    if first_reason:
+        first_reason = re.sub(r"\s+", " ", first_reason)
+        return f"I put {first_name} first because {first_reason[0].lower() + first_reason[1:]}"
+
+    if len(names) == 1:
+        return f"I picked {first_name} because it was the closest match to your request."
+    return f"I picked {first_name} first because it looked like the strongest match, with {names[1]} as another close option."
+
+
 @st.cache_data(ttl=3600)
 def get_toolcount():
     if not API_BASE:
@@ -281,7 +310,15 @@ with left:
                 st.session_state.clarify_question = ""
             else:
                 # build context from previous search so the LLM understands follow-ups
-                intent = detect_intent(prompt, st.session_state.last_query)
+                intent = "explain" if is_explanation_prompt(prompt) else detect_intent(prompt, st.session_state.last_query)
+                if intent == "explain":
+                    ai_text = explain_results(st.session_state.last_results)
+                    status.update(label="Explained current shortlist", state="complete", expanded=True)
+                    with st.chat_message("assistant"):
+                        st.markdown(ai_text)
+                    st.session_state.messages.append({"role": "assistant", "content": ai_text})
+                    st.stop()
+
                 if intent == "refine":
                     combined = f" {st.session_state.last_query}.{prompt} "
                 else:
@@ -302,6 +339,13 @@ with left:
                     st.session_state.clarify_base_query = combined
                     st.session_state.clarify_question = ai_text
                     status.update(label="Need clarification", state="complete", expanded=True)
+                    with st.chat_message("assistant"):
+                        st.markdown(ai_text)
+                    st.session_state.messages.append({"role": "assistant", "content": ai_text})
+                    st.stop()
+                if decision.get("action") == "explain":
+                    ai_text = explain_results(st.session_state.last_results)
+                    status.update(label="Explained current shortlist", state="complete", expanded=True)
                     with st.chat_message("assistant"):
                         st.markdown(ai_text)
                     st.session_state.messages.append({"role": "assistant", "content": ai_text})

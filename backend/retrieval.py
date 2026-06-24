@@ -118,6 +118,46 @@ def is_writing_query(q: str) -> bool:
     return bool(re.search(r"\b(writ|blog|article|post|copy|content)\w*\b", q.lower()))
 
 
+def is_explanation_query(text: str) -> bool:
+    normalized = text.lower().strip()
+    return bool(re.search(
+        r"\b(why\s+(these|this|those)|why\s+did|explain|reason|reasons|why\s+recommended|why\s+recommend)\b",
+        normalized,
+    ))
+
+
+def is_refinement_query(text: str) -> bool:
+    normalized = text.lower().strip()
+    return bool(re.search(
+        r"\b(free only|free|paid|cheaper|simpler|more specific|more privacy|private|secure|local|self-hosted|show me more|another|alternatives?|compare|better|only)\b",
+        normalized,
+    ))
+
+
+def needs_clarification(q: str) -> bool:
+    normalized = q.lower().strip()
+    terms = query_terms(normalized)
+    if is_explanation_query(normalized):
+        return False
+    if len(terms) <= 1 and re.search(r"\b(tool|tools|app|apps|software|ai)\b", normalized):
+        return True
+    return normalized in {
+        "i need a tool",
+        "i need an ai tool",
+        "recommend a tool",
+        "recommend an ai tool",
+        "find a tool",
+        "find an ai tool",
+        "help me choose a tool",
+    }
+
+
+def default_clarifying_question(q: str) -> str:
+    if "free" not in q.lower() and re.search(r"\b(tool|tools|app|apps|software|ai)\b", q.lower()):
+        return "What task do you want the tool to help with, and do you need a free option?"
+    return "What exact task should the tool help with?"
+
+
 def off_topic_for_query(q: str, categories: str) -> bool:
     category_tokens = set(tokens(categories))
     if is_writing_query(q):
@@ -562,6 +602,13 @@ class RecommendationService:
 
     def recommend(self, q: str, retrieve_k: int, final_k: int) -> dict[str, Any]:
         self.metrics.increment("recommend_requests")
+        if is_explanation_query(q):
+            self.metrics.increment("recommend_explain_query_blocked")
+            return {
+                "hits": [],
+                "message": "I can explain the current shortlist after a search, but I need the previous results to do that.",
+            }
+
         cache_key = f"{TEXT_FORMAT_VERSION}:{self.settings.emb_model}:{self.settings.chat_model}:{retrieve_k}:{final_k}:{q}"
         cached = self.recommend_cache.get(cache_key)
         if cached is not None:
@@ -619,6 +666,11 @@ class RecommendationService:
         return {"hits": final_hits, "message": recommendation_message(final_hits)}
 
     def clarify(self, q: str) -> dict[str, Any]:
+        if is_explanation_query(q):
+            return {"action": "explain"}
+        if needs_clarification(q):
+            return {"action": "clarify", "question": default_clarifying_question(q)}
+
         system = (
             "Decide if the user's request needs ONE clarifying question.\n"
             "If missing key info (task type, platform, free/paid, output), ask 1-3 short question(s).\n"
@@ -643,6 +695,8 @@ class RecommendationService:
             data = json.loads(raw)
         except Exception:
             self.metrics.increment("clarify_fallbacks")
+            if needs_clarification(q):
+                return {"action": "clarify", "question": default_clarifying_question(q)}
             return {"action": "search", "refined_query": q}
 
         action = data.get("action")
@@ -656,12 +710,18 @@ class RecommendationService:
         return {"action": "search", "refined_query": refined}
 
     def detect_intent(self, prompt: str, last_query: str) -> dict[str, str]:
+        if last_query and is_explanation_query(prompt):
+            return {"intent": "explain"}
+        if last_query and is_refinement_query(prompt):
+            return {"intent": "refine"}
+
         system = (
             "You are a search intent classifier. Given the previous search query, decide if the user is:\n"
+            "- 'explain': asking why the current results were recommended, for example 'why these tools?' or 'explain these picks'\n"
             "- 'refine': modifying, filtering or following up on the previous search, for example "
             "'free only', 'show me more', 'I need something simpler', 'what about paid ones'\n"
             "- 'new': asking for something completely different\n"
-            "Return ONLY valid JSON: {\"intent\": \"refine\"} or {\"intent\": \"new\"}"
+            "Return ONLY valid JSON: {\"intent\": \"explain\"}, {\"intent\": \"refine\"}, or {\"intent\": \"new\"}"
         )
         try:
             with self.metrics.timer("openai.detect_intent_ms"):
@@ -679,7 +739,7 @@ class RecommendationService:
                 )
             data = json.loads(resp.choices[0].message.content)
             intent = data.get("intent", "new")
-            if intent not in ("refine", "new"):
+            if intent not in ("explain", "refine", "new"):
                 intent = "new"
             return {"intent": intent}
         except Exception:

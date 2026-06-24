@@ -31,7 +31,7 @@ class IntentRequest(BaseModel):
 
 
 class IntentResponse(BaseModel):
-    intent: Literal["refine", "new"]
+    intent: Literal["explain", "refine", "new"]
 
 
 class SearchRequest(BaseModel):
@@ -86,6 +86,6 @@ class ClarifyRequest(BaseModel):
 
 
 class ClarifyResponse(BaseModel):
-    action: Literal["clarify", "search"]
+    action: Literal["clarify", "explain", "search"]
     question: str | None = None
     refined_query: str | None = None
