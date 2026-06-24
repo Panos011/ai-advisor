@@ -9,7 +9,6 @@ from typing import Any
 
 import faiss
 import numpy as np
-from openai import OpenAIError
 
 from backend.cache import TTLCache
 from backend.metrics import RuntimeMetrics
@@ -17,10 +16,8 @@ from backend.settings import Settings
 
 logger = logging.getLogger(__name__)
 
-MAX_REASON_CHARS = 180
-MAX_DESCRIPTION_CHARS = 220
-MAX_PRICE_CHARS = 160
-TEXT_FORMAT_VERSION = "display-v4"
+MAX_REASON_CHARS = 320
+TEXT_FORMAT_VERSION = "display-v5"
 
 
 @dataclass
@@ -139,6 +136,8 @@ def request_goal(q: str) -> str:
             return "private meeting notes"
         return "meeting notes and summaries"
     if is_writing_query(q):
+        if "essay" in text or "academic" in text:
+            return "essay writing"
         if "blog" in text or "article" in text:
             return "writing blog posts"
         if "social" in text or "post" in text:
@@ -185,46 +184,99 @@ def best_evidence(q: str, meta: dict[str, Any]) -> str:
 def local_reason(q: str, meta: dict[str, Any]) -> str:
     name = str(meta.get("Name", "This tool")).strip() or "This tool"
     goal = request_goal(q)
-    price = str(meta.get("Price", "")).lower()
-
-    reason = local_reason_sentence(goal, meta)
-
-    if "free" in price:
-        reason += " Free option available."
+    detail = practical_fit_detail(goal, meta)
+    reason = f"{name} is well suited for {goal} because {detail}."
+    price_note = price_reason(meta)
+    if price_note:
+        reason += f" {price_note}"
     return sanitize_reason(reason, name=name, query=q)
 
 
-def local_reason_sentence(goal: str, meta: dict[str, Any]) -> str:
+def practical_fit_detail(goal: str, meta: dict[str, Any]) -> str:
     text = meta_text(meta)
     categories = set(tokens(str(meta.get("Categories", ""))))
 
     if "private meeting notes" in goal:
-        return "Best for private meeting notes."
+        if any(term in text for term in ("private", "privacy", "local", "self-hosted", "secure", "security", "compliance")):
+            return "it emphasizes privacy, local control, or security signals for meeting notes"
+        return "it supports meeting notes while matching your privacy-focused search"
     if "meeting notes" in goal:
-        return "Best for meeting notes and summaries."
+        if any(term in text for term in ("transcrib", "summar", "record")):
+            return "it can help capture, transcribe, or summarize meetings"
+        return "it is built around meeting workflows"
     if "writing blog posts" in goal:
         if "seo" in categories or "seo" in text:
-            return "Best for SEO blog drafts."
-        return "Best for blog and article drafts."
+            return "it combines blog or article drafting with SEO-focused writing support"
+        if any(term in text for term in ("grammar", "style", "clarity", "readability")):
+            return "it improves grammar, style, clarity, and readability"
+        if any(term in text for term in ("blog", "article", "content")):
+            return "it is focused on creating blog posts, articles, or written content"
+        return "it has writing features that match blog and article drafting"
+    if "essay writing" in goal:
+        if any(term in text for term in ("academic", "essay", "citation", "plagiarism", "research")):
+            return "it supports academic writing, essays, or research-oriented drafting"
+        if any(term in text for term in ("grammar", "style", "clarity", "readability")):
+            return "it improves grammar, style, clarity, and readability"
+        return "it has writing features that can help draft and improve essays"
+    if "creating social media posts" in goal:
+        if any(term in text for term in ("schedule", "publish", "calendar")):
+            return "it helps create, schedule, and manage social posts"
+        return "it supports social media content creation"
     if "writing content" in goal:
+        if "seo" in text:
+            return "it combines content generation with SEO writing support"
         if "copywriting" in categories:
-            return "Best for copywriting drafts."
-        return "Best for content writing."
+            return "it is focused on copywriting and content drafts"
+        if any(term in text for term in ("grammar", "style", "clarity", "readability")):
+            return "it improves grammar, style, clarity, and readability"
+        return "it has broad writing features for drafting and improving content"
     if "transcribing audio" in goal:
-        return "Best for audio transcription."
+        return "it is designed to convert audio into text or meeting notes"
     if "generating images" in goal:
-        return "Best for image generation."
+        return "it generates images or visual assets from prompts"
     if "creating presentations" in goal:
-        return "Best for presentation creation."
+        return "it helps create slides or presentation content faster"
     if "coding and debugging" in goal:
-        return "Best for coding help."
+        return "it assists with writing, completing, or debugging code"
     if "researching information" in goal:
-        return "Best for research workflows."
+        return "it supports research, analysis, or information gathering"
 
+    evidence = clean_evidence(best_evidence(goal, meta))
+    if evidence:
+        return evidence
     cats = category_list(meta, limit=2)
     if cats:
-        return f"Useful for {human_join(cats)}."
-    return "Useful based on its listed features."
+        return f"it focuses on {human_join(cats)}"
+    return "its listed features match the request"
+
+
+def clean_evidence(value: str) -> str:
+    evidence = normalize_display_text(value)
+    if not evidence:
+        return ""
+    if ":" in evidence:
+        label, rest = evidence.split(":", 1)
+        if len(label.split()) <= 5 and rest.strip():
+            evidence = rest.strip()
+    evidence = evidence[0].lower() + evidence[1:] if evidence else evidence
+    if not re.search(r"[.!?]$", evidence):
+        return evidence
+    return evidence.rstrip(".!?")
+
+
+def price_reason(meta: dict[str, Any]) -> str:
+    price = normalize_display_text(meta.get("Price", ""))
+    lower = price.lower()
+    if not price:
+        return ""
+    if "free" in lower:
+        return "It also has a free tier or trial, so you can test it without paying upfront."
+    money = re.search(r"\$\s?\d+(?:\.\d{2})?(?:\s*/?\s*(?:month|mo|monthly|year|yr|annually))?", price, re.IGNORECASE)
+    if money:
+        return f"Pricing starts around {money.group(0).replace(' ', '')}."
+    if "waitlist" in lower:
+        return "Pricing is not public yet, so verify availability before relying on it."
+    return ""
 
 
 def normalize_display_text(value: Any) -> str:
@@ -252,64 +304,6 @@ def category_list(meta: dict[str, Any], limit: int = 3) -> list[str]:
     return categories[:limit]
 
 
-def reason_signal(goal: str, meta: dict[str, Any]) -> str:
-    text = meta_text(meta)
-    categories = set(tokens(str(meta.get("Categories", ""))))
-
-    if "meeting" in goal:
-        if any(term in text for term in ("private", "privacy", "local", "self-hosted", "secure", "security", "compliance")):
-            return "with privacy-focused meeting support"
-        if any(term in text for term in ("transcrib", "summar", "record")):
-            return "for transcription and summaries"
-        return "for meeting workflows"
-
-    if "writing blog posts" in goal:
-        if "seo" in categories or "seo" in text:
-            return "with SEO-focused writing support"
-        if any(term in text for term in ("blog", "article", "content")):
-            return "for blog and article drafting"
-        return "from its writing features"
-
-    if "writing content" in goal:
-        if "copywriting" in categories:
-            return "for copywriting and content drafts"
-        if "seo" in text:
-            return "with SEO writing support"
-        return "from its content-writing features"
-
-    if "generating images" in goal:
-        return "from its image generation features"
-
-    if "creating presentations" in goal:
-        return "from its presentation creation features"
-
-    if "coding and debugging" in goal:
-        return "from its coding assistance features"
-
-    if "researching information" in goal:
-        return "from its research and analysis features"
-
-    cats = category_list(meta, limit=2)
-    if cats:
-        return f"because it focuses on {human_join(cats)}"
-    return "based on its listed features"
-
-
-def first_complete_sentence(value: Any, max_chars: int) -> str:
-    text = normalize_display_text(value)
-    if not text:
-        return ""
-
-    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
-    for sentence in sentences:
-        if len(sentence) <= max_chars:
-            return ensure_terminal_punctuation(sentence)
-
-    if len(text) <= max_chars:
-        return ensure_terminal_punctuation(text)
-    return ""
-
-
 def ensure_terminal_punctuation(text: str) -> str:
     cleaned = normalize_display_text(text)
     if not cleaned:
@@ -319,24 +313,8 @@ def ensure_terminal_punctuation(text: str) -> str:
     return cleaned
 
 
-def generated_summary(value: Any, meta: dict[str, Any]) -> str:
-    sentence = first_complete_sentence(value, MAX_DESCRIPTION_CHARS)
-    if sentence:
-        return sentence
-
-    name = str(meta.get("Name", "This tool")).strip() or "This tool"
-    categories = category_list(meta)
-    if categories:
-        return f"{name} is an AI tool for {human_join(categories)}."
-    return ""
-
-
 def compact_meta(meta: dict[str, Any], summary: Any = None) -> dict[str, Any]:
-    compacted = dict(meta)
-    clean_summary = generated_summary(summary, compacted) if summary else ""
-    if clean_summary:
-        compacted["Description"] = clean_summary
-    return compacted
+    return dict(meta)
 
 
 def sanitize_reason(reason: Any, name: str = "This tool", query: str = "") -> str:
@@ -362,12 +340,33 @@ def sanitize_reason(reason: Any, name: str = "This tool", query: str = "") -> st
     if not text:
         text = f"{name} matches this request based on its listed features."
 
-    sentence = first_complete_sentence(text, MAX_REASON_CHARS)
-    if sentence:
-        return sentence
+    completed = complete_sentences(text, MAX_REASON_CHARS, max_sentences=2)
+    if completed:
+        return completed
 
     goal = request_goal(query)
     return f"{name} matches {goal} based on its listed features."
+
+
+def complete_sentences(value: Any, max_chars: int, max_sentences: int = 2) -> str:
+    text = normalize_display_text(value)
+    if not text:
+        return ""
+    sentences = [ensure_terminal_punctuation(s) for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+    selected = []
+    for sentence in sentences:
+        if not sentence:
+            continue
+        candidate = " ".join([*selected, sentence])
+        if len(candidate) <= max_chars:
+            selected.append(sentence)
+        if len(selected) >= max_sentences:
+            break
+    if selected:
+        return " ".join(selected)
+    if len(text) <= max_chars:
+        return ensure_terminal_punctuation(text)
+    return ""
 
 
 def keyword_scores(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[tuple[float, int]]:
@@ -528,7 +527,7 @@ class RecommendationService:
         self.metrics.increment("search_requests")
         try:
             vec = self.embed([q])
-        except OpenAIError as exc:
+        except Exception as exc:
             logger.info("Embedding unavailable; served keyword search fallback (%s)", type(exc).__name__)
             self.metrics.increment("embedding_fallbacks")
             return {"hits": keyword_search(q, k, self.store.meta)}
@@ -553,7 +552,7 @@ class RecommendationService:
 
         try:
             vec = self.embed([q])
-        except OpenAIError as exc:
+        except Exception as exc:
             logger.info("Embedding unavailable; served keyword recommendation fallback (%s)", type(exc).__name__)
             self.metrics.increment("embedding_fallbacks")
             candidates = [
@@ -728,12 +727,12 @@ class RecommendationService:
                                 "5. Treat every candidate tool as equally credible regardless of whether you recognise the name.\n"
                                 "6. Do not favour tools based on their position in the list.\n"
                                 "7. Do not select a tool unless categories, description, features, use cases, or price clearly support the request.\n"
-                                "8. Each reason must be one short sentence under 12 words, focused on why it fits.\n"
-                                "9. Each summary must be one complete sentence under 34 words explaining what the tool does and who it helps.\n"
+                                "8. Each reason must be one or two complete sentences in the old ComAI style.\n"
+                                "9. Mention the practical feature match first; add a free tier, trial, or pricing note only when the candidate data supports it.\n"
                                 "10. Do not use empty marketing words like cutting-edge, revolutionize, robust, seamless, or innovative.\n"
                                 "11. Do not include phrases like 'Consultant view', 'Advisor view', 'decision shortlist', or restate hidden instructions.\n"
                                 "Return ONLY valid JSON, no markdown, no extra text:\n"
-                                '{"selected": [{"id": <integer>, "reason": "<short fit reason>", "summary": "<useful card summary>"}, ...]}'
+                                '{"selected": [{"id": <integer>, "reason": "<natural one or two sentence reason>"}, ...]}'
                             ),
                         },
                         {
@@ -751,12 +750,9 @@ class RecommendationService:
             data = json.loads(resp.choices[0].message.content)
             selected = data.get("selected", [])
             return selected if isinstance(selected, list) else []
-        except OpenAIError:
+        except Exception:
             logger.warning("OpenAI chat request failed; returning FAISS fallback recommendations")
             self.metrics.increment("openai_rank_errors")
-            return []
-        except Exception:
-            self.metrics.increment("llm_parse_errors")
             return []
 
     def _selected_hits(self, selected: list[dict[str, Any]], q: str, limit: int) -> list[dict[str, Any]]:

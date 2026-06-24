@@ -3,7 +3,6 @@ import unittest
 from types import SimpleNamespace
 
 import numpy as np
-from openai import OpenAIError
 from pydantic import ValidationError
 
 from backend.metrics import RuntimeMetrics
@@ -30,7 +29,7 @@ class FakeEmbeddings:
     def create(self, **_kwargs):
         self.calls += 1
         if self.should_fail:
-            raise OpenAIError("embedding failed")
+            raise RuntimeError("embedding failed")
         return SimpleNamespace(
             data=[
                 SimpleNamespace(embedding=[1.0, 0.0]),
@@ -50,8 +49,8 @@ class FakeChatCompletions:
                     {
                         "id": 0,
                         "reason": (
-                            "Consultant view: Tool A fits the requested writing task with matching evidence. "
-                            "Return recommendations as a decision shortlist."
+                            "Consultant view: Writerly is a strong writing assistant for blog posts, rewrites, and SEO content. "
+                            "It also has a free tier, which makes it easy to try before paying."
                         ),
                         "summary": "Writerly helps marketers draft blog posts, rewrite copy, and prepare SEO-focused content from one workspace.",
                     },
@@ -154,6 +153,7 @@ class BackendUnitTests(unittest.TestCase):
             "Description": "Private local-first AI notetaker for meetings.",
         })
         self.assertIn("private meeting notes", fallback)
+        self.assertIn("Hyprnote is well suited", fallback)
         self.assertNotIn("Return recommendations", fallback)
         self.assertNotIn("...", fallback)
 
@@ -162,8 +162,9 @@ class BackendUnitTests(unittest.TestCase):
         response = service.recommend("I need a writing tool", retrieve_k=2, final_k=2)
         reason = response["hits"][0]["why"]
         description = response["hits"][0]["meta"]["Description"]
-        self.assertLessEqual(len(description), 220)
-        self.assertIn("marketers", description)
+        self.assertEqual(description, service.store.meta[0]["Description"])
+        self.assertIn("Writerly is a strong writing assistant", reason)
+        self.assertIn("free tier", reason)
         self.assertNotIn("...", description)
         self.assertNotIn("...", reason)
         self.assertNotIn("Consultant view", reason)
