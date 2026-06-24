@@ -1,7 +1,8 @@
+import os
 import requests
 
 
-API = "https://comai-recommender-1.onrender.com"
+API = os.getenv("API_BASE_URL", "http://localhost:10000").rstrip("/")
 
 # Verifies that the system is running and has at least 1 tool
 

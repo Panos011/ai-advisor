@@ -1,11 +1,12 @@
 import requests
 import json
+import os
 import time
 from openai import OpenAI
 from dotenv import load_dotenv
 load_dotenv()
 
-API = "https://comai-recommender-1.onrender.com"
+API = os.getenv("API_BASE_URL", "http://localhost:10000").rstrip("/")
 client = OpenAI()
 
 QUERIES = [
@@ -29,14 +30,14 @@ GPT_SYSTEM = (
     "{\"recommendations\": [{\"name\": \"\", \"category\": \"\",\"description\": \"\", \"price\": \"\", \"reason\": \"\"}]}"
 )
 
-comai_results = {}
+advisor_results = {}
 gpt_results = {}
 latencies = {}
 
 for q in QUERIES:
     print(f"\nQuery: {q[:60]}")
 
-    # ── ComAI ──
+    # AI Advisor
     try:
         start = time.time()
         r = requests.post(
@@ -44,9 +45,9 @@ for q in QUERIES:
             json={"q": q, "retrieve_k": 30, "final_k": 5},
             timeout=60
         )
-        comai_time = round(time.time() - start, 2)
+        advisor_time = round(time.time() - start, 2)
         hits = r.json().get("hits", [])
-        comai_results[q] = [
+        advisor_results[q] = [
             {
                 "name": h["meta"].get("Name", ""),
                 "categories": h["meta"].get("Categories", ""),
@@ -56,11 +57,11 @@ for q in QUERIES:
             }
             for h in hits
         ]
-        print(f"  ComAI: {len(hits)} results in {comai_time}s")
+        print(f"  AI Advisor: {len(hits)} results in {advisor_time}s")
     except Exception as e:
-        print(f"  ComAI error: {e}")
-        comai_results[q] = []
-        comai_time = None
+        print(f"  AI Advisor error: {e}")
+        advisor_results[q] = []
+        advisor_time = None
 
     time.sleep(2)
 
@@ -84,10 +85,10 @@ for q in QUERIES:
         gpt_results[q] = []
         gpt_time = None
 
-    latencies[q] = {"comai": comai_time, "gpt": gpt_time}
+    latencies[q] = {"advisor": advisor_time, "gpt": gpt_time}
     time.sleep(1)
 
-json.dump(comai_results, open("comai_results.json", "w"), indent=2)
+json.dump(advisor_results, open("advisor_results.json", "w"), indent=2)
 json.dump(gpt_results, open("gpt_results.json", "w"), indent=2)
 json.dump(latencies, open("latencies.json", "w"), indent=2)
-print("\nDone. Saved comai_results.json, gpt_results.json, latencies.json")
+print("\nDone. Saved advisor_results.json, gpt_results.json, latencies.json")

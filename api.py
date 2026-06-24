@@ -112,6 +112,37 @@ def meta_text(meta: dict) -> str:
     return " ".join(str(meta.get(field, "")) for field in fields).lower()
 
 
+def local_reason(q: str, meta: dict) -> str:
+    terms = query_terms(q)
+    name = str(meta.get("Name", "This tool")).strip() or "This tool"
+    categories = [c.strip() for c in re.split(r"[|,/]", str(meta.get("Categories", ""))) if c.strip()]
+    text = meta_text(meta)
+    matched_terms = []
+    for term in terms:
+        if term in text and term not in matched_terms:
+            matched_terms.append(term)
+        if len(matched_terms) >= 3:
+            break
+
+    if categories and matched_terms:
+        return (
+            f"{name} matches your request because it is listed under "
+            f"{', '.join(categories[:3])} and its description mentions "
+            f"{', '.join(matched_terms)}."
+        )
+    if categories:
+        return (
+            f"{name} matches your request because its catalogue categories are "
+            f"{', '.join(categories[:3])}."
+        )
+    if matched_terms:
+        return (
+            f"{name} matches your request because its description mentions "
+            f"{', '.join(matched_terms)}."
+        )
+    return f"{name} is one of the closest catalogue matches for your request."
+
+
 def keyword_search(q: str, k: int) -> list[SearchHit]:
     terms = query_terms(q)
     if not terms:
@@ -147,7 +178,7 @@ def keyword_search(q: str, k: int) -> list[SearchHit]:
         {
             "score": float(score),
             "meta": META[idx],
-            "why": "Recommended from local tool categories and descriptions.",
+            "why": local_reason(q, META[idx]),
         }
         for score, idx in scored[:k]
     ]
@@ -326,7 +357,7 @@ def recommend(body: RecommendRequest):
     # fallback if LLM fails: just take top k
     if not final_hits:
         top = [(i, s) for i, s in zip(ids[0].tolist(), scores[0].tolist()) if i != -1]
-        final_hits = [{"score": float(s), "meta": META[i], "why": None}
+        final_hits = [{"score": float(s), "meta": META[i], "why": local_reason(q, META[i])}
                       for i, s in top[:body.final_k]]
 
     return {"hits": final_hits}

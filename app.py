@@ -5,10 +5,10 @@ import requests
 import streamlit as st
 
 
-API_BASE = os.getenv("API_BASE_URL", "https://comai-recommender-1.onrender.com")
+API_BASE = os.getenv("API_BASE_URL", "").rstrip("/")
 
 st.set_page_config(
-    page_title="ComAI Recommender",
+    page_title="AI Tool Advisor",
     page_icon="",
     layout="wide"
 )
@@ -80,6 +80,8 @@ def throttle():
 
 
 def warm_up():
+    if not API_BASE:
+        return
     url = f"{API_BASE}/health"
     for attempt in range(2):
         try:
@@ -145,6 +147,8 @@ FINAL_K = 5
 
 
 def clarify_api(q):
+    if not API_BASE:
+        return {"action": "search", "refined_query": q}
     try:
         for attempt in range(3):
             throttle()
@@ -160,6 +164,8 @@ def clarify_api(q):
 
 
 def recommend_api(q, retrieve_k=30, final_k=5):
+    if not API_BASE:
+        raise RuntimeError("API_BASE_URL is not configured")
     throttle()
     r = requests.post(
         f"{API_BASE}/recommend",
@@ -171,7 +177,7 @@ def recommend_api(q, retrieve_k=30, final_k=5):
 
 
 def detect_intent(prompt, last_query):
-    if not last_query:
+    if not last_query or not API_BASE:
         return "new"
     try:
         throttle()
@@ -188,6 +194,8 @@ def detect_intent(prompt, last_query):
 
 @st.cache_data(ttl=3600)
 def get_toolcount():
+    if not API_BASE:
+        return None
     url = f"{API_BASE}/health"
     for attempt in range(3):
         try:
@@ -225,7 +233,7 @@ if st.sidebar.button("Clear Saved Tools"):
 
 
 # Main Layout
-st.title("ComAI Recommender")
+st.title("AI Tool Advisor")
 prompt = st.chat_input("What tool do you need?")
 st.caption(f"Find the right AI tool in seconds — searching across {count_label} tools")
 left = st.container()
