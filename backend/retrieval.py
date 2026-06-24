@@ -17,7 +17,7 @@ from backend.settings import Settings
 logger = logging.getLogger(__name__)
 
 MAX_REASON_CHARS = 320
-TEXT_FORMAT_VERSION = "display-v5"
+TEXT_FORMAT_VERSION = "display-v6"
 
 
 @dataclass
@@ -426,6 +426,24 @@ def keyword_search(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[dict
     ]
 
 
+def recommendation_message(hits: list[dict[str, Any]]) -> str:
+    names = [
+        str((hit.get("meta") or {}).get("Name", "")).strip()
+        for hit in hits
+        if (hit.get("meta") or {}).get("Name")
+    ]
+    names = [name for name in names if name]
+    if not names:
+        return "I could not find a strong match. Try adding the task, budget, and any must-have integrations."
+
+    first = names[0]
+    if len(names) == 1:
+        return f"Start with {first}. It looks like the strongest match from the current catalogue."
+
+    second = names[1]
+    return f"Start with {first}. Compare it with {second} if you want another good option."
+
+
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     dot = np.dot(a, b)
     norm = np.linalg.norm(a) * np.linalg.norm(b)
@@ -548,7 +566,7 @@ class RecommendationService:
         cached = self.recommend_cache.get(cache_key)
         if cached is not None:
             self.metrics.increment("recommend_cache_hit")
-            return {"hits": cached}
+            return {"hits": cached, "message": recommendation_message(cached)}
 
         try:
             vec = self.embed([q])
@@ -564,14 +582,14 @@ class RecommendationService:
             if not hits:
                 hits = keyword_search(q, final_k, self.store.meta)
             self.recommend_cache.set(cache_key, hits)
-            return {"hits": hits}
+            return {"hits": hits, "message": recommendation_message(hits)}
 
         with self.metrics.timer("faiss.recommend_search_ms"):
             scores, ids = self.store.index.search(vec, min(retrieve_k, len(self.store.meta)))
 
         candidates = self._build_candidates(scores[0].tolist(), ids[0].tolist())
         if not candidates:
-            return {"hits": []}
+            return {"hits": [], "message": recommendation_message([])}
 
         candidate_embeddings = self._candidate_embeddings([int(c["id"]) for c in candidates])
         with self.metrics.timer("rerank.mmr_ms"):
@@ -598,7 +616,7 @@ class RecommendationService:
             self.metrics.increment("llm_rank_fallbacks")
 
         self.recommend_cache.set(cache_key, final_hits)
-        return {"hits": final_hits}
+        return {"hits": final_hits, "message": recommendation_message(final_hits)}
 
     def clarify(self, q: str) -> dict[str, Any]:
         system = (

@@ -132,6 +132,9 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(client.embeddings.calls, 1)
         self.assertEqual(client.chat.completions.calls, 1)
+        self.assertIn("Start with", first["message"])
+        self.assertNotIn("Consultant view", first["message"])
+        self.assertNotIn("Advisor view", first["message"])
 
     def test_reasons_do_not_expose_consultant_view_or_prompt_text(self):
         query = (

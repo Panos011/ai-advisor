@@ -173,7 +173,8 @@ def recommend_api(q, retrieve_k=30, final_k=5):
         timeout=60
     )
     r.raise_for_status()
-    return r.json().get("hits", [])
+    data = r.json()
+    return data.get("hits", []), data.get("message")
 
 
 def detect_intent(prompt, last_query):
@@ -309,8 +310,9 @@ with left:
                 refined = decision.get("refined_query") or combined
 
             err = None
+            result_message = None
             try:
-                hits = recommend_api(refined, retrieve_k=RETRIEVAL_K, final_k=FINAL_K)
+                hits, result_message = recommend_api(refined, retrieve_k=RETRIEVAL_K, final_k=FINAL_K)
             except Exception as e:
                 hits = []
                 err = str(e)
@@ -345,7 +347,7 @@ with left:
                     st.session_state.results_history.append(filtered)
                     st.session_state.messages.append({
                         "role": "assistant",
-                        "content": f"Returned {len(filtered)} tools",
+                        "content": result_message or f"Returned {len(filtered)} tools",
                         "type": "results",
                         "result_index": len(st.session_state.results_history) - 1
                     })

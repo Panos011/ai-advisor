@@ -69,6 +69,7 @@ class SearchHit(BaseModel):
 
 class RecommendResponse(BaseModel):
     hits: list[SearchHit]
+    message: str | None = None
 
 
 class SearchResponse(BaseModel):
@@ -88,4 +89,3 @@ class ClarifyResponse(BaseModel):
     action: Literal["clarify", "search"]
     question: str | None = None
     refined_query: str | None = None
-
