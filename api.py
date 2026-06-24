@@ -138,35 +138,68 @@ def off_topic_for_query(q: str, categories: str) -> bool:
     return False
 
 
-def local_reason(q: str, meta: dict) -> str:
-    terms = query_terms(q)
-    name = str(meta.get("Name", "This tool")).strip() or "This tool"
-    categories = [c.strip() for c in re.split(r"[|,/]", str(meta.get("Categories", ""))) if c.strip()]
-    text_tokens = set(tokens(meta_text(meta)))
-    matched_terms = []
-    for term in terms:
-        if term in text_tokens and term not in matched_terms:
-            matched_terms.append(term)
-        if len(matched_terms) >= 3:
-            break
+def request_goal(q: str) -> str:
+    text = q.lower()
+    if is_writing_query(q):
+        if "blog" in text or "article" in text:
+            return "writing blog posts"
+        if "social" in text or "post" in text:
+            return "creating social media posts"
+        return "writing content"
+    if "transcrib" in text or "audio" in text:
+        return "transcribing audio"
+    if "image" in text:
+        return "generating images"
+    if "presentation" in text or "slides" in text:
+        return "creating presentations"
+    if "code" in text or "debug" in text or "python" in text:
+        return "coding and debugging"
+    if "research" in text or "competitor" in text:
+        return "researching information"
+    return q.strip().rstrip(".") or "your task"
 
-    if categories and matched_terms:
-        return (
-            f"{name} matches your request because it is listed under "
-            f"{', '.join(categories[:3])} and its description mentions "
-            f"{', '.join(matched_terms)}."
-        )
-    if categories:
-        return (
-            f"{name} matches your request because its catalogue categories are "
-            f"{', '.join(categories[:3])}."
-        )
-    if matched_terms:
-        return (
-            f"{name} matches your request because its description mentions "
-            f"{', '.join(matched_terms)}."
-        )
-    return f"{name} is one of the closest catalogue matches for your request."
+
+def evidence_fragments(value: str) -> list[str]:
+    raw_parts = re.split(r"(?<=[.!?])\s+|\|", str(value or ""))
+    fragments = []
+    for part in raw_parts:
+        fragment = " ".join(part.strip().rstrip(".!?").split())
+        if 6 <= len(fragment.split()) <= 28:
+            fragments.append(fragment)
+    return fragments
+
+
+def best_evidence(q: str, meta: dict) -> str:
+    terms = set(query_terms(q))
+    fragments = []
+    for field in ("Features", "Pros", "Description"):
+        fragments.extend(evidence_fragments(str(meta.get(field, ""))))
+
+    if not fragments:
+        return ""
+
+    def score(fragment: str) -> int:
+        fragment_tokens = set(tokens(fragment))
+        return len(terms & fragment_tokens)
+
+    best = max(fragments, key=score)
+    return best if score(best) > 0 else fragments[0]
+
+
+def local_reason(q: str, meta: dict) -> str:
+    name = str(meta.get("Name", "This tool")).strip() or "This tool"
+    goal = request_goal(q)
+    evidence = best_evidence(q, meta)
+    price = str(meta.get("Price", "")).lower()
+
+    if evidence:
+        reason = f"{name} is a good fit for {goal}: {evidence}."
+    else:
+        reason = f"{name} is one of the closest matches for {goal} based on its tool description."
+
+    if "free" in price:
+        reason += " It also has a free option or trial, so you can test it before committing."
+    return reason
 
 
 def keyword_search(q: str, k: int) -> list[SearchHit]:
@@ -360,6 +393,8 @@ def recommend(body: RecommendRequest):
                         "6. Do not favour tools based on their position in the list. A tool at at the last place is as valid as the tool in the first place\n"
                         "7. Do not select a tool unless its categories, description, features, or price clearly support the user's request.\n"
                         "8. Each reason must explicitly mention the user's requested task and the tool evidence that matches it.\n"
+                        "9. Do not write reasons that only say the tool is in the same category or mentions the same keywords.\n"
+                        "10. Explain the practical benefit: what the user can do with this tool and why that solves their request.\n"
                         "Return ONLY valid JSON, no markdown, no extra text:\n"
                         '{"selected": [{"id": <integer>, "reason": "<two sentences why this fits>"}, ...]}'
                     )
