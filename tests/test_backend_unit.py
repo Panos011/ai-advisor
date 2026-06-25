@@ -12,6 +12,8 @@ from backend.retrieval import (
     ToolStore,
     build_retrieval_query,
     clean_best_for,
+    focus_latest_intent,
+    has_explicit_task,
     is_free_tool,
     local_reason,
     merge_history_messages,
@@ -345,6 +347,48 @@ class BackendUnitTests(unittest.TestCase):
         roles = [turn["role"] for turn in stored]
         self.assertIn("user", roles)
         self.assertIn("assistant", roles)
+
+    def test_focus_latest_intent_follows_pivot(self):
+        focused = focus_latest_intent(
+            "I need a tool for blog posts. Actually I only need a good AI coding tool"
+        )
+        self.assertNotIn("blog", focused.lower())
+        self.assertIn("coding", focused.lower())
+        # No pivot marker leaves the message unchanged.
+        self.assertEqual(focus_latest_intent("I need a writing tool"), "I need a writing tool")
+
+    def test_pivot_does_not_inherit_previous_topic(self):
+        service = make_service()
+        # Previous turn establishes a writing topic in the conversation memory.
+        service.recommend("I need a tool for writing blog posts", retrieve_k=2, final_k=2, conversation_id="c2")
+        # The user pivots to coding; the goal must not stay on blog/writing.
+        response = service.recommend(
+            "Actually I only need a good AI coding tool",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="c2",
+        )
+        best_for = " ".join(hit.get("best_for", "") for hit in response["hits"]).lower()
+        self.assertNotIn("blog", best_for)
+
+    def test_has_explicit_task_distinguishes_tasks_from_filters(self):
+        self.assertTrue(has_explicit_task("I only need a good AI coding tool"))
+        self.assertTrue(has_explicit_task("I need a writing tool"))
+        self.assertFalse(has_explicit_task("free only"))
+        self.assertFalse(has_explicit_task("show me cheaper options"))
+
+    def test_explicit_new_task_is_classified_as_new_intent(self):
+        service = make_service()
+        intent = service.detect_intent(
+            "Actually I only need a good AI coding tool",
+            "I need a tool for writing blog posts",
+        )
+        self.assertEqual(intent["intent"], "new")
+
+    def test_refinement_without_task_still_refines(self):
+        service = make_service()
+        intent = service.detect_intent("free only", "I need a writing tool")
+        self.assertEqual(intent["intent"], "refine")
 
 
 if __name__ == "__main__":

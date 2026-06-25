@@ -480,6 +480,37 @@ def is_chatbot_query(q: str) -> bool:
     return bool(re.search(r"\b(chatbot|chat\s?bot|conversational|virtual\s+assistant|support\s+bot|dialogue|dialog)\b", q.lower()))
 
 
+# Phrases that signal the user is overriding the previous topic, not refining it.
+PIVOT_MARKERS = (
+    "actually", "instead", "never mind", "nevermind", "forget that",
+    "forget about", "scratch that", "on second thought", "second thoughts",
+    "changed my mind", "change of plan", "in fact", "i only need",
+    "i just need", "all i need", "all i really need", "what i actually need",
+    "let's focus on", "lets focus on", "i really need", "rather than",
+)
+
+
+def focus_latest_intent(q: str) -> str:
+    """Return the most recent intent when the message overrides an earlier topic.
+
+    Keeps the text from the last override marker onward so a pivot like
+    "... Actually I only need a coding tool" is not polluted by the old topic.
+    """
+    text = normalize_query_text(q)
+    if not text:
+        return text
+    lowered = text.lower()
+    best_pos = -1
+    for marker in PIVOT_MARKERS:
+        idx = lowered.rfind(marker)
+        if idx > best_pos:
+            best_pos = idx
+    if best_pos <= 0:
+        return text
+    focused = text[best_pos:].strip(" ,.;:-")
+    return focused or text
+
+
 # Categories that are almost never the right answer for a coding or chatbot build.
 _DEV_OFF_TOPIC_CATEGORIES = (
     "website builders", "website builder", "image generators", "image generator",
@@ -602,6 +633,21 @@ def request_goal(q: str) -> str:
     if "research" in text or "competitor" in text:
         return "researching information"
     return shorten_goal_text(cleaned)
+
+
+# Specific goals produced by request_goal (i.e. a recognised, self-sufficient task).
+KNOWN_SPECIFIC_GOALS = frozenset({
+    "building a chatbot", "private meeting notes", "meeting notes and summaries",
+    "essay writing", "writing blog posts", "creating social media posts",
+    "writing content", "transcribing audio", "generating images", "creating videos",
+    "creating presentations", "coding and development", "automating workflows",
+    "researching information",
+})
+
+
+def has_explicit_task(text: str) -> bool:
+    """True when the message names a concrete task on its own (not just a filter)."""
+    return request_goal(text) in KNOWN_SPECIFIC_GOALS
 
 
 def evidence_fragments(value: str) -> list[str]:
@@ -1078,10 +1124,15 @@ class RecommendationService:
                 "message": "I can explain the current shortlist after a search, but I need the previous results to do that.",
             }
         q = strip_instruction_text(q)
+        # If the user pivots ("Actually I only need ..."), follow the latest intent.
+        q = focus_latest_intent(q)
 
-        # Pull recent task context so follow-up messages behave like a real conversation.
+        # Pull recent task context so follow-up messages behave like a real conversation,
+        # but never drag an old topic into a message that already states its own task.
         stored = self.conversations.get(conversation_id)
         prior_messages = merge_history_messages(history, stored)
+        if has_explicit_task(q):
+            prior_messages = []
         retrieval_query = build_retrieval_query(q, prior_messages)
         self.conversations.append(conversation_id, "user", q)
 
@@ -1209,9 +1260,12 @@ class RecommendationService:
         if is_explanation_query(q):
             return {"action": "explain"}
         q = strip_instruction_text(q)
+        q = focus_latest_intent(q)
 
         stored = self.conversations.get(conversation_id)
         prior_messages = merge_history_messages(history, stored)
+        if has_explicit_task(q):
+            prior_messages = []
         context_query = build_retrieval_query(q, prior_messages)
 
         # With prior task context, a short follow-up no longer needs clarification.
@@ -1277,6 +1331,14 @@ class RecommendationService:
 
         if has_context and is_explanation_query(prompt):
             return {"intent": "explain"}
+
+        # An explicit pivot or a message that states its own task is a NEW search,
+        # so the client should not prepend the previous query to it.
+        focused = focus_latest_intent(strip_instruction_text(prompt))
+        pivoted = focused.lower() != normalize_query_text(prompt).lower()
+        if pivoted or has_explicit_task(focused):
+            return {"intent": "new"}
+
         if has_context and is_refinement_query(prompt):
             return {"intent": "refine"}
 
