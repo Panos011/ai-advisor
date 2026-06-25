@@ -101,14 +101,25 @@ def recommend(body: RecommendRequest, request: Request):
         body.final_k,
         filters=getattr(body, "filters", None),
         mode=getattr(body, "mode", "balanced"),
+        conversation_id=getattr(body, "conversation_id", None),
+        history=getattr(body, "history", None),
     )
 
 
 @app.post("/clarify", response_model=ClarifyResponse)
 def clarify(body: ClarifyRequest, request: Request):
-    return service(request).clarify(body.q)
+    return service(request).clarify(
+        body.q,
+        conversation_id=getattr(body, "conversation_id", None),
+        history=getattr(body, "history", None),
+    )
 
 
 @app.post("/detect_intent", response_model=IntentResponse)
 def detect_intent(body: IntentRequest, request: Request):
-    return service(request).detect_intent(body.prompt, body.last_query)
+    return service(request).detect_intent(
+        body.prompt,
+        body.last_query,
+        conversation_id=getattr(body, "conversation_id", None),
+        history=getattr(body, "history", None),
+    )

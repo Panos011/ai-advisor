@@ -6,7 +6,20 @@ import numpy as np
 from pydantic import ValidationError
 
 from backend.metrics import RuntimeMetrics
-from backend.retrieval import RecommendationService, ToolStore, is_free_tool, local_reason, sanitize_reason
+from backend.retrieval import (
+    ConversationStore,
+    RecommendationService,
+    ToolStore,
+    build_retrieval_query,
+    clean_best_for,
+    is_free_tool,
+    local_reason,
+    merge_history_messages,
+    normalize_mode,
+    recommendation_message,
+    request_goal,
+    sanitize_reason,
+)
 from backend.schemas import RecommendRequest, SearchRequest
 from backend.settings import Settings
 
@@ -253,6 +266,85 @@ class BackendUnitTests(unittest.TestCase):
         original = service.store.meta[0]["Description"]
         response = service.search("writing", k=1)
         self.assertEqual(response["hits"][0]["meta"]["Description"], original)
+
+    def test_normalize_mode_maps_ui_labels(self):
+        self.assertEqual(normalize_mode("balanced"), "best_fit")
+        self.assertEqual(normalize_mode("Best Fit"), "best_fit")
+        self.assertEqual(normalize_mode("One best"), "one_best")
+        self.assertEqual(normalize_mode("compare"), "compare")
+        self.assertEqual(normalize_mode("nonsense"), "best_fit")
+
+    def test_request_goal_handles_chatbot_and_coding(self):
+        self.assertEqual(request_goal("I am creating a chatbot so I need the best AI tool"), "building a chatbot")
+        self.assertEqual(request_goal("I need a coding tool"), "coding and development")
+
+    def test_clean_best_for_rejects_query_echo(self):
+        meta = {"Name": "DevTool", "Categories": "developer tools"}
+        query = "I need a coding tool to build a chatbot"
+        echoed = clean_best_for(query, query, meta)
+        self.assertNotEqual(echoed.lower(), query.lower())
+        self.assertIn("using", echoed)
+
+        short = clean_best_for("Building customer support chatbots", query, meta)
+        self.assertEqual(short, "Building customer support chatbots")
+
+    def test_recommendation_message_is_mode_aware(self):
+        hits = [
+            {"meta": {"Name": "Alpha"}},
+            {"meta": {"Name": "Beta"}},
+        ]
+        best_fit = recommendation_message(hits, "I need a coding tool", "balanced")
+        self.assertIn("Start with", best_fit)
+
+        one_best = recommendation_message(hits, "I need a coding tool", "one_best")
+        self.assertIn("top pick", one_best)
+
+        compare = recommendation_message(hits, "I need a coding tool", "compare")
+        self.assertIn("comparison", compare.lower())
+        self.assertIn("Alpha", compare)
+        self.assertIn("Beta", compare)
+
+    def test_one_best_mode_returns_single_hit(self):
+        service = make_service()
+        response = service.recommend("I need a writing tool", retrieve_k=2, final_k=2, mode="one_best")
+        self.assertEqual(len(response["hits"]), 1)
+        self.assertIn("top pick", response["message"])
+
+    def test_build_retrieval_query_merges_context_without_duplicates(self):
+        query = build_retrieval_query(
+            "I am creating a chatbot",
+            ["I need a coding tool", "I am creating a chatbot"],
+        )
+        self.assertTrue(query.startswith("I need a coding tool"))
+        self.assertTrue(query.endswith("I am creating a chatbot"))
+        self.assertEqual(query.lower().count("chatbot"), 1)
+
+    def test_merge_history_messages_keeps_user_turns_only(self):
+        history = [
+            {"role": "user", "content": "I need a coding tool"},
+            {"role": "assistant", "content": "Start with X"},
+            {"role": "user", "content": "for a chatbot"},
+        ]
+        messages = merge_history_messages(history)
+        self.assertEqual(messages, ["I need a coding tool", "for a chatbot"])
+
+    def test_conversation_store_caps_turns_and_scopes_by_id(self):
+        store = ConversationStore(max_conversations=4, ttl_seconds=60, max_turns=2)
+        store.append("c1", "user", "one")
+        store.append("c1", "user", "two")
+        store.append("c1", "user", "three")
+        turns = store.get("c1")
+        self.assertEqual([t["content"] for t in turns], ["two", "three"])
+        self.assertEqual(store.get("other"), [])
+        self.assertEqual(store.get(None), [])
+
+    def test_conversation_context_carries_task_across_turns(self):
+        service = make_service()
+        service.recommend("I need a writing tool", retrieve_k=2, final_k=2, conversation_id="c1")
+        stored = service.conversations.get("c1")
+        roles = [turn["role"] for turn in stored]
+        self.assertIn("user", roles)
+        self.assertIn("assistant", roles)
 
 
 if __name__ == "__main__":

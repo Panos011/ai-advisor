@@ -41,6 +41,36 @@ FREE_FILTER_WORDS = {
     "app", "apps", "said", "tier", "trial", "plan", "plans",
 }
 
+# Recommendation modes surfaced in the UI (Best fit / One best / Compare).
+MODE_BEST_FIT = "best_fit"
+MODE_ONE_BEST = "one_best"
+MODE_COMPARE = "compare"
+
+_MODE_ALIASES = {
+    "balanced": MODE_BEST_FIT,
+    "best_fit": MODE_BEST_FIT,
+    "best-fit": MODE_BEST_FIT,
+    "bestfit": MODE_BEST_FIT,
+    "best fit": MODE_BEST_FIT,
+    "shortlist": MODE_BEST_FIT,
+    "one_best": MODE_ONE_BEST,
+    "one-best": MODE_ONE_BEST,
+    "onebest": MODE_ONE_BEST,
+    "one best": MODE_ONE_BEST,
+    "best": MODE_ONE_BEST,
+    "winner": MODE_ONE_BEST,
+    "single": MODE_ONE_BEST,
+    "compare": MODE_COMPARE,
+    "comparison": MODE_COMPARE,
+    "side_by_side": MODE_COMPARE,
+    "side-by-side": MODE_COMPARE,
+}
+
+
+def normalize_mode(mode: Any) -> str:
+    key = " ".join(str(mode or "").split()).lower()
+    return _MODE_ALIASES.get(key, MODE_BEST_FIT)
+
 
 @dataclass
 class ToolStore:
@@ -97,6 +127,64 @@ def _extract_vectors_from_flat_index(index: Any, expected_rows: int) -> np.ndarr
         return None
     faiss.normalize_L2(vectors)
     return vectors
+
+
+class ConversationStore:
+    """In-memory, TTL-bounded store of recent chat turns keyed by conversation id."""
+
+    def __init__(self, max_conversations: int = 500, ttl_seconds: int = 3600, max_turns: int = 12) -> None:
+        self._cache: TTLCache[list[dict[str, str]]] = TTLCache(
+            max_entries=max_conversations,
+            ttl_seconds=ttl_seconds,
+        )
+        self.max_turns = max_turns
+
+    def get(self, conversation_id: str | None) -> list[dict[str, str]]:
+        if not conversation_id:
+            return []
+        return list(self._cache.get(conversation_id) or [])
+
+    def append(self, conversation_id: str | None, role: str, content: str) -> None:
+        if not conversation_id:
+            return
+        content = normalize_query_text(content)
+        if not content:
+            return
+        turns = list(self._cache.get(conversation_id) or [])
+        turns.append({"role": role, "content": content})
+        if len(turns) > self.max_turns:
+            turns = turns[-self.max_turns:]
+        self._cache.set(conversation_id, turns)
+
+
+def merge_history_messages(
+    history: Any,
+    stored: list[dict[str, str]] | None = None,
+    limit: int = 6,
+) -> list[str]:
+    """Return de-duplicated recent user messages from client history and server store."""
+    messages: list[str] = []
+    for source in (stored or [], history or []):
+        for item in source:
+            role = item.get("role") if isinstance(item, dict) else getattr(item, "role", "user")
+            content = item.get("content") if isinstance(item, dict) else getattr(item, "content", "")
+            if role != "user":
+                continue
+            cleaned = normalize_query_text(content)
+            if cleaned and cleaned not in messages:
+                messages.append(cleaned)
+    return messages[-limit:]
+
+
+def build_retrieval_query(current: str, prior_user_messages: list[str]) -> str:
+    """Combine the latest message with recent task context for retrieval/ranking."""
+    current_clean = normalize_query_text(current)
+    parts: list[str] = []
+    for message in prior_user_messages:
+        if message and message != current_clean and message not in parts:
+            parts.append(message)
+    parts.append(current_clean)
+    return " ".join(part for part in parts if part).strip()
 
 
 def normalize_query_text(value: Any) -> str:
@@ -313,6 +401,20 @@ def build_best_for(q: str, meta: dict[str, Any]) -> str:
     return goal.capitalize()
 
 
+def clean_best_for(value: Any, q: str, meta: dict[str, Any], max_words: int = 14) -> str:
+    """Use the model's best_for only when it is a short use case, not a query restatement."""
+    text = normalize_display_text(value)
+    if not text:
+        return build_best_for(q, meta)
+    query_clean = strip_instruction_text(q).lower()
+    lowered = text.lower()
+    if query_clean and (query_clean in lowered or lowered in query_clean):
+        return build_best_for(q, meta)
+    if len(text.split()) > max_words:
+        return build_best_for(q, meta)
+    return text
+
+
 def enrich_hit(hit: dict[str, Any], q: str) -> dict[str, Any]:
     meta = hit.get("meta") or {}
     score = float(hit.get("score", 0.0) or 0.0)
@@ -365,6 +467,29 @@ def token_count(items: list[str], term: str) -> int:
 
 def is_writing_query(q: str) -> bool:
     return bool(re.search(r"\b(writ|blog|article|post|copy|content)\w*\b", q.lower()))
+
+
+def is_coding_query(q: str) -> bool:
+    return bool(re.search(
+        r"\b(cod(?:e|ing)|develop(?:er|ment)?|program(?:ming)?|debug|python|javascript|typescript|api|sdk|software\s+development)\b",
+        q.lower(),
+    ))
+
+
+def is_chatbot_query(q: str) -> bool:
+    return bool(re.search(r"\b(chatbot|chat\s?bot|conversational|virtual\s+assistant|support\s+bot|dialogue|dialog)\b", q.lower()))
+
+
+# Categories that are almost never the right answer for a coding or chatbot build.
+_DEV_OFF_TOPIC_CATEGORIES = (
+    "website builders", "website builder", "image generators", "image generator",
+    "video generators", "video", "music", "fitness", "health", "dating", "travel",
+    "presentation", "social media", "logo",
+)
+_DEV_ON_TOPIC_CATEGORIES = (
+    "developer tools", "developer", "coding", "code", "api", "chatbot", "chatbots",
+    "ai chatbots", "automation", "no-code", "low-code", "productivity", "assistants",
+)
 
 
 def is_explanation_query(text: str) -> bool:
@@ -426,9 +551,30 @@ def off_topic_for_query(q: str, categories: str) -> bool:
     return False
 
 
+def shorten_goal_text(cleaned: str, max_words: int = 8) -> str:
+    """Trim a free-text goal to a short phrase, avoiding restating the whole query."""
+    text = cleaned.strip().rstrip(".")
+    if not text:
+        return "your task"
+    # Prefer the segment after a leading "I need / I want / looking for" lead-in.
+    lead = re.sub(
+        r"^(?:i\s+(?:need|want|am\s+looking\s+for|would\s+like)|looking\s+for|find|recommend|help\s+me\s+(?:find|with)|i'?m\s+(?:building|creating|making))\s+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
+    candidate = lead or text
+    words = candidate.split()
+    if len(words) > max_words:
+        candidate = " ".join(words[:max_words])
+    return candidate or "your task"
+
+
 def request_goal(q: str) -> str:
     cleaned = strip_instruction_text(q)
     text = cleaned.lower()
+    if any(term in text for term in ("chatbot", "chat bot", "conversational", "virtual assistant", "support bot")):
+        return "building a chatbot"
     if any(term in text for term in ("meeting", "meetings", "notetaker", "note taker", "notes")):
         if any(term in text for term in ("privacy", "private", "local", "self-hosted", "secure", "security")):
             return "private meeting notes"
@@ -445,13 +591,17 @@ def request_goal(q: str) -> str:
         return "transcribing audio"
     if "image" in text:
         return "generating images"
+    if any(term in text for term in ("video", "youtube")):
+        return "creating videos"
     if "presentation" in text or "slides" in text:
         return "creating presentations"
-    if "code" in text or "debug" in text or "python" in text:
-        return "coding and debugging"
+    if re.search(r"\b(cod(?:e|ing)|develop(?:er|ment)?|program(?:ming)?|debug|python|javascript|software)\b", text):
+        return "coding and development"
+    if any(term in text for term in ("automat", "workflow", "integrat")):
+        return "automating workflows"
     if "research" in text or "competitor" in text:
         return "researching information"
-    return cleaned.strip().rstrip(".") or "your task"
+    return shorten_goal_text(cleaned)
 
 
 def evidence_fragments(value: str) -> list[str]:
@@ -528,14 +678,24 @@ def practical_fit_detail(goal: str, meta: dict[str, Any]) -> str:
         if any(term in text for term in ("grammar", "style", "clarity", "readability")):
             return "it improves grammar, style, clarity, and readability"
         return "it has broad writing features for drafting and improving content"
+    if "building a chatbot" in goal:
+        if any(term in text for term in ("chatbot", "conversational", "assistant", "dialog", "dialogue", "bot")):
+            return "it provides chatbot or conversational assistant capabilities you can build on"
+        if any(term in text for term in ("api", "sdk", "llm", "language model", "nlp")):
+            return "it exposes language model or API features useful for building a chatbot"
+        return "its features align with building conversational chatbot experiences"
     if "transcribing audio" in goal:
         return "it is designed to convert audio into text or meeting notes"
     if "generating images" in goal:
         return "it generates images or visual assets from prompts"
+    if "creating videos" in goal:
+        return "it helps generate or edit video content"
     if "creating presentations" in goal:
         return "it helps create slides or presentation content faster"
-    if "coding and debugging" in goal:
+    if "coding and development" in goal:
         return "it assists with writing, completing, or debugging code"
+    if "automating workflows" in goal:
+        return "it automates tasks or connects apps into workflows"
     if "researching information" in goal:
         return "it supports research, analysis, or information gathering"
 
@@ -707,6 +867,11 @@ def keyword_scores(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[tupl
         if is_writing_query(q):
             if any(term in category_items for term in ("writing", "copywriting", "seo", "marketing")):
                 score += 10.0
+        elif is_coding_query(q) or is_chatbot_query(q):
+            if any(cat in categories for cat in _DEV_ON_TOPIC_CATEGORIES):
+                score += 10.0
+            if any(cat in categories for cat in _DEV_OFF_TOPIC_CATEGORIES):
+                score -= 10.0
         elif any(term in terms for term in ("business", "marketing", "competitor", "social", "seo")):
             if any(term in categories for term in ("fitness", "health", "fun tools", "dating")):
                 score -= 8.0
@@ -729,7 +894,8 @@ def keyword_search(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[dict
     ]
 
 
-def recommendation_message(hits: list[dict[str, Any]], query: str = "") -> str:
+def recommendation_message(hits: list[dict[str, Any]], query: str = "", mode: str = "balanced") -> str:
+    mode = normalize_mode(mode)
     names = [
         str((hit.get("meta") or {}).get("Name", "")).strip()
         for hit in hits
@@ -741,7 +907,18 @@ def recommendation_message(hits: list[dict[str, Any]], query: str = "") -> str:
             return "I could not find a strong free match. Try changing the task or allowing free trials and freemium plans."
         return "I could not find a strong match. Try adding the task, budget, and any must-have integrations."
 
+    goal = request_goal(query)
     first = names[0]
+
+    if mode == MODE_ONE_BEST:
+        return f"My top pick for {goal} is {first}. It is the closest single match in the current catalogue."
+
+    if mode == MODE_COMPARE:
+        if len(names) >= 2:
+            listed = human_join(names[: min(3, len(names))])
+            return f"Here is a side-by-side comparison for {goal}: {listed}. Check the fit and tradeoff notes on each card."
+        return f"I only found {first} as a clear match for {goal}, so there is little to compare yet."
+
     if len(names) == 1:
         return f"Start with {first}. It looks like the strongest match from the current catalogue."
 
@@ -820,6 +997,10 @@ class RecommendationService:
             max_entries=settings.cache_max_entries,
             ttl_seconds=settings.cache_ttl_seconds,
         )
+        self.conversations = ConversationStore(
+            max_conversations=settings.cache_max_entries,
+            ttl_seconds=settings.cache_ttl_seconds,
+        )
 
     def health(self) -> dict[str, Any]:
         return {
@@ -879,8 +1060,11 @@ class RecommendationService:
         final_k: int,
         filters: Any = None,
         mode: str = "balanced",
+        conversation_id: str | None = None,
+        history: Any = None,
     ) -> dict[str, Any]:
         self.metrics.increment("recommend_requests")
+        mode = normalize_mode(mode)
         if is_feedback_only_query(q):
             self.metrics.increment("recommend_feedback_query_blocked")
             return {
@@ -894,61 +1078,81 @@ class RecommendationService:
                 "message": "I can explain the current shortlist after a search, but I need the previous results to do that.",
             }
         q = strip_instruction_text(q)
-        if requires_free_only(q) and not non_filter_terms(q):
+
+        # Pull recent task context so follow-up messages behave like a real conversation.
+        stored = self.conversations.get(conversation_id)
+        prior_messages = merge_history_messages(history, stored)
+        retrieval_query = build_retrieval_query(q, prior_messages)
+        self.conversations.append(conversation_id, "user", q)
+
+        if requires_free_only(retrieval_query) and not non_filter_terms(retrieval_query):
             self.metrics.increment("recommend_free_query_missing_task")
             return {
                 "hits": [],
                 "message": "What task should the free tool help with?",
             }
-        if not query_terms(q):
+        if not query_terms(retrieval_query):
             self.metrics.increment("recommend_empty_query_blocked")
             return {
                 "hits": [],
                 "message": "Tell me the task, budget, or must-have integrations and I will search for better matches.",
             }
-        free_only = requires_free_only(q)
+        free_only = requires_free_only(retrieval_query)
         if free_only and filters is None:
             filters = {"budget": "free"}
 
+        effective_final_k = final_k
+        if mode == MODE_ONE_BEST:
+            effective_final_k = 1
+        elif mode == MODE_COMPARE:
+            effective_final_k = min(max(final_k, 3), 10)
+
         filter_key = json.dumps(filters.model_dump() if hasattr(filters, "model_dump") else (filters or {}), sort_keys=True)
-        cache_key = f"{TEXT_FORMAT_VERSION}:{self.settings.emb_model}:{self.settings.chat_model}:{retrieve_k}:{final_k}:{mode}:{filter_key}:{q}"
+        cache_key = (
+            f"{TEXT_FORMAT_VERSION}:{self.settings.emb_model}:{self.settings.chat_model}:"
+            f"{retrieve_k}:{effective_final_k}:{mode}:{filter_key}:{retrieval_query}"
+        )
         cached = self.recommend_cache.get(cache_key)
         if cached is not None:
             self.metrics.increment("recommend_cache_hit")
-            return {"hits": cached, "message": recommendation_message(cached, q)}
+            message = recommendation_message(cached, q, mode)
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"hits": cached, "message": message}
 
         try:
-            vec = self.embed([q])
+            vec = self.embed([retrieval_query])
         except Exception as exc:
             logger.info("Embedding unavailable; served keyword recommendation fallback (%s)", type(exc).__name__)
             self.metrics.increment("embedding_fallbacks")
             candidates = [
                 self._candidate_for_id(idx, score)
-                for score, idx in keyword_scores(q, min(retrieve_k, len(self.store.meta)), self.store.meta)
+                for score, idx in keyword_scores(retrieval_query, min(retrieve_k, len(self.store.meta)), self.store.meta)
             ]
             filtered_candidates = apply_decision_filters(candidates, filters, self.store.meta)
-            if len(filtered_candidates) >= final_k:
+            if len(filtered_candidates) >= effective_final_k:
                 candidates = filtered_candidates
-            selected = self._rank_with_llm(q, candidates, final_k, mode=mode) if candidates else []
+            selected = self._rank_with_llm(retrieval_query, candidates, effective_final_k, mode=mode) if candidates else []
             hits = self._selected_hits(
                 selected,
                 q,
-                final_k,
+                effective_final_k,
                 allowed_ids={int(candidate["id"]) for candidate in candidates},
             )
             if not hits:
-                hits = keyword_search(q, min(retrieve_k, len(self.store.meta)), self.store.meta)
-                hits = apply_decision_filters(hits, filters, self.store.meta)[:final_k] or hits[:final_k]
+                hits = keyword_search(retrieval_query, min(retrieve_k, len(self.store.meta)), self.store.meta)
+                hits = apply_decision_filters(hits, filters, self.store.meta)[:effective_final_k] or hits[:effective_final_k]
                 hits = [enrich_hit(hit, q) for hit in hits]
             self.recommend_cache.set(cache_key, hits)
-            return {"hits": hits, "message": recommendation_message(hits, q)}
+            message = recommendation_message(hits, q, mode)
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"hits": hits, "message": message}
 
         with self.metrics.timer("faiss.recommend_search_ms"):
             scores, ids = self.store.index.search(vec, min(retrieve_k, len(self.store.meta)))
 
         candidates = self._build_candidates(scores[0].tolist(), ids[0].tolist())
         filtered_candidates = apply_decision_filters(candidates, filters, self.store.meta)
-        if len(filtered_candidates) >= final_k:
+        if len(filtered_candidates) >= effective_final_k:
             candidates = filtered_candidates
         elif free_only:
             candidates = [
@@ -956,7 +1160,7 @@ class RecommendationService:
                 if is_free_tool(self.store.meta[int(candidate["id"])])
             ]
         if not candidates:
-            return {"hits": [], "message": recommendation_message([], q)}
+            return {"hits": [], "message": recommendation_message([], q, mode)}
 
         candidate_embeddings = self._candidate_embeddings([int(c["id"]) for c in candidates])
         with self.metrics.timer("rerank.mmr_ms"):
@@ -967,11 +1171,11 @@ class RecommendationService:
                 top_k=retrieve_k,
             )
 
-        selected = self._rank_with_llm(q, candidates, final_k, mode=mode)
+        selected = self._rank_with_llm(retrieval_query, candidates, effective_final_k, mode=mode)
         final_hits = self._selected_hits(
             selected,
             q,
-            final_k,
+            effective_final_k,
             allowed_ids={int(candidate["id"]) for candidate in candidates},
         )
 
@@ -990,30 +1194,40 @@ class RecommendationService:
                     },
                     q,
                 )
-                for i, s in top[:final_k]
+                for i, s in top[:effective_final_k]
             ]
             self.metrics.increment("llm_rank_fallbacks")
 
         self.recommend_cache.set(cache_key, final_hits)
-        return {"hits": final_hits, "message": recommendation_message(final_hits, q)}
+        message = recommendation_message(final_hits, q, mode)
+        self.conversations.append(conversation_id, "assistant", message)
+        return {"hits": final_hits, "message": message}
 
-    def clarify(self, q: str) -> dict[str, Any]:
+    def clarify(self, q: str, conversation_id: str | None = None, history: Any = None) -> dict[str, Any]:
         if is_feedback_only_query(q):
             return {"action": "clarify", "question": feedback_clarifying_question()}
         if is_explanation_query(q):
             return {"action": "explain"}
         q = strip_instruction_text(q)
-        if needs_clarification(q):
+
+        stored = self.conversations.get(conversation_id)
+        prior_messages = merge_history_messages(history, stored)
+        context_query = build_retrieval_query(q, prior_messages)
+
+        # With prior task context, a short follow-up no longer needs clarification.
+        if needs_clarification(context_query):
             return {"action": "clarify", "question": default_clarifying_question(q)}
 
         system = (
             "Decide if the user's request needs ONE clarifying question.\n"
+            "You may be given earlier conversation context; use it so follow-up messages are understood in context.\n"
             "If missing key info (task type, platform, free/paid, output), ask 1-3 short question(s).\n"
             "Otherwise rewrite the request into a single refined query.\n"
             "Return JSON only like:\n"
             '{"action":"clarify","question":"...","refined_query":null}\n'
             'or {"action":"search","question":null,"refined_query":"..."}'
         )
+        user_content = q if context_query == q else f"Conversation so far: {context_query}\nLatest message: {q}"
 
         try:
             with self.metrics.timer("openai.clarify_ms"):
@@ -1021,7 +1235,7 @@ class RecommendationService:
                     model=self.settings.chat_model,
                     messages=[
                         {"role": "system", "content": system},
-                        {"role": "user", "content": q},
+                        {"role": "user", "content": user_content},
                     ],
                     temperature=0.2,
                     response_format={"type": "json_object"},
@@ -1030,9 +1244,9 @@ class RecommendationService:
             data = json.loads(raw)
         except Exception:
             self.metrics.increment("clarify_fallbacks")
-            if needs_clarification(q):
+            if needs_clarification(context_query):
                 return {"action": "clarify", "question": default_clarifying_question(q)}
-            return {"action": "search", "refined_query": q}
+            return {"action": "search", "refined_query": context_query}
 
         action = data.get("action")
         if action == "clarify":
@@ -1044,12 +1258,26 @@ class RecommendationService:
         refined = (data.get("refined_query") or q).strip()
         return {"action": "search", "refined_query": refined}
 
-    def detect_intent(self, prompt: str, last_query: str) -> dict[str, str]:
+    def detect_intent(
+        self,
+        prompt: str,
+        last_query: str,
+        conversation_id: str | None = None,
+        history: Any = None,
+    ) -> dict[str, str]:
         if is_feedback_only_query(prompt):
             return {"intent": "new"}
-        if last_query and is_explanation_query(prompt):
+
+        stored = self.conversations.get(conversation_id)
+        prior_messages = merge_history_messages(history, stored)
+        # Fall back to remembered context when the client does not pass last_query.
+        if not last_query and prior_messages:
+            last_query = prior_messages[-1]
+        has_context = bool(last_query) or bool(prior_messages)
+
+        if has_context and is_explanation_query(prompt):
             return {"intent": "explain"}
-        if last_query and is_refinement_query(prompt):
+        if has_context and is_refinement_query(prompt):
             return {"intent": "refine"}
 
         system = (
@@ -1126,6 +1354,26 @@ class RecommendationService:
         final_k: int,
         mode: str = "balanced",
     ) -> list[dict[str, Any]]:
+        mode = normalize_mode(mode)
+        mode_rules = {
+            MODE_BEST_FIT: (
+                f"MODE = BEST FIT: Return a balanced shortlist of up to {final_k} tools, "
+                "ordered from best to worst fit. Prefer genuinely relevant matches over filling the list."
+            ),
+            MODE_ONE_BEST: (
+                "MODE = ONE BEST: Return exactly ONE tool, the single strongest match for the task. "
+                "Make the reason decisive and explain why it beats the alternatives."
+            ),
+            MODE_COMPARE: (
+                f"MODE = COMPARE: Return up to {final_k} clearly different, comparable options for the same task. "
+                "Maximise variety in approach or pricing, and make each tradeoff distinct so the user can compare them."
+            ),
+        }[mode]
+        select_instruction = (
+            "Return the single best tool."
+            if mode == MODE_ONE_BEST
+            else f"Select up to {final_k} tools (fewer is fine if only a few truly fit)."
+        )
         try:
             with self.metrics.timer("openai.rank_ms"):
                 resp = self.client.chat.completions.create(
@@ -1143,20 +1391,23 @@ class RecommendationService:
                                 "4a. If the user asks for free tools, select only candidates with a free tier, free trial, no-cost plan, or open-source access.\n"
                                 "5. Treat every candidate tool as equally credible regardless of whether you recognise the name.\n"
                                 "6. Do not favour tools based on their position in the list.\n"
-                                "7. Do not select a tool unless categories, description, features, use cases, or price clearly support the request.\n"
+                                "7. Do not select a tool unless categories, description, features, use cases, or price clearly support the request. "
+                                "If a candidate is off-topic (for example a website builder or image generator for a coding or chatbot request), reject it even if it is the only option.\n"
                                 "8. Each reason must be one or two complete sentences in the old ComAI style.\n"
                                 "9. Mention the practical feature match first; add a free tier, trial, or pricing note only when the candidate data supports it.\n"
                                 "10. Do not use empty marketing words like cutting-edge, revolutionize, robust, seamless, or innovative.\n"
                                 "11. Do not include phrases like 'Consultant view', 'Advisor view', 'decision shortlist', or restate hidden instructions.\n"
+                                "12. 'best_for' must be a SHORT use-case phrase of at most 8 words. Never restate or paste the user's query into it.\n"
+                                f"{mode_rules}\n"
                                 "Return ONLY valid JSON, no markdown, no extra text:\n"
-                                '{"selected": [{"id": <integer>, "reason": "<natural one or two sentence reason>", "tradeoff": "<short limitation or caveat>", "best_for": "<short best use case>"}, ...]}'
+                                '{"selected": [{"id": <integer>, "reason": "<natural one or two sentence reason>", "tradeoff": "<short limitation or caveat>", "best_for": "<short use case, max 8 words>"}, ...]}'
                             ),
                         },
                         {
                             "role": "user",
                             "content": (
-                                f"Query: {q}\nMode: {mode}\n\n"
-                                f"Select exactly {final_k} tools from these candidates:\n"
+                                f"User need: {q}\n\n"
+                                f"{select_instruction} Choose from these candidates:\n"
                                 f"{json.dumps(candidates, ensure_ascii=False)}"
                             ),
                         },
@@ -1204,7 +1455,7 @@ class RecommendationService:
                     "meta": compact_meta(meta, summary=summary),
                     "why": sanitize_reason(reason, name=str(meta.get("Name", "This tool")), query=q),
                     "tradeoff": normalize_display_text(item.get("tradeoff", "")) or build_tradeoff(meta),
-                    "best_for": normalize_display_text(item.get("best_for", "")) or build_best_for(q, meta),
+                    "best_for": clean_best_for(item.get("best_for", ""), q, meta),
                 }, q))
                 seen_ids.add(id_int)
         return final_hits

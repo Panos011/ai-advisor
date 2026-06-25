@@ -15,9 +15,24 @@ def _clean_required_text(value: str) -> str:
     return cleaned
 
 
+MAX_HISTORY_TURNS = 20
+
+
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"] = "user"
+    content: str = Field("", max_length=MAX_QUERY_LENGTH)
+
+    @field_validator("content")
+    @classmethod
+    def clean_content(cls, value: str) -> str:
+        return value.strip()
+
+
 class IntentRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=MAX_QUERY_LENGTH)
     last_query: str = Field("", max_length=MAX_QUERY_LENGTH)
+    conversation_id: str | None = Field(None, max_length=128)
+    history: list[ChatMessage] = Field(default_factory=list, max_length=MAX_HISTORY_TURNS)
 
     @field_validator("prompt")
     @classmethod
@@ -64,6 +79,8 @@ class RecommendRequest(BaseModel):
     final_k: int = Field(5, ge=1, le=10)
     filters: DecisionFilters = Field(default_factory=DecisionFilters)
     mode: str = Field("balanced", max_length=40)
+    conversation_id: str | None = Field(None, max_length=128)
+    history: list[ChatMessage] = Field(default_factory=list, max_length=MAX_HISTORY_TURNS)
 
     @field_validator("q")
     @classmethod
@@ -103,6 +120,8 @@ class SearchResponse(BaseModel):
 
 class ClarifyRequest(BaseModel):
     q: str = Field(..., min_length=1, max_length=MAX_QUERY_LENGTH)
+    conversation_id: str | None = Field(None, max_length=128)
+    history: list[ChatMessage] = Field(default_factory=list, max_length=MAX_HISTORY_TURNS)
 
     @field_validator("q")
     @classmethod
