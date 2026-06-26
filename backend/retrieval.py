@@ -1098,6 +1098,7 @@ class RecommendationService:
             max_conversations=settings.cache_max_entries,
             ttl_seconds=settings.cache_ttl_seconds,
         )
+        self.shortlists: dict[str, list[dict[str, Any]]] = {}
 
     def health(self) -> dict[str, Any]:
         return {
@@ -1184,9 +1185,20 @@ class RecommendationService:
         prior_messages = merge_history_messages(history, stored)
         self.conversations.append(conversation_id, "user", q)
 
-        # "Which one of these is the best and why?" -> pick the single best for the
-        # task that produced the previous shortlist, instead of searching the question.
+        # "Which one of these is the best?" -> pick the single best from the
+        # shortlist we already returned for this conversation, if we have one.
         pick_best = is_pick_best_query(q)
+        if pick_best and conversation_id and self.shortlists.get(conversation_id):
+            self.metrics.increment("recommend_pick_best_requests")
+            prior_hits = self.shortlists[conversation_id]
+            best_hit = prior_hits[0] if prior_hits else None
+            if best_hit:
+                message = recommendation_message([best_hit], q, MODE_ONE_BEST, pick_best=True)
+                self.conversations.append(conversation_id, "assistant", message)
+                self.shortlists[conversation_id] = [best_hit]
+                return {"hits": [best_hit], "message": message}
+
+        # No stored shortlist: fall back to extracting the underlying task.
         prior_task = ""
         if pick_best:
             prior_task = next((m for m in reversed(prior_messages) if has_explicit_task(m)), "")
@@ -1329,6 +1341,8 @@ class RecommendationService:
             self.metrics.increment("llm_rank_fallbacks")
 
         self.recommend_cache.set(cache_key, final_hits)
+        if conversation_id:
+            self.shortlists[conversation_id] = final_hits
         message = recommendation_message(final_hits, q, mode, pick_best=pick_best)
         self.conversations.append(conversation_id, "assistant", message)
         return {"hits": final_hits, "message": message}
@@ -1410,7 +1424,9 @@ class RecommendationService:
         # Fall back to remembered context when the client does not pass last_query.
         if not last_query and prior_messages:
             last_query = prior_messages[-1]
-        has_context = bool(last_query) or bool(prior_messages)
+        has_context = bool(last_query) or bool(prior_messages) or bool(
+            conversation_id and self.shortlists.get(conversation_id)
+        )
 
         if has_context and is_explanation_query(prompt):
             return {"intent": "explain"}

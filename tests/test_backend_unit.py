@@ -431,6 +431,39 @@ class BackendUnitTests(unittest.TestCase):
         self.assertTrue(response["hits"])
         self.assertNotIn("earlier results", (response.get("message") or "").lower())
 
+    def test_pick_best_returns_top_of_stored_shortlist(self):
+        # With a conversation_id, the backend remembers the shortlist and picks
+        # the #1 hit from it — no re-search, no context merging needed.
+        service = make_service()
+        first = service.recommend(
+            "I need a writing tool", retrieve_k=2, final_k=2,
+            conversation_id="conv-stateful",
+        )
+        self.assertEqual(len(first["hits"]), 2)
+        # Follow-up: "which is best?" — should return exactly the #1 tool.
+        second = service.recommend(
+            "Which one is the best out of all these?",
+            retrieve_k=2, final_k=5, mode="balanced",
+            conversation_id="conv-stateful",
+        )
+        self.assertEqual(len(second["hits"]), 1)
+        self.assertEqual(
+            second["hits"][0]["meta"]["Name"],
+            first["hits"][0]["meta"]["Name"],
+        )
+
+    def test_pick_best_detect_intent_uses_stored_shortlist_as_context(self):
+        # Even without last_query, a stored shortlist proves there is context.
+        service = make_service()
+        service.recommend(
+            "I need a writing tool", retrieve_k=2, final_k=2,
+            conversation_id="conv-intent",
+        )
+        intent = service.detect_intent(
+            "Which one is the best?", "", conversation_id="conv-intent",
+        )
+        self.assertEqual(intent["intent"], "refine")
+
 
 if __name__ == "__main__":
     unittest.main()
