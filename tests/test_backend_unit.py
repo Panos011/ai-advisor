@@ -390,6 +390,47 @@ class BackendUnitTests(unittest.TestCase):
         intent = service.detect_intent("free only", "I need a writing tool")
         self.assertEqual(intent["intent"], "refine")
 
+    def test_pick_best_question_is_classified_as_refine(self):
+        # Frontend only keeps prior context when intent == 'refine'.
+        service = make_service()
+        intent = service.detect_intent(
+            "Which one is the best out of all these?",
+            "Find an AI writing tool for blog posts",
+        )
+        self.assertEqual(intent["intent"], "refine")
+
+    def test_pick_best_question_never_clarifies(self):
+        service = make_service()
+        decision = service.clarify(
+            "Find an AI writing tool for blog posts. Which one is the best out of all these?"
+        )
+        self.assertEqual(decision["action"], "search")
+
+    def test_pick_best_returns_single_best_from_underlying_task(self):
+        # Mirrors production: frontend merges lastQuery + pick-best question.
+        service = make_service()
+        response = service.recommend(
+            "Find an AI writing tool for blog posts. Which one is the best out of all these?",
+            retrieve_k=2,
+            final_k=5,
+            mode="balanced",
+        )
+        # Single winner, drawn from the writing task, not the literal question.
+        self.assertEqual(len(response["hits"]), 1)
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "Writerly")
+        best_for = (response["hits"][0].get("best_for") or "").lower()
+        self.assertNotIn("which", best_for)
+        self.assertNotIn("best out of", best_for)
+
+    def test_self_contained_best_query_is_a_normal_search(self):
+        # "what's the best writing tool" with no prior shortlist must still search.
+        service = make_service()
+        response = service.recommend(
+            "what's the best writing tool", retrieve_k=2, final_k=5, mode="balanced"
+        )
+        self.assertTrue(response["hits"])
+        self.assertNotIn("earlier results", (response.get("message") or "").lower())
+
 
 if __name__ == "__main__":
     unittest.main()

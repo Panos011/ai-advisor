@@ -539,6 +539,45 @@ def is_refinement_query(text: str) -> bool:
     ))
 
 
+_PICK_BEST_PATTERNS = (
+    r"\bwhich\s+(?:one|tool|app|of\s+(?:these|those|them))\b",
+    r"\bwhich\s+(?:is|are|would|do|should|tool|one)\b.*\bbest\b",
+    r"\bbest\s+(?:one|tool|option|pick|choice)\b",
+    r"\bbest\s+of\s+(?:these|those|them|the\s+(?:above|options|list))\b",
+    r"\b(?:these|those|them|the\s+(?:above|options))\b.*\bbest\b",
+    r"\bpick\s+(?:the|a|one|your)\b",
+    r"\b(?:your\s+)?top\s+pick\b",
+    r"\bsingle\s+best\b",
+    r"\bwhich\s+would\s+you\s+recommend\b",
+    r"\brecommend\s+(?:the\s+)?most\b",
+    r"\bwhat(?:'s| is)\s+the\s+best\b",
+)
+
+
+def is_pick_best_query(text: str) -> bool:
+    """Detect 'which one of these is the best and why' style follow-ups."""
+    normalized = normalize_query_text(text).lower().strip()
+    return any(re.search(pattern, normalized) for pattern in _PICK_BEST_PATTERNS)
+
+
+def strip_pick_best_clause(text: str) -> str:
+    """Remove pick-the-best sentences, leaving any stated task behind."""
+    normalized = normalize_query_text(text)
+    parts = re.split(r"(?<=[.!?])\s+", normalized)
+    kept = [part for part in parts if part.strip() and not is_pick_best_query(part)]
+    return " ".join(kept).strip()
+
+
+def is_referential_pick(text: str) -> bool:
+    """True when a pick-best question points at an existing shortlist."""
+    normalized = normalize_query_text(text).lower()
+    return bool(re.search(
+        r"\b(these|those|them|the\s+(?:above|options|list|ones|shortlist|picks)|already|"
+        r"you\s+(?:recommended|suggested|listed|showed|gave))\b",
+        normalized,
+    ))
+
+
 def needs_clarification(q: str) -> bool:
     if is_feedback_only_query(q):
         return True
@@ -940,7 +979,12 @@ def keyword_search(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[dict
     ]
 
 
-def recommendation_message(hits: list[dict[str, Any]], query: str = "", mode: str = "balanced") -> str:
+def recommendation_message(
+    hits: list[dict[str, Any]],
+    query: str = "",
+    mode: str = "balanced",
+    pick_best: bool = False,
+) -> str:
     mode = normalize_mode(mode)
     names = [
         str((hit.get("meta") or {}).get("Name", "")).strip()
@@ -949,12 +993,19 @@ def recommendation_message(hits: list[dict[str, Any]], query: str = "", mode: st
     ]
     names = [name for name in names if name]
     if not names:
+        if pick_best:
+            return "I need the earlier results first. Run a search, then I can pick the single best option from them."
         if requires_free_only(query):
             return "I could not find a strong free match. Try changing the task or allowing free trials and freemium plans."
         return "I could not find a strong match. Try adding the task, budget, and any must-have integrations."
 
     goal = request_goal(query)
     first = names[0]
+
+    if pick_best:
+        why = clean_evidence(str((hits[0].get("why") or "")).strip())
+        lead = f"Out of the options, the best for {goal} is {first}."
+        return f"{lead} {why}".strip() if why else lead
 
     if mode == MODE_ONE_BEST:
         return f"My top pick for {goal} is {first}. It is the closest single match in the current catalogue."
@@ -1131,10 +1182,38 @@ class RecommendationService:
         # but never drag an old topic into a message that already states its own task.
         stored = self.conversations.get(conversation_id)
         prior_messages = merge_history_messages(history, stored)
-        if has_explicit_task(q):
-            prior_messages = []
-        retrieval_query = build_retrieval_query(q, prior_messages)
         self.conversations.append(conversation_id, "user", q)
+
+        # "Which one of these is the best and why?" -> pick the single best for the
+        # task that produced the previous shortlist, instead of searching the question.
+        pick_best = is_pick_best_query(q)
+        prior_task = ""
+        if pick_best:
+            prior_task = next((m for m in reversed(prior_messages) if has_explicit_task(m)), "")
+            if not prior_task:
+                residual = strip_pick_best_clause(q)
+                if residual and query_terms(residual):
+                    prior_task = residual
+            if not prior_task and prior_messages:
+                prior_task = prior_messages[-1]
+
+        if pick_best and prior_task:
+            self.metrics.increment("recommend_pick_best_requests")
+            q = prior_task
+            mode = MODE_ONE_BEST
+            prior_messages = []
+        elif pick_best and is_referential_pick(q):
+            # Refers to an earlier shortlist we do not have; ask the user to search first.
+            message = recommendation_message([], q, MODE_ONE_BEST, pick_best=True)
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"hits": [], "message": message}
+        else:
+            # Self-contained query (e.g. "what's the best coding tool"); treat normally.
+            pick_best = False
+            if has_explicit_task(q):
+                prior_messages = []
+
+        retrieval_query = build_retrieval_query(q, prior_messages)
 
         if requires_free_only(retrieval_query) and not non_filter_terms(retrieval_query):
             self.metrics.increment("recommend_free_query_missing_task")
@@ -1166,7 +1245,7 @@ class RecommendationService:
         cached = self.recommend_cache.get(cache_key)
         if cached is not None:
             self.metrics.increment("recommend_cache_hit")
-            message = recommendation_message(cached, q, mode)
+            message = recommendation_message(cached, q, mode, pick_best=pick_best)
             self.conversations.append(conversation_id, "assistant", message)
             return {"hits": cached, "message": message}
 
@@ -1194,7 +1273,7 @@ class RecommendationService:
                 hits = apply_decision_filters(hits, filters, self.store.meta)[:effective_final_k] or hits[:effective_final_k]
                 hits = [enrich_hit(hit, q) for hit in hits]
             self.recommend_cache.set(cache_key, hits)
-            message = recommendation_message(hits, q, mode)
+            message = recommendation_message(hits, q, mode, pick_best=pick_best)
             self.conversations.append(conversation_id, "assistant", message)
             return {"hits": hits, "message": message}
 
@@ -1211,7 +1290,7 @@ class RecommendationService:
                 if is_free_tool(self.store.meta[int(candidate["id"])])
             ]
         if not candidates:
-            return {"hits": [], "message": recommendation_message([], q, mode)}
+            return {"hits": [], "message": recommendation_message([], q, mode, pick_best=pick_best)}
 
         candidate_embeddings = self._candidate_embeddings([int(c["id"]) for c in candidates])
         with self.metrics.timer("rerank.mmr_ms"):
@@ -1250,7 +1329,7 @@ class RecommendationService:
             self.metrics.increment("llm_rank_fallbacks")
 
         self.recommend_cache.set(cache_key, final_hits)
-        message = recommendation_message(final_hits, q, mode)
+        message = recommendation_message(final_hits, q, mode, pick_best=pick_best)
         self.conversations.append(conversation_id, "assistant", message)
         return {"hits": final_hits, "message": message}
 
@@ -1259,6 +1338,10 @@ class RecommendationService:
             return {"action": "clarify", "question": feedback_clarifying_question()}
         if is_explanation_query(q):
             return {"action": "explain"}
+        # "Which of these is best?" must never trigger a clarifying question; let the
+        # recommend step turn it into a single best pick for the underlying task.
+        if is_pick_best_query(q):
+            return {"action": "search", "refined_query": q}
         q = strip_instruction_text(q)
         q = focus_latest_intent(q)
 
@@ -1331,6 +1414,11 @@ class RecommendationService:
 
         if has_context and is_explanation_query(prompt):
             return {"intent": "explain"}
+
+        # "Which one of these is best?" is a follow-up on the existing shortlist,
+        # so keep the conversation context rather than starting a new search.
+        if has_context and is_pick_best_query(prompt):
+            return {"intent": "refine"}
 
         # An explicit pivot or a message that states its own task is a NEW search,
         # so the client should not prepend the previous query to it.
