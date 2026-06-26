@@ -578,6 +578,172 @@ def is_referential_pick(text: str) -> bool:
     ))
 
 
+# Specific-tool follow-ups: the user is asking about one named tool in context.
+_SPECIFIC_TOOL_PATTERNS = (
+    r"\bwhat\s+about\s+([a-z][a-z0-9]*(?:\s+[a-z0-9]+){0,3})",
+    r"\bhow\s+about\s+([a-z][a-z0-9]*(?:\s+[a-z0-9]+){0,3})",
+    r"\bis\s+([a-z][a-z0-9]*(?:\s+[a-z0-9]+){0,3})\s+(?:good|better|worth|suitable|fit)",
+    r"\bwhat\s+do\s+you\s+(?:think|say)\s+about\s+([a-z][a-z0-9]*(?:\s+[a-z0-9]+){0,3})",
+    r"\bshould\s+i\s+(?:use|try|consider)\s+([a-z][a-z0-9]*(?:\s+[a-z0-9]+){0,3})",
+    r"\bcan\s+i\s+use\s+([a-z][a-z0-9]*(?:\s+[a-z0-9]+){0,3})\s+(?:instead|for)",
+    r"\bcompare\s+(?:it\s+with|it\s+to|against)\s+([a-z][a-z0-9]*(?:\s+[a-z0-9]+){0,3})",
+    r"\bhow\s+does\s+([a-z][a-z0-9]*(?:\s+[a-z0-9]+){0,3})\s+compare",
+)
+
+
+_NON_TOOL_WORDS = {
+    "the", "a", "an", "there", "it", "this", "that", "probably", "maybe",
+    "definitely", "so", "too", "very", "really", "quite", "pretty", "more",
+    "most", "less", "least", "much", "many", "any", "some", "all", "both",
+    "each", "every", "either", "neither", "one", "two", "other", "another",
+    "such", "what", "which", "who", "whose", "how", "when", "where", "why",
+    "then", "also", "still", "even", "just", "only", "well", "about", "for",
+    "with", "from", "into", "onto", "upon", "over", "under", "above", "below",
+}
+
+
+def _specific_tool_name(text: str) -> str | None:
+    """Extract the tool name from a specific-tool follow-up, or None if not a valid match."""
+    normalized = normalize_query_text(text).lower().strip()
+    for pattern in _SPECIFIC_TOOL_PATTERNS:
+        match = re.search(pattern, normalized)
+        if match:
+            name = match.group(1).strip()
+            if name and name not in _NON_TOOL_WORDS:
+                return name
+    return None
+
+
+def is_specific_tool_query(text: str) -> bool:
+    """Detect follow-ups like 'What about Claude?' or 'Is Claude good too?'."""
+    return _specific_tool_name(text) is not None
+
+
+def extract_tool_name(text: str) -> str | None:
+    """Extract the tool name from a specific-tool follow-up question."""
+    return _specific_tool_name(text)
+
+
+_CRITERION_PATTERNS = (
+    r"\b(?:which\s+(?:one|tool|option)|the)\s+(?:is\s+)?cheapest\b",
+    r"\b(?:which\s+(?:one|tool|option)|the)\s+(?:is\s+)?most\s+expensive\b",
+    r"\b(?:which\s+(?:one|tool|option)|the)\s+(?:is\s+)?free\b",
+    r"\b(?:which\s+(?:one|tool|option)|the)\s+(?:is\s+)?paid\b",
+    r"\b(?:which\s+(?:one|tool|option)|the)\s+(?:is\s+)?best\s+value\b",
+    r"\b(?:which\s+(?:one|tool|option)|the)\s+(?:is\s+)?most\s+private\b",
+    r"\b(?:which\s+(?:one|tool|option)|the)\s+(?:is\s+)?most\s+secure\b",
+    r"\b(?:which\s+(?:one|tool|option)|the)\s+(?:is\s+)?beginner\s*[-]?friendly\b",
+    r"\b(?:which\s+(?:one|tool|option)|the)\s+(?:is\s+)?easiest\b",
+    r"\b(?:show\s+me\s+the\s+|give\s+me\s+the\s+)free\s+(?:one|tool|option)\b",
+    r"\b(?:show\s+me\s+the\s+|give\s+me\s+the\s+)cheapest\s+(?:one|tool|option)\b",
+    r"\b(?:show\s+me\s+the\s+|give\s+me\s+the\s+)paid\s+(?:one|tool|option)\b",
+)
+
+
+_ALTERNATIVE_PATTERNS = (
+    r"\b(?:is\s+there\s+)?any\s+other\s+(?:tool|one|option|app)\b",
+    r"\b(?:show\s+me\s+|give\s+me\s+)another\b",
+    r"\b(?:show\s+me\s+)?something\s+else\b",
+    r"\b(?:a\s+|the\s+)?different\s+(?:tool|one|option)\b",
+    r"\bnext\s+best\b",
+    r"\bwhat\s+else\b",
+    r"\bnot\s+that\s+one\b",
+    r"\b(?:i\s+|you\s+)gave\s+me\s+the\s+same\s+one\b",
+    r"\b(?:i\s+)?already\s+(?:have|know|use|got)\s+that\b",
+    r"\bbetter\s+than\s+(?:this|that|the\s+one|it)\b",
+    r"\b(?:can\s+you\s+)?recommend\s+another\b",
+    r"\b(?:another\s+|other\s+)alternative\b",
+)
+
+
+def is_alternative_query(text: str) -> bool:
+    """Detect requests for a different tool from the existing shortlist."""
+    normalized = normalize_query_text(text).lower().strip()
+    return any(re.search(pattern, normalized) for pattern in _ALTERNATIVE_PATTERNS)
+
+
+def is_criterion_pick_query(text: str) -> bool:
+    """Detect follow-ups like 'which one is the cheapest?' or 'the free one'."""
+    normalized = normalize_query_text(text).lower().strip()
+    return any(re.search(pattern, normalized) for pattern in _CRITERION_PATTERNS)
+
+
+def criterion_from_query(text: str) -> str:
+    """Return the criterion the user is asking for (cheapest, free, paid, etc.)."""
+    normalized = normalize_query_text(text).lower().strip()
+    if re.search(r"\b(?:cheapest|least\s+expensive|best\s+value)\b", normalized):
+        return "cheapest"
+    if re.search(r"\b(?:most\s+expensive|priciest)\b", normalized):
+        return "most_expensive"
+    if re.search(r"\b(?:free\s+(?:one|tool|option)|no\s+cost)\b", normalized):
+        return "free"
+    if re.search(r"\b(?:paid\s+(?:one|tool|option)|most\s+expensive)\b", normalized):
+        return "paid"
+    if re.search(r"\b(?:private|privacy|secure)\b", normalized):
+        return "privacy"
+    if re.search(r"\b(?:beginner|easiest|simplest)\b", normalized):
+        return "beginner"
+    return "best"
+
+
+def _price_sort_key(meta: dict[str, Any]) -> tuple[int, float]:
+    """Lower tuple = cheaper. Free/open-source first, then try to parse dollar amount."""
+    price = normalize_display_text(meta.get("Price", "")).lower()
+    if is_free_tool(meta):
+        return (0, 0.0)
+    if "open source" in price:
+        return (0, 0.0)
+    # Extract the lowest dollar amount mentioned.
+    amounts = [float(m.replace("$", "").replace(",", ""))
+               for m in re.findall(r"\$\s*([\d,]+(?:\.\d{2})?)", price, flags=re.IGNORECASE)]
+    if amounts:
+        return (1, min(amounts))
+    # Paid but no number: sort after known numbers but before unknown.
+    if re.search(r"[$€£]|\b(paid|pro|premium|subscription|enterprise)\b", price):
+        return (2, 0.0)
+    return (3, 0.0)
+
+
+def _matches_tool_name(meta: dict[str, Any], name: str) -> bool:
+    """Case-insensitive fuzzy match of a tool name against the catalog Name."""
+    if not name:
+        return False
+    tool_name = str(meta.get("Name", "")).lower()
+    normalized_name = name.lower()
+    # Exact match or normalized exact match.
+    if normalized_name == tool_name:
+        return True
+    # Remove common suffixes/prefixes and compare.
+    clean = re.sub(r"\b(ai|app|tool|bot|chat|gpt|claude)\b", "", tool_name).strip()
+    clean_query = re.sub(r"\b(ai|app|tool|bot|chat|gpt|claude)\b", "", normalized_name).strip()
+    if clean_query and clean_query == clean:
+        return True
+    if clean_query and clean_query in tool_name:
+        return True
+    if normalized_name in tool_name:
+        return True
+    # Acronym / token overlap (e.g. "ChatGPT" vs "chatgpt").
+    if normalized_name.replace(" ", "") == tool_name.replace(" ", ""):
+        return True
+    return False
+
+
+def _sort_hits_by_criterion(hits: list[dict[str, Any]], criterion: str) -> list[dict[str, Any]]:
+    """Return a copy of hits sorted by the requested criterion."""
+    if criterion == "cheapest":
+        return sorted(hits, key=lambda h: _price_sort_key(h.get("meta") or {}))
+    if criterion == "most_expensive":
+        return sorted(hits, key=lambda h: _price_sort_key(h.get("meta") or {}), reverse=True)
+    if criterion == "free":
+        free = [h for h in hits if is_free_tool(h.get("meta") or {})]
+        return free or hits
+    if criterion == "paid":
+        paid = [h for h in hits if not is_free_tool(h.get("meta") or {})]
+        return paid or hits
+    # For privacy / beginner / best, keep original order but move strongest matches first.
+    return list(hits)
+
+
 def needs_clarification(q: str) -> bool:
     if is_feedback_only_query(q):
         return True
@@ -1099,6 +1265,7 @@ class RecommendationService:
             ttl_seconds=settings.cache_ttl_seconds,
         )
         self.shortlists: dict[str, list[dict[str, Any]]] = {}
+        self.shortlist_pointers: dict[str, int] = {}
 
     def health(self) -> dict[str, Any]:
         return {
@@ -1185,6 +1352,66 @@ class RecommendationService:
         prior_messages = merge_history_messages(history, stored)
         self.conversations.append(conversation_id, "user", q)
 
+        # Recover the task that produced the current shortlist. We use it for
+        # contextual reasons when answering follow-ups about specific tools.
+        prior_task = next((m for m in reversed(prior_messages) if has_explicit_task(m)), "")
+        if not prior_task and prior_messages:
+            prior_task = prior_messages[-1]
+
+        # Alternative request: "Is there any other tool?" / "Show me another" / "Not that one".
+        # Return the next hit from the stored shortlist instead of re-searching.
+        if is_alternative_query(q) and conversation_id and self.shortlists.get(conversation_id):
+            self.metrics.increment("recommend_alternative_requests")
+            alt_hit, alt_idx = self._next_alternative_hit(conversation_id)
+            if alt_hit:
+                reason_query = prior_task or q
+                single_hit = enrich_hit(dict(alt_hit), reason_query)
+                message = recommendation_message([single_hit], reason_query, MODE_ONE_BEST)
+                self.conversations.append(conversation_id, "assistant", message)
+                self._set_shortlist_pointer(conversation_id, alt_idx)
+                return {"hits": [single_hit], "message": message}
+
+        # Specific-tool follow-up: "What about Claude?" or "Is Claude good too?"
+        # Answer from the existing shortlist (or the catalog) instead of running a new search.
+        tool_name = extract_tool_name(q)
+        if tool_name and conversation_id and self.shortlists.get(conversation_id):
+            self.metrics.increment("recommend_specific_tool_requests")
+            prior_hits = self.shortlists[conversation_id]
+            hit = self._find_hit_by_name(prior_hits, tool_name)
+            meta = (hit.get("meta") if hit else None) or self._find_tool_by_name(tool_name)
+            if meta:
+                reason_query = prior_task or q
+                single_hit = enrich_hit({
+                    "score": float(hit.get("score", 0.0)) if hit else 0.0,
+                    "meta": compact_meta(meta),
+                    "why": local_reason(reason_query, meta),
+                }, reason_query)
+                message = recommendation_message([single_hit], reason_query, MODE_ONE_BEST)
+                self.conversations.append(conversation_id, "assistant", message)
+                if hit:
+                    self._set_shortlist_pointer(
+                        conversation_id, prior_hits.index(hit)
+                    )
+                return {"hits": [single_hit], "message": message}
+
+        # Criterion-based pick: "Which one is the cheapest/free/paid?"
+        # Re-rank the existing shortlist and return the top match for that criterion.
+        criterion = criterion_from_query(q)
+        if is_criterion_pick_query(q) and conversation_id and self.shortlists.get(conversation_id):
+            self.metrics.increment("recommend_criterion_pick_requests")
+            prior_hits = self.shortlists[conversation_id]
+            sorted_hits = _sort_hits_by_criterion(prior_hits, criterion)
+            best_hit = sorted_hits[0] if sorted_hits else prior_hits[0]
+            if best_hit:
+                reason_query = prior_task or q
+                single_hit = enrich_hit(dict(best_hit), reason_query)
+                message = recommendation_message([single_hit], reason_query, MODE_ONE_BEST)
+                self.conversations.append(conversation_id, "assistant", message)
+                self._set_shortlist_pointer(
+                    conversation_id, prior_hits.index(best_hit)
+                )
+                return {"hits": [single_hit], "message": message}
+
         # "Which one of these is the best?" -> pick the single best from the
         # shortlist we already returned for this conversation, if we have one.
         pick_best = is_pick_best_query(q)
@@ -1195,13 +1422,11 @@ class RecommendationService:
             if best_hit:
                 message = recommendation_message([best_hit], q, MODE_ONE_BEST, pick_best=True)
                 self.conversations.append(conversation_id, "assistant", message)
-                self.shortlists[conversation_id] = [best_hit]
+                self._set_shortlist_pointer(conversation_id, 0)
                 return {"hits": [best_hit], "message": message}
 
         # No stored shortlist: fall back to extracting the underlying task.
-        prior_task = ""
         if pick_best:
-            prior_task = next((m for m in reversed(prior_messages) if has_explicit_task(m)), "")
             if not prior_task:
                 residual = strip_pick_best_clause(q)
                 if residual and query_terms(residual):
@@ -1343,6 +1568,7 @@ class RecommendationService:
         self.recommend_cache.set(cache_key, final_hits)
         if conversation_id:
             self.shortlists[conversation_id] = final_hits
+            self.shortlist_pointers[conversation_id] = 0
         message = recommendation_message(final_hits, q, mode, pick_best=pick_best)
         self.conversations.append(conversation_id, "assistant", message)
         return {"hits": final_hits, "message": message}
@@ -1352,9 +1578,15 @@ class RecommendationService:
             return {"action": "clarify", "question": feedback_clarifying_question()}
         if is_explanation_query(q):
             return {"action": "explain"}
-        # "Which of these is best?" must never trigger a clarifying question; let the
-        # recommend step turn it into a single best pick for the underlying task.
-        if is_pick_best_query(q):
+        # Follow-up questions that reference the existing shortlist must never trigger
+        # a clarifying question; let the recommend step answer from the stored shortlist.
+        has_shortlist = bool(conversation_id and self.shortlists.get(conversation_id))
+        if has_shortlist and (
+            is_pick_best_query(q)
+            or is_specific_tool_query(q)
+            or is_criterion_pick_query(q)
+            or is_alternative_query(q)
+        ):
             return {"action": "search", "refined_query": q}
         q = strip_instruction_text(q)
         q = focus_latest_intent(q)
@@ -1431,9 +1663,14 @@ class RecommendationService:
         if has_context and is_explanation_query(prompt):
             return {"intent": "explain"}
 
-        # "Which one of these is best?" is a follow-up on the existing shortlist,
-        # so keep the conversation context rather than starting a new search.
-        if has_context and is_pick_best_query(prompt):
+        # "Which one of these is best?" / "What about Claude?" / "Which is cheapest?"
+        # / "Is there any other tool?" are all follow-ups on the existing shortlist.
+        if has_context and (
+            is_pick_best_query(prompt)
+            or is_specific_tool_query(prompt)
+            or is_criterion_pick_query(prompt)
+            or is_alternative_query(prompt)
+        ):
             return {"intent": "refine"}
 
         # An explicit pivot or a message that states its own task is a NEW search,
@@ -1450,7 +1687,8 @@ class RecommendationService:
             "You are a search intent classifier. Given the previous search query, decide if the user is:\n"
             "- 'explain': asking why the current results were recommended, for example 'why these tools?' or 'explain these picks'\n"
             "- 'refine': modifying, filtering or following up on the previous search, for example "
-            "'free only', 'show me more', 'I need something simpler', 'what about paid ones'\n"
+            "'free only', 'show me more', 'I need something simpler', 'what about paid ones', "
+            "'what about Claude?', 'which one is the cheapest?'\n"
             "- 'new': asking for something completely different\n"
             "Return ONLY valid JSON: {\"intent\": \"explain\"}, {\"intent\": \"refine\"}, or {\"intent\": \"new\"}"
         )
@@ -1504,6 +1742,40 @@ class RecommendationService:
             "use_cases": m.get("Use_cases", ""),
             "pros": m.get("Pros", ""),
         }
+
+    def _find_hit_by_name(self, hits: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
+        """Return the first hit in the shortlist whose name matches the query."""
+        for hit in hits:
+            meta = hit.get("meta") or {}
+            if _matches_tool_name(meta, name):
+                return hit
+        return None
+
+    def _find_tool_by_name(self, name: str) -> dict[str, Any] | None:
+        """Search the full catalog for a tool whose name matches the query."""
+        for meta in self.store.meta:
+            if _matches_tool_name(meta, name):
+                return meta
+        return None
+
+    def _set_shortlist_pointer(self, conversation_id: str | None, index: int) -> None:
+        if not conversation_id:
+            return
+        self.shortlist_pointers[conversation_id] = max(0, index)
+
+    def _next_alternative_hit(
+        self,
+        conversation_id: str | None,
+    ) -> tuple[dict[str, Any] | None, int]:
+        """Return the next hit from the shortlist that has not been shown yet."""
+        if not conversation_id:
+            return None, -1
+        prior_hits = self.shortlists.get(conversation_id)
+        if not prior_hits:
+            return None, -1
+        last_idx = self.shortlist_pointers.get(conversation_id, -1)
+        next_idx = min(last_idx + 1, len(prior_hits) - 1)
+        return prior_hits[next_idx], next_idx
 
     def _candidate_embeddings(self, ids: list[int]) -> np.ndarray:
         if self.store.vectors is not None:

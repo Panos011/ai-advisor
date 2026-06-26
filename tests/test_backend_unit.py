@@ -464,6 +464,78 @@ class BackendUnitTests(unittest.TestCase):
         )
         self.assertEqual(intent["intent"], "refine")
 
+    def test_specific_tool_follow_up_returns_named_tool_from_shortlist(self):
+        # "What about X?" should return the named tool from the stored shortlist.
+        service = make_service()
+        first = service.recommend(
+            "I need a writing tool", retrieve_k=2, final_k=2,
+            conversation_id="conv-specific",
+        )
+        self.assertEqual(len(first["hits"]), 2)
+        second = service.recommend(
+            "What about Writerly?", retrieve_k=2, final_k=5,
+            conversation_id="conv-specific",
+        )
+        self.assertEqual(len(second["hits"]), 1)
+        self.assertEqual(second["hits"][0]["meta"]["Name"], "Writerly")
+        # The original shortlist must remain intact so "another" still works.
+        self.assertEqual(len(service.shortlists["conv-specific"]), 2)
+
+    def test_criterion_pick_returns_cheapest_from_shortlist(self):
+        # "Which one is the cheapest?" picks the cheapest tool from the shortlist.
+        service = make_service()
+        first = service.recommend(
+            "I need a writing tool", retrieve_k=2, final_k=2,
+            conversation_id="conv-cheap",
+        )
+        self.assertEqual(len(first["hits"]), 2)
+        second = service.recommend(
+            "Which one is the cheapest?", retrieve_k=2, final_k=5,
+            conversation_id="conv-cheap",
+        )
+        self.assertEqual(len(second["hits"]), 1)
+        self.assertEqual(second["hits"][0]["meta"]["Name"], "Writerly")
+        self.assertEqual(len(service.shortlists["conv-cheap"]), 2)
+
+    def test_alternative_query_returns_next_hit_from_shortlist(self):
+        # "Is there any other tool?" returns the next hit from the stored shortlist.
+        service = make_service()
+        first = service.recommend(
+            "I need a writing tool", retrieve_k=2, final_k=2,
+            conversation_id="conv-alt",
+        )
+        self.assertEqual(len(first["hits"]), 2)
+        self.assertEqual(first["hits"][0]["meta"]["Name"], "Writerly")
+        second = service.recommend(
+            "Is there any other tool that is probably better than this?",
+            retrieve_k=2, final_k=5,
+            conversation_id="conv-alt",
+        )
+        self.assertEqual(len(second["hits"]), 1)
+        self.assertEqual(second["hits"][0]["meta"]["Name"], "ImageBox")
+        # Asking again should not give the same one back.
+        third = service.recommend(
+            "You gave me the same one",
+            retrieve_k=2, final_k=5,
+            conversation_id="conv-alt",
+        )
+        self.assertEqual(third["hits"][0]["meta"]["Name"], "ImageBox")
+
+    def test_detect_intent_specific_tool_and_alternative_are_refine(self):
+        service = make_service()
+        service.recommend(
+            "I need a writing tool", retrieve_k=2, final_k=2,
+            conversation_id="conv-intent2",
+        )
+        self.assertEqual(
+            service.detect_intent("What about Writerly?", "", conversation_id="conv-intent2")["intent"],
+            "refine",
+        )
+        self.assertEqual(
+            service.detect_intent("Is there any other tool?", "", conversation_id="conv-intent2")["intent"],
+            "refine",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
