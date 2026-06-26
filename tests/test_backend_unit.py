@@ -134,12 +134,14 @@ class BackendUnitTests(unittest.TestCase):
         self.assertGreater(float(np.linalg.norm(vectors[1])), 0.0)
 
     def test_embedding_failure_uses_keyword_fallback(self):
-        service = make_service(client=FakeClient(embedding_failure=True))
+        client = FakeClient(embedding_failure=True)
+        service = make_service(client=client)
         response = service.recommend("I need a free writing tool", retrieve_k=2, final_k=1)
         self.assertEqual(len(response["hits"]), 1)
         self.assertEqual(response["hits"][0]["meta"]["Name"], "Writerly")
         self.assertIn("writing", response["hits"][0]["why"].lower())
         self.assertNotIn("...", response["hits"][0]["why"])
+        self.assertEqual(client.chat.completions.calls, 0)
 
     def test_free_only_recommendations_exclude_paid_tools(self):
         service = make_service()
@@ -181,6 +183,28 @@ class BackendUnitTests(unittest.TestCase):
         self.assertIn("Start with", first["message"])
         self.assertNotIn("Consultant view", first["message"])
         self.assertNotIn("Advisor view", first["message"])
+
+    def test_cached_recommendation_still_stores_conversation_shortlist(self):
+        service = make_service()
+        service.recommend("I need a writing tool", retrieve_k=2, final_k=2)
+
+        cached = service.recommend(
+            "I need a writing tool",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="conv-cache",
+        )
+        self.assertEqual(len(cached["hits"]), 2)
+        self.assertEqual(len(service.shortlists["conv-cache"]), 2)
+
+        explained = service.recommend(
+            "Why was Writerly chosen?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="conv-cache",
+        )
+        self.assertEqual(explained["hits"][0]["meta"]["Name"], "Writerly")
+        self.assertIn("Writerly", explained["message"])
 
     def test_explanation_prompt_is_not_treated_as_search(self):
         service = make_service()
@@ -263,6 +287,21 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["hits"], [])
         self.assertIn("feedback", response["message"])
         self.assertNotIn("Software Ag", response["message"])
+
+    def test_small_talk_and_capability_prompts_do_not_search(self):
+        service = make_service()
+
+        thanks = service.clarify("thanks")
+        self.assertEqual(thanks["action"], "clarify")
+        self.assertIn("welcome", thanks["question"].lower())
+
+        hello = service.recommend("hello", retrieve_k=2, final_k=2)
+        self.assertEqual(hello["hits"], [])
+        self.assertIn("tell me what you need", hello["message"].lower())
+
+        capabilities = service.recommend("what can you do?", retrieve_k=2, final_k=2)
+        self.assertEqual(capabilities["hits"], [])
+        self.assertIn("recommend AI tools", capabilities["message"])
 
     def test_vague_prompt_clarifies_without_openai(self):
         service = make_service()
@@ -530,8 +569,27 @@ class BackendUnitTests(unittest.TestCase):
         )
         self.assertEqual(len(second["hits"]), 1)
         self.assertEqual(second["hits"][0]["meta"]["Name"], "Writerly")
+        self.assertIn("can work", second["message"])
         # The original shortlist must remain intact so "another" still works.
         self.assertEqual(len(service.shortlists["conv-specific"]), 2)
+
+    def test_specific_tool_follow_up_does_not_replace_original_task(self):
+        service = make_service()
+        service.recommend(
+            "I need a writing tool for blog posts", retrieve_k=2, final_k=2,
+            conversation_id="conv-specific-task",
+        )
+        service.recommend(
+            "What about ImageBox?", retrieve_k=2, final_k=2,
+            conversation_id="conv-specific-task",
+        )
+        followup = service.recommend(
+            "show me another one", retrieve_k=2, final_k=2,
+            conversation_id="conv-specific-task",
+        )
+        self.assertEqual(followup["hits"], [])
+        self.assertIn("another distinct option", followup["message"])
+        self.assertNotIn("generating images", followup["message"].lower())
 
     def test_criterion_pick_returns_cheapest_from_shortlist(self):
         # "Which one is the cheapest?" picks the cheapest tool from the shortlist.
@@ -571,7 +629,8 @@ class BackendUnitTests(unittest.TestCase):
             retrieve_k=2, final_k=5,
             conversation_id="conv-alt",
         )
-        self.assertEqual(third["hits"][0]["meta"]["Name"], "ImageBox")
+        self.assertEqual(third["hits"], [])
+        self.assertIn("another distinct option", third["message"])
 
     def test_detect_intent_specific_tool_and_alternative_are_refine(self):
         service = make_service()
@@ -606,6 +665,41 @@ class BackendUnitTests(unittest.TestCase):
         self.assertIn("best choice", second["hits"][0].get("best_for", ""))
         self.assertIn("writing", second["hits"][0].get("why", "").lower())
         self.assertIn("Writerly", second["message"])
+
+    def test_named_tool_explanation_is_detected(self):
+        service = make_service()
+        service.recommend(
+            "I need a writing tool", retrieve_k=2, final_k=2,
+            conversation_id="conv-named-explain",
+        )
+        intent = service.detect_intent(
+            "Why was Writerly chosen?", "", conversation_id="conv-named-explain",
+        )
+        self.assertEqual(intent["intent"], "explain")
+        response = service.recommend(
+            "Why was Writerly chosen?", retrieve_k=2, final_k=2,
+            conversation_id="conv-named-explain",
+        )
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "Writerly")
+        self.assertIn("Writerly", response["message"])
+
+    def test_is_it_free_answers_about_current_shortlist_item(self):
+        service = make_service()
+        service.recommend(
+            "I need a writing tool", retrieve_k=2, final_k=2,
+            conversation_id="conv-free-question",
+        )
+        intent = service.detect_intent(
+            "is it free?", "", conversation_id="conv-free-question",
+        )
+        self.assertEqual(intent["intent"], "refine")
+        response = service.recommend(
+            "is it free?", retrieve_k=2, final_k=2,
+            conversation_id="conv-free-question",
+        )
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "Writerly")
+        self.assertIn("Yes", response["message"])
+        self.assertIn("free tier", response["message"])
 
 
 if __name__ == "__main__":
