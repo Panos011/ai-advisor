@@ -526,7 +526,18 @@ _DEV_ON_TOPIC_CATEGORIES = (
 def is_explanation_query(text: str) -> bool:
     normalized = normalize_query_text(text).lower().strip()
     return bool(re.search(
-        r"\b(why\s+(?:these|this|those)(?:\s+(?:tools?|ones|results?|recommendations?|picks?))?\??|why\s+did|explain(?:\s+(?:these|this|those|the))?|reason|reasons|why\s+recommended|why\s+recommend)\b",
+        r"\b("
+        r"why\s+(?:is\s+|are\s+|was\s+)?(?:this|that|it|the)\s+(?:the\s+)?best\s+(?:tool|one|option|app|choice|pick)|"
+        r"why\s+(?:is\s+|are\s+|was\s+)?(?:this|that|it|the)\s+(?:tool|one|option|app|choice|pick)\s+(?:the\s+)?best|"
+        r"why\s+(?:these|this|those)(?:\s+(?:tools?|ones|results?|recommendations?|picks?))?\??|"
+        r"why\s+did|"
+        r"explain(?:\s+(?:these|this|those|the|why|how))?|"
+        r"reason|reasons|"
+        r"why\s+(?:recommended|recommend|suggest|suggested|picked|chose|choose)\b|"
+        r"why\s+(?:do\s+|did\s+|would\s+|should\s+)?(?:you|it)\s+(?:recommend|suggest|pick|choose|say|think)|"
+        r"what\s+makes\s+(?:this|that|it|the)\s+(?:the\s+)?best|"
+        r"how\s+(?:is\s+|does\s+)(?:this|that|it|the)\s+(?:tool|one|option|app)\s+(?:the\s+)?best"
+        r")\b",
         normalized,
     ))
 
@@ -1338,6 +1349,25 @@ class RecommendationService:
             }
         if is_explanation_query(q):
             self.metrics.increment("recommend_explain_query_blocked")
+            prior_hits = self.shortlists.get(conversation_id) if conversation_id else None
+            if prior_hits:
+                top = prior_hits[0]
+                prior_messages = [
+                    m.get("content", "") for m in self.conversations.get(conversation_id) or []
+                ]
+                prior_task = next(
+                    (m for m in reversed(prior_messages) if has_explicit_task(m)), ""
+                )
+                reason_query = prior_task or q
+                explained = enrich_hit(dict(top), reason_query)
+                explained["why"] = local_reason(reason_query, explained.get("meta") or {})
+                explained["best_for"] = (
+                    f"{explained.get('meta', {}).get('Name', 'This tool')} is the best choice for "
+                    f"{reason_query} because it matches the task, price, and feature signals best."
+                )
+                message = recommendation_message([explained], reason_query, MODE_ONE_BEST, pick_best=True)
+                self.conversations.append(conversation_id, "assistant", message)
+                return {"hits": [explained], "message": message}
             return {
                 "hits": [],
                 "message": "I can explain the current shortlist after a search, but I need the previous results to do that.",

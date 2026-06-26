@@ -536,6 +536,25 @@ class BackendUnitTests(unittest.TestCase):
             "refine",
         )
 
+    def test_explanation_query_with_shortlist_returns_top_hit_explained(self):
+        # "Why is that the best tool?" should explain the top hit from the stored shortlist.
+        service = make_service()
+        first = service.recommend(
+            "I need a writing tool", retrieve_k=2, final_k=2,
+            conversation_id="conv-explain",
+        )
+        self.assertEqual(len(first["hits"]), 2)
+        self.assertEqual(first["hits"][0]["meta"]["Name"], "Writerly")
+        second = service.recommend(
+            "Why is that the best tool?", retrieve_k=2, final_k=5,
+            conversation_id="conv-explain",
+        )
+        self.assertEqual(len(second["hits"]), 1)
+        self.assertEqual(second["hits"][0]["meta"]["Name"], "Writerly")
+        self.assertIn("best choice", second["hits"][0].get("best_for", ""))
+        self.assertIn("writing", second["hits"][0].get("why", "").lower())
+        self.assertIn("Writerly", second["message"])
+
 
 if __name__ == "__main__":
     unittest.main()
