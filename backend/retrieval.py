@@ -24,6 +24,8 @@ INSTRUCTION_LEAK_PATTERNS = (
     r"\bact\s+(?:like|as)\s+(?:a|an)?\s*[^.?!]{0,80}(?:consultant|advisor|expert)[^.?!]*[.?!]?",
     r"\bprioritize tools with[^.?!]*[.?!]?",
     r"\breturn recommendations as[^.?!]*[.?!]?",
+    r"\breturn alternatives that[^.?!]*[.?!]?",
+    r"\bthese are alternatives worth comparing[^.?!]*[.?!]?",
     r"\bdecision shortlist with[^.?!]*[.?!]?",
     r"\bfit,\s*tradeoffs,\s*and practical next steps:?",
 )
@@ -583,10 +585,14 @@ def is_referential_pick(text: str) -> bool:
     """True when a pick-best question points at an existing shortlist."""
     normalized = normalize_query_text(text).lower()
     return bool(re.search(
-        r"\b(these|those|them|the\s+(?:above|options|list|ones|shortlist|picks)|already|"
+        r"\b(these|those|them|all\s+(?:of\s+)?them|the\s+(?:above|options|list|ones|shortlist|picks)|already|"
         r"you\s+(?:recommended|suggested|listed|showed|gave))\b",
         normalized,
     ))
+
+
+def pick_best_needs_shortlist_message() -> str:
+    return "I can pick the best option from the current shortlist, but I need those results first."
 
 
 # Specific-tool follow-ups: the user is asking about one named tool in context.
@@ -1180,7 +1186,7 @@ def recommendation_message(
     first = names[0]
 
     if pick_best:
-        why = clean_evidence(str((hits[0].get("why") or "")).strip())
+        why = complete_sentences(str((hits[0].get("why") or "")).strip(), 260, max_sentences=2)
         lead = f"Out of the options, the best for {goal} is {first}."
         return f"{lead} {why}".strip() if why else lead
 
@@ -1450,15 +1456,24 @@ class RecommendationService:
             prior_hits = self.shortlists[conversation_id]
             best_hit = prior_hits[0] if prior_hits else None
             if best_hit:
-                message = recommendation_message([best_hit], q, MODE_ONE_BEST, pick_best=True)
+                reason_query = prior_task or q
+                single_hit = enrich_hit(dict(best_hit), reason_query)
+                message = recommendation_message([single_hit], reason_query, MODE_ONE_BEST, pick_best=True)
                 self.conversations.append(conversation_id, "assistant", message)
                 self._set_shortlist_pointer(conversation_id, 0)
-                return {"hits": [best_hit], "message": message}
+                return {"hits": [single_hit], "message": message}
 
-        # No stored shortlist: fall back to extracting the underlying task.
+        # No stored shortlist: a referential pick-best question is about the
+        # currently visible cards, so do not launch a fresh catalogue search.
         if pick_best:
+            residual = strip_pick_best_clause(q)
+            if is_referential_pick(q) and residual and query_terms(residual):
+                prior_task = residual
+            elif is_referential_pick(q):
+                message = pick_best_needs_shortlist_message()
+                self.conversations.append(conversation_id, "assistant", message)
+                return {"hits": [], "message": message}
             if not prior_task:
-                residual = strip_pick_best_clause(q)
                 if residual and query_terms(residual):
                     prior_task = residual
             if not prior_task and prior_messages:
@@ -1469,11 +1484,6 @@ class RecommendationService:
             q = prior_task
             mode = MODE_ONE_BEST
             prior_messages = []
-        elif pick_best and is_referential_pick(q):
-            # Refers to an earlier shortlist we do not have; ask the user to search first.
-            message = recommendation_message([], q, MODE_ONE_BEST, pick_best=True)
-            self.conversations.append(conversation_id, "assistant", message)
-            return {"hits": [], "message": message}
         else:
             # Self-contained query (e.g. "what's the best coding tool"); treat normally.
             pick_best = False
@@ -1608,6 +1618,11 @@ class RecommendationService:
             return {"action": "clarify", "question": feedback_clarifying_question()}
         if is_explanation_query(q):
             return {"action": "explain"}
+        if is_pick_best_query(q) and is_referential_pick(q):
+            residual = strip_pick_best_clause(q)
+            if residual and query_terms(residual):
+                return {"action": "search", "refined_query": residual}
+            return {"action": "explain"}
         # Follow-up questions that reference the existing shortlist must never trigger
         # a clarifying question; let the recommend step answer from the stored shortlist.
         has_shortlist = bool(conversation_id and self.shortlists.get(conversation_id))
@@ -1686,11 +1701,13 @@ class RecommendationService:
         # Fall back to remembered context when the client does not pass last_query.
         if not last_query and prior_messages:
             last_query = prior_messages[-1]
-        has_context = bool(last_query) or bool(prior_messages) or bool(
-            conversation_id and self.shortlists.get(conversation_id)
-        )
+        has_shortlist = bool(conversation_id and self.shortlists.get(conversation_id))
+        has_context = bool(last_query) or bool(prior_messages) or has_shortlist
 
-        if has_context and is_explanation_query(prompt):
+        if has_context and (
+            is_explanation_query(prompt)
+            or (is_pick_best_query(prompt) and (is_referential_pick(prompt) or has_shortlist))
+        ):
             return {"intent": "explain"}
 
         # "Which one of these is best?" / "What about Claude?" / "Which is cheapest?"

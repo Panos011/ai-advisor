@@ -15,6 +15,8 @@ from backend.retrieval import (
     focus_latest_intent,
     has_explicit_task,
     is_free_tool,
+    is_pick_best_query,
+    is_referential_pick,
     local_reason,
     merge_history_messages,
     normalize_mode,
@@ -204,6 +206,48 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["hits"], [])
         self.assertIn("previous results", response["message"])
 
+    def test_pick_best_followup_is_not_treated_as_new_search(self):
+        service = make_service()
+        prompt = "Nice which one do you think you is the best out of all them ?"
+
+        self.assertTrue(is_pick_best_query(prompt))
+        self.assertTrue(is_referential_pick(prompt))
+
+        intent = service.detect_intent(prompt, "I need a voice tool")
+        self.assertEqual(intent["intent"], "explain")
+
+        clarify = service.clarify(prompt)
+        self.assertEqual(clarify["action"], "explain")
+
+        response = service.recommend(
+            prompt,
+            retrieve_k=2,
+            final_k=2,
+            history=[{"role": "user", "content": "I need a voice tool"}],
+        )
+        self.assertEqual(response["hits"], [])
+        self.assertIn("current shortlist", response["message"])
+
+    def test_pick_best_followup_answers_from_stored_shortlist(self):
+        service = make_service()
+        conversation_id = "pick-best-thread"
+        first = service.recommend(
+            "I need a writing tool",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+        second = service.recommend(
+            "Nice which one do you think you is the best out of all them ?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(second["hits"][0]["meta"]["Name"], first["hits"][0]["meta"]["Name"])
+        self.assertIn("Out of the options", second["message"])
+        self.assertNotIn("Which one", second["message"])
+
     def test_feedback_prompt_is_not_treated_as_search(self):
         service = make_service()
         prompt = "Wtf. Act like a practical software consultant."
@@ -240,6 +284,13 @@ class BackendUnitTests(unittest.TestCase):
         self.assertNotIn("Consultant view", reason)
         self.assertNotIn("Return recommendations", reason)
         self.assertNotIn("...", reason)
+
+        leaked_alternatives = sanitize_reason(
+            "Return alternatives that are meaningfully different from the first result.",
+            name="Hyprnote",
+            query=query,
+        )
+        self.assertNotIn("Return alternatives", leaked_alternatives)
 
         fallback = local_reason(query, {
             "Name": "Hyprnote",
@@ -390,14 +441,14 @@ class BackendUnitTests(unittest.TestCase):
         intent = service.detect_intent("free only", "I need a writing tool")
         self.assertEqual(intent["intent"], "refine")
 
-    def test_pick_best_question_is_classified_as_refine(self):
-        # Frontend only keeps prior context when intent == 'refine'.
+    def test_pick_best_question_is_classified_as_explain(self):
+        # Referential pick-best questions should be answered from the visible shortlist.
         service = make_service()
         intent = service.detect_intent(
             "Which one is the best out of all these?",
             "Find an AI writing tool for blog posts",
         )
-        self.assertEqual(intent["intent"], "refine")
+        self.assertEqual(intent["intent"], "explain")
 
     def test_pick_best_question_never_clarifies(self):
         service = make_service()
@@ -451,6 +502,7 @@ class BackendUnitTests(unittest.TestCase):
             second["hits"][0]["meta"]["Name"],
             first["hits"][0]["meta"]["Name"],
         )
+        self.assertNotIn("Which one", second["message"])
 
     def test_pick_best_detect_intent_uses_stored_shortlist_as_context(self):
         # Even without last_query, a stored shortlist proves there is context.
@@ -462,7 +514,7 @@ class BackendUnitTests(unittest.TestCase):
         intent = service.detect_intent(
             "Which one is the best?", "", conversation_id="conv-intent",
         )
-        self.assertEqual(intent["intent"], "refine")
+        self.assertEqual(intent["intent"], "explain")
 
     def test_specific_tool_follow_up_returns_named_tool_from_shortlist(self):
         # "What about X?" should return the named tool from the stored shortlist.
