@@ -11,6 +11,7 @@ from backend.retrieval import (
     RecommendationService,
     ToolStore,
     build_retrieval_query,
+    clean_assistant_message,
     clean_best_for,
     focus_latest_intent,
     has_explicit_task,
@@ -143,6 +144,27 @@ class BackendUnitTests(unittest.TestCase):
         self.assertNotIn("...", response["hits"][0]["why"])
         self.assertEqual(client.chat.completions.calls, 0)
 
+    def test_embedding_fallback_stores_shortlist_for_followups(self):
+        service = make_service(client=FakeClient(embedding_failure=True))
+        conversation_id = "fallback-followup-thread"
+        first = service.recommend(
+            "I need a writing tool",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+        second = service.recommend(
+            "Why?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(first["hits"][0]["meta"]["Name"], "Writerly")
+        self.assertEqual(second["hits"][0]["meta"]["Name"], "Writerly")
+        self.assertIn("I would pick", second["message"])
+        self.assertNotIn("need the previous results", second["message"])
+
     def test_free_only_recommendations_exclude_paid_tools(self):
         service = make_service()
         response = service.recommend("I need a free writing tool", retrieve_k=2, final_k=2)
@@ -269,8 +291,70 @@ class BackendUnitTests(unittest.TestCase):
         )
 
         self.assertEqual(second["hits"][0]["meta"]["Name"], first["hits"][0]["meta"]["Name"])
-        self.assertIn("Out of the options", second["message"])
+        self.assertIn("I would pick", second["message"])
         self.assertNotIn("Which one", second["message"])
+
+    def test_plain_why_explains_current_shortlist(self):
+        service = make_service()
+        conversation_id = "why-thread"
+        first = service.recommend(
+            "I need a writing tool",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+        second = service.recommend(
+            "Why?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(len(second["hits"]), 1)
+        self.assertEqual(second["hits"][0]["meta"]["Name"], first["hits"][0]["meta"]["Name"])
+        self.assertIn("I would pick", second["message"])
+        self.assertNotIn("Consultant view", second["message"])
+
+    def test_why_these_tools_explains_the_shortlist(self):
+        service = make_service()
+        conversation_id = "why-these-thread"
+        service.recommend(
+            "I need a writing tool",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+        response = service.recommend(
+            "Why these tools?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertGreaterEqual(len(response["hits"]), 2)
+        self.assertIn("I chose these", response["message"])
+        self.assertIn("useful alternatives", response["message"])
+        self.assertNotIn("Consultant view", response["message"])
+
+    def test_alternative_followup_uses_alternative_wording(self):
+        service = make_service()
+        conversation_id = "alternative-thread"
+        service.recommend(
+            "I need a writing tool",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+        response = service.recommend(
+            "Show me another one",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "ImageBox")
+        self.assertIn("Another option is", response["message"])
+        self.assertNotIn("My top pick", response["message"])
 
     def test_feedback_prompt_is_not_treated_as_search(self):
         service = make_service()
@@ -339,6 +423,16 @@ class BackendUnitTests(unittest.TestCase):
         self.assertIn("Hyprnote is well suited", fallback)
         self.assertNotIn("Return recommendations", fallback)
         self.assertNotIn("...", fallback)
+
+    def test_clean_assistant_message_removes_old_template_language(self):
+        message = clean_assistant_message(
+            "Consultant view: these are alternatives worth comparing, not identical picks. "
+            "Start with Copyai. It appears to be the best first test from the current catalogue data."
+        )
+        self.assertNotIn("Consultant view", message)
+        self.assertNotIn("alternatives worth comparing", message)
+        self.assertNotIn("current catalogue data", message)
+        self.assertEqual(message, "Start with Copyai.")
 
     def test_returned_text_is_compact_without_ellipses(self):
         service = make_service()

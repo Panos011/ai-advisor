@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from openai import OpenAI
 
 from backend.metrics import RuntimeMetrics
-from backend.retrieval import RecommendationService, load_tool_store
+from backend.retrieval import RecommendationService, clean_assistant_message, load_tool_store
 from backend.schemas import (
     ClarifyRequest,
     ClarifyResponse,
@@ -63,6 +63,27 @@ def service(request: Request) -> RecommendationService:
     return recommender
 
 
+def clean_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    cleaned = dict(payload)
+    for key in ("message", "question"):
+        if key in cleaned and cleaned[key]:
+            cleaned[key] = clean_assistant_message(cleaned[key])
+    hits = cleaned.get("hits")
+    if isinstance(hits, list):
+        cleaned_hits = []
+        for hit in hits:
+            if not isinstance(hit, dict):
+                cleaned_hits.append(hit)
+                continue
+            next_hit = dict(hit)
+            for key in ("why", "tradeoff", "best_for"):
+                if key in next_hit and next_hit[key]:
+                    next_hit[key] = clean_assistant_message(next_hit[key])
+            cleaned_hits.append(next_hit)
+        cleaned["hits"] = cleaned_hits
+    return cleaned
+
+
 @app.get("/health")
 def health(request: Request):
     return service(request).health()
@@ -95,7 +116,7 @@ def search(body: SearchRequest, request: Request):
 
 @app.post("/recommend", response_model=RecommendResponse)
 def recommend(body: RecommendRequest, request: Request):
-    return service(request).recommend(
+    return clean_payload(service(request).recommend(
         body.q,
         body.retrieve_k,
         body.final_k,
@@ -103,23 +124,23 @@ def recommend(body: RecommendRequest, request: Request):
         mode=getattr(body, "mode", "balanced"),
         conversation_id=getattr(body, "conversation_id", None),
         history=getattr(body, "history", None),
-    )
+    ))
 
 
 @app.post("/clarify", response_model=ClarifyResponse)
 def clarify(body: ClarifyRequest, request: Request):
-    return service(request).clarify(
+    return clean_payload(service(request).clarify(
         body.q,
         conversation_id=getattr(body, "conversation_id", None),
         history=getattr(body, "history", None),
-    )
+    ))
 
 
 @app.post("/detect_intent", response_model=IntentResponse)
 def detect_intent(body: IntentRequest, request: Request):
-    return service(request).detect_intent(
+    return clean_payload(service(request).detect_intent(
         body.prompt,
         body.last_query,
         conversation_id=getattr(body, "conversation_id", None),
         history=getattr(body, "history", None),
-    )
+    ))

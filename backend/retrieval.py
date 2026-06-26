@@ -26,6 +26,7 @@ INSTRUCTION_LEAK_PATTERNS = (
     r"\breturn recommendations as[^.?!]*[.?!]?",
     r"\breturn alternatives that[^.?!]*[.?!]?",
     r"\bthese are alternatives worth comparing[^.?!]*[.?!]?",
+    r"\bit appears to be the best first test from the current catalogue data[.?!]?",
     r"\bdecision shortlist with[^.?!]*[.?!]?",
     r"\bfit,\s*tradeoffs,\s*and practical next steps:?",
 )
@@ -559,6 +560,8 @@ _DEV_ON_TOPIC_CATEGORIES = (
 
 def is_explanation_query(text: str) -> bool:
     normalized = normalize_query_text(text).lower().strip()
+    if normalized in {"why", "why?", "why this", "why these", "why those"}:
+        return True
     return bool(re.search(
         r"\b("
         r"why\s+(?:is\s+|are\s+|was\s+)?(?:this|that|it|the)\s+(?:the\s+)?best\s+(?:tool|one|option|app|choice|pick)|"
@@ -573,6 +576,14 @@ def is_explanation_query(text: str) -> bool:
         r"what\s+makes\s+(?:this|that|it|the)\s+(?:the\s+)?best|"
         r"how\s+(?:is\s+|does\s+)(?:this|that|it|the)\s+(?:tool|one|option|app)\s+(?:the\s+)?best"
         r")\b",
+        normalized,
+    ))
+
+
+def is_shortlist_explanation_query(text: str) -> bool:
+    normalized = normalize_query_text(text).lower().strip()
+    return is_explanation_query(normalized) and bool(re.search(
+        r"\b(these|those|results?|recommendations?|picks?|shortlist)\b",
         normalized,
     ))
 
@@ -837,6 +848,16 @@ def specific_tool_message(hit: dict[str, Any], query: str) -> str:
 
 def no_more_alternatives_message() -> str:
     return "I do not have another distinct option in the current shortlist. Try a new search or loosen the filters."
+
+
+def alternative_message(hit: dict[str, Any], query: str) -> str:
+    meta = hit.get("meta") or {}
+    name = str(meta.get("Name", "This tool")).strip() or "This tool"
+    why = complete_sentences(str(hit.get("why") or local_reason(query, meta)), 220, max_sentences=1)
+    message = f"Another option is {name}."
+    if why:
+        message = f"{message} {why}"
+    return clean_assistant_message(message)
 
 
 def needs_clarification(q: str) -> bool:
@@ -1147,6 +1168,28 @@ def ensure_terminal_punctuation(text: str) -> str:
     return cleaned
 
 
+def clean_assistant_message(value: Any) -> str:
+    """Final cleanup for user-facing assistant bubbles."""
+    text = normalize_display_text(value)
+    text = re.sub(
+        r"\b(?:consultant|advisor)\s+view\s*[:\-]\s*",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\b(?:these are alternatives worth comparing,\s*not identical picks|"
+        r"it appears to be the best first test from the current catalogue data)[.?!]?\s*",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = normalize_display_text(text)
+    if text and text[0].islower():
+        text = text[0].upper() + text[1:]
+    return text
+
+
 def compact_meta(meta: dict[str, Any], summary: Any = None) -> dict[str, Any]:
     return dict(meta)
 
@@ -1294,23 +1337,63 @@ def recommendation_message(
 
     if pick_best:
         why = complete_sentences(str((hits[0].get("why") or "")).strip(), 260, max_sentences=2)
-        lead = f"Out of the options, the best for {goal} is {first}."
-        return f"{lead} {why}".strip() if why else lead
+        lead = f"I would pick {first} for {goal}."
+        return clean_assistant_message(f"{lead} {why}".strip() if why else lead)
 
     if mode == MODE_ONE_BEST:
-        return f"My top pick for {goal} is {first}. It is the closest single match in the current catalogue."
+        why = complete_sentences(str((hits[0].get("why") or "")).strip(), 220, max_sentences=1)
+        message = f"My top pick for {goal} is {first}."
+        if why:
+            message = f"{message} {why}"
+        return clean_assistant_message(message)
 
     if mode == MODE_COMPARE:
         if len(names) >= 2:
             listed = human_join(names[: min(3, len(names))])
-            return f"Here is a side-by-side comparison for {goal}: {listed}. Check the fit and tradeoff notes on each card."
-        return f"I only found {first} as a clear match for {goal}, so there is little to compare yet."
+            return clean_assistant_message(
+                f"Here is a side-by-side comparison for {goal}: {listed}. Check the fit and tradeoff notes on each card."
+            )
+        return clean_assistant_message(f"I only found {first} as a clear match for {goal}, so there is little to compare yet.")
 
     if len(names) == 1:
-        return f"Start with {first}. It looks like the strongest match from the current catalogue."
+        why = complete_sentences(str((hits[0].get("why") or "")).strip(), 220, max_sentences=1)
+        message = f"Start with {first}."
+        if why:
+            message = f"{message} {why}"
+        return clean_assistant_message(message)
 
     second = names[1]
-    return f"Start with {first}. Compare it with {second} if you want another good option."
+    return clean_assistant_message(f"Start with {first}. Compare it with {second} if you want another good option.")
+
+
+def shortlist_explanation_message(hits: list[dict[str, Any]], query: str) -> str:
+    names = [
+        str((hit.get("meta") or {}).get("Name", "")).strip()
+        for hit in hits
+        if (hit.get("meta") or {}).get("Name")
+    ]
+    names = [name for name in names if name]
+    if not names:
+        return "I can explain the current shortlist after a search, but I need the previous results to do that."
+
+    goal = request_goal(query)
+    if len(names) == 1:
+        return recommendation_message(hits, query, MODE_ONE_BEST, pick_best=True)
+
+    first = names[0]
+    alternatives = human_join(names[1:min(3, len(names))])
+    reason = complete_sentences(str(hits[0].get("why") or ""), 180, max_sentences=1)
+    message = (
+        f"I chose these because they are the strongest matches I found for {goal}. "
+        f"{first} is the best first pick"
+    )
+    if reason:
+        message += f": {reason}"
+    else:
+        message += "."
+    if alternatives:
+        message += f" {alternatives} are useful alternatives to compare before choosing."
+    return clean_assistant_message(message)
 
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -1467,7 +1550,6 @@ class RecommendationService:
             self.metrics.increment("recommend_explain_query_blocked")
             prior_hits = self.shortlists.get(conversation_id) if conversation_id else None
             if prior_hits:
-                top = prior_hits[0]
                 prior_messages = [
                     m.get("content", "") for m in self.conversations.get(conversation_id) or []
                 ]
@@ -1475,6 +1557,19 @@ class RecommendationService:
                     (m for m in reversed(prior_messages) if has_explicit_task(m)), ""
                 )
                 reason_query = prior_task or q
+                if is_shortlist_explanation_query(q) and len(prior_hits) > 1:
+                    explained_hits = [
+                        enrich_hit(dict(hit), reason_query)
+                        for hit in prior_hits[: min(3, len(prior_hits))]
+                    ]
+                    for explained in explained_hits:
+                        meta = explained.get("meta") or {}
+                        explained["why"] = local_reason(reason_query, meta)
+                    message = shortlist_explanation_message(explained_hits, reason_query)
+                    self.conversations.append(conversation_id, "assistant", message)
+                    return {"hits": explained_hits, "message": message}
+
+                top = prior_hits[0]
                 explained = enrich_hit(dict(top), reason_query)
                 explained["why"] = local_reason(reason_query, explained.get("meta") or {})
                 explained["best_for"] = (
@@ -1557,7 +1652,7 @@ class RecommendationService:
             if alt_hit:
                 reason_query = prior_task or q
                 single_hit = enrich_hit(dict(alt_hit), reason_query)
-                message = recommendation_message([single_hit], reason_query, MODE_ONE_BEST)
+                message = alternative_message(single_hit, reason_query)
                 self.conversations.append(conversation_id, "assistant", message)
                 self._set_shortlist_pointer(conversation_id, alt_idx)
                 return {"hits": [single_hit], "message": message}
@@ -1655,6 +1750,9 @@ class RecommendationService:
             hits = apply_decision_filters(hits, filters, self.store.meta)[:effective_final_k] or hits[:effective_final_k]
             hits = [enrich_hit(hit, q) for hit in hits]
             self.recommend_cache.set(cache_key, hits)
+            if conversation_id:
+                self.shortlists[conversation_id] = hits
+                self.shortlist_pointers[conversation_id] = 0
             message = recommendation_message(hits, q, mode, pick_best=pick_best)
             self.conversations.append(conversation_id, "assistant", message)
             return {"hits": hits, "message": message}
