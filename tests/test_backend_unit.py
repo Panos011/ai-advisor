@@ -768,6 +768,77 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["hits"][0]["meta"]["Name"], "ImageBox")
         self.assertIn("Another option is", response["message"])
 
+    def test_chat_feedback_does_not_restart_recommendations(self):
+        service = make_service()
+        conversation_id = "chat-frustrated-feedback"
+        service.recommend(
+            "find a writing tool for blog posts",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        response = service.chat(
+            "Are you stupid ?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["action"], "chat_only")
+        self.assertEqual(response["hits"], [])
+        self.assertIn("frustrated", response["message"].lower())
+        self.assertNotIn("Start with", response["message"])
+
+    def test_chat_plural_alternatives_uses_current_shortlist(self):
+        service = make_service()
+        conversation_id = "chat-plural-alternatives"
+        service.recommend(
+            "find a writing tool for blog posts",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        response = service.chat(
+            "Hey is there any alternatives ?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["action"], "show_alternative")
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "ImageBox")
+        self.assertIn("Another option is", response["message"])
+        self.assertNotIn("Start with", response["message"])
+
+    def test_chat_plural_alternatives_can_use_visible_tools_without_memory(self):
+        service = make_service()
+        visible = [
+            {
+                "score": 0.9,
+                "meta": service.store.meta[0],
+                "why": "Writerly is useful for blog writing.",
+            },
+            {
+                "score": 0.7,
+                "meta": service.store.meta[1],
+                "why": "ImageBox is a visual tool.",
+            },
+        ]
+
+        response = service.chat(
+            "Hey is there any alternatives ?",
+            retrieve_k=2,
+            final_k=2,
+            visible_tools=visible,
+        )
+
+        self.assertEqual(response["action"], "show_alternative")
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "ImageBox")
+        self.assertIn("Another option is", response["message"])
+        self.assertNotIn("Start with", response["message"])
+
     def test_chat_new_coding_alternative_runs_fresh_search(self):
         service = make_dev_service()
         conversation_id = "chat-better-coding"

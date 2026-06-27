@@ -384,6 +384,8 @@ INSTRUCTION_LEAK_PATTERNS = (
 FEEDBACK_PATTERNS = (
     r"\bwtf\b",
     r"\bwhat\s+the\s+fuck\b",
+    r"\b(?:are\s+you|you\s+are|ur|u\s+r)\s+(?:stupid|dumb|idiot|useless)\b",
+    r"\b(?:stupid|dumb|idiot|moron)\b",
     r"\b(?:this|that|it)\s+(?:doesn'?t|does not|isn'?t|is not)\s+(?:work|working|right|correct)\b",
     r"\b(?:wrong|broken|bad|nonsense|useless)\b",
     r"\b(?:you|it)\s+(?:messed|broke)\b",
@@ -626,6 +628,10 @@ def feedback_clarifying_question() -> str:
         "That looks like feedback rather than a new tool search. "
         "Do you want me to explain the current tools, change the filters, or start a new search?"
     )
+
+
+def feedback_chat_response() -> str:
+    return "You are right to be frustrated. I should not start a new tool search from that; tell me what was wrong, or ask me to explain, change filters, or show another option."
 
 
 def is_non_search_message(text: str) -> bool:
@@ -1146,6 +1152,7 @@ _CRITERION_PATTERNS = (
 
 
 _ALTERNATIVE_PATTERNS = (
+    r"\b(?:is\s+there\s+|are\s+there\s+)?(?:any\s+)?alternatives?\b",
     r"\b(?:is\s+there\s+)?any\s+other\s+(?:tool|one|option|app)\b",
     r"\b(?:show\s+me\s+|give\s+me\s+)another\b",
     r"\b(?:show\s+me\s+)?something\s+else\b",
@@ -2451,6 +2458,34 @@ class RecommendationService:
         if conversation_id and provided_hits:
             self.shortlists[conversation_id] = provided_hits
             self.shortlist_pointers.setdefault(conversation_id, 0)
+        has_context_hits = bool(provided_hits or (conversation_id and self.shortlists.get(conversation_id)))
+
+        if is_feedback_only_query(q):
+            message = self._model_chat_only_response(q, conversation_id, history)
+            if not message:
+                message = feedback_chat_response()
+            message = clean_assistant_message(message)
+            self.conversations.append(conversation_id, "user", q)
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"action": "chat_only", "hits": [], "message": message}
+
+        if is_alternative_query(q) and not alternative_requests_new_search(q):
+            if has_context_hits:
+                response = self._chat_alternative(
+                    q,
+                    conversation_id,
+                    history,
+                    retrieve_k,
+                    final_k,
+                    filters,
+                    mode,
+                    visible_hits=provided_hits,
+                )
+                return {"action": "show_alternative", **response}
+            message = "I can show alternatives after I have a current shortlist. Tell me the task or run a search first."
+            self.conversations.append(conversation_id, "user", q)
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"action": "clarify", "hits": [], "message": message}
 
         decision = self._chat_decision(q, filters, mode, conversation_id, history)
         action = decision.get("action") or action_from_planner_tool(decision.get("tool")) or "recommend"
@@ -2552,14 +2587,19 @@ class RecommendationService:
         final_k: int,
         filters: Any,
         mode: str,
+        visible_hits: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         self.conversations.append(conversation_id, "user", q)
+        visible_hits = visible_hits or []
         alt_hit, alt_idx = self._next_alternative_hit(conversation_id)
+        if not alt_hit and visible_hits:
+            if len(visible_hits) > 1:
+                alt_hit, alt_idx = visible_hits[1], 1
         if not alt_hit:
             reason_query = self._latest_task_query(conversation_id, history)
             fresh = self._fresh_distinct_alternative(
                 reason_query,
-                self.shortlists.get(conversation_id) if conversation_id else [],
+                visible_hits or (self.shortlists.get(conversation_id) if conversation_id else []),
                 retrieve_k,
                 final_k,
                 filters,
