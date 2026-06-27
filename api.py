@@ -2574,17 +2574,17 @@ class RecommendationService:
         # Guard: a question about the tools already on screen (differences, why, which is
         # best) must be answered from those tools, never re-run as a fresh search that
         # repeats the shortlist. Only override when the message introduces no new task.
-        if (
-            has_context_hits
-            and action in {"recommend", "refine"}
-            and not has_explicit_task(q)
-        ):
-            if is_compare_request(q):
+        if has_context_hits and not has_explicit_task(q):
+            # A "their differences" / "compare them" question is best answered by the LLM
+            # from the visible cards (rich side-by-side), so route it there even if the
+            # planner picked a plain explanation or a fresh search.
+            if is_compare_request(q) and action not in {"chat_only", "clarify"}:
                 action = "tool_question"
-            elif is_pick_best_query(q):
-                action = "pick_best"
-            elif is_explanation_query(q):
-                action = "explain_shortlist"
+            elif action in {"recommend", "refine"}:
+                if is_pick_best_query(q):
+                    action = "pick_best"
+                elif is_explanation_query(q):
+                    action = "explain_shortlist"
 
         if action == "chat_only":
             message = self._model_chat_only_response(q, conversation_id, history)
