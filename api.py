@@ -10,6 +10,8 @@ from openai import OpenAI
 from backend.metrics import RuntimeMetrics
 from backend.retrieval import RecommendationService, clean_assistant_message, load_tool_store
 from backend.schemas import (
+    ChatRequest,
+    ChatResponse,
     ClarifyRequest,
     ClarifyResponse,
     IntentRequest,
@@ -124,6 +126,20 @@ def recommend(body: RecommendRequest, request: Request):
         mode=getattr(body, "mode", "balanced"),
         conversation_id=getattr(body, "conversation_id", None),
         history=getattr(body, "history", None),
+    ))
+
+
+@app.post("/chat", response_model=ChatResponse)
+def chat(body: ChatRequest, request: Request):
+    return clean_payload(service(request).chat(
+        body.q,
+        body.retrieve_k,
+        body.final_k,
+        filters=getattr(body, "filters", None),
+        mode=getattr(body, "mode", "balanced"),
+        conversation_id=getattr(body, "conversation_id", None),
+        history=getattr(body, "history", None),
+        visible_tools=getattr(body, "visible_tools", None),
     ))
 
 

@@ -25,7 +25,7 @@ from backend.retrieval import (
     request_goal,
     sanitize_reason,
 )
-from backend.schemas import RecommendRequest, SearchRequest
+from backend.schemas import ChatRequest, RecommendRequest, SearchRequest
 from backend.settings import Settings
 
 
@@ -88,6 +88,39 @@ class FakeClient:
     def __init__(self, embedding_failure=False):
         self.embeddings = FakeEmbeddings(should_fail=embedding_failure)
         self.chat = SimpleNamespace(completions=FakeChatCompletions())
+
+
+class DecisionChatCompletions:
+    def __init__(self, decisions):
+        self.decisions = list(decisions)
+        self.calls = 0
+        self.rank_calls = 0
+
+    def create(self, **kwargs):
+        self.calls += 1
+        system = (kwargs.get("messages") or [{}])[0].get("content", "")
+        if "conversation brain" in system:
+            content = json.dumps(self.decisions.pop(0) if self.decisions else {"action": "chat_only", "message": "Okay."})
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+
+        self.rank_calls += 1
+        content = json.dumps({
+            "selected": [
+                {
+                    "id": 0,
+                    "reason": "Writerly is a strong writing assistant for blog posts and SEO content.",
+                    "best_for": "Writing blog posts",
+                    "tradeoff": "Check usage limits on the free plan.",
+                }
+            ]
+        })
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+
+
+class DecisionClient:
+    def __init__(self, decisions):
+        self.embeddings = FakeEmbeddings()
+        self.chat = SimpleNamespace(completions=DecisionChatCompletions(decisions))
 
 
 def make_service(client=None):
@@ -355,6 +388,160 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["hits"][0]["meta"]["Name"], "ImageBox")
         self.assertIn("Another option is", response["message"])
         self.assertNotIn("My top pick", response["message"])
+
+    def test_chat_request_schema_accepts_visible_tools(self):
+        request = ChatRequest(
+            q="why these?",
+            visible_tools=[
+                {
+                    "score": 0.9,
+                    "meta": {"Name": "Writerly", "Categories": "writing", "Price": "Free tier"},
+                    "why": "Good for blog posts.",
+                }
+            ],
+        )
+        self.assertEqual(request.visible_tools[0].meta["Name"], "Writerly")
+
+    def test_chat_model_decision_understands_messy_pick_best(self):
+        service = make_service(client=DecisionClient([
+            {"action": "pick_best"},
+        ]))
+        conversation_id = "chat-pick"
+        service.recommend(
+            "Find an AI writing tool for blog posts",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+        response = service.chat(
+            "nice but which would u actually use?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["action"], "pick_best")
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "Writerly")
+        self.assertIn("I would pick", response["message"])
+        self.assertGreater(service.client.chat.completions.calls, 0)
+
+    def test_chat_model_decision_can_refine_to_free_tools(self):
+        service = make_service(client=DecisionClient([
+            {
+                "action": "refine",
+                "refined_query": "I need a free writing tool",
+                "filters": {"budget": "free"},
+            },
+        ]))
+        conversation_id = "chat-free"
+        service.recommend(
+            "Find an AI writing tool",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+        response = service.chat(
+            "nah no paid stuff at all pls",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["action"], "refine")
+        self.assertEqual(response["refined_query"], "I need a free writing tool")
+        self.assertTrue(all(is_free_tool(hit["meta"]) for hit in response["hits"]))
+
+    def test_chat_model_decision_can_chat_without_showing_tools(self):
+        service = make_service(client=DecisionClient([
+            {
+                "action": "chat_only",
+                "message": "I can help you choose, compare, and filter AI tools.",
+            },
+        ]))
+        response = service.chat(
+            "what can you do in this screen?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="chat-only",
+        )
+
+        self.assertEqual(response["action"], "chat_only")
+        self.assertEqual(response["hits"], [])
+        self.assertIn("choose", response["message"])
+
+    def test_chat_uses_visible_tools_when_server_memory_is_missing(self):
+        service = make_service(client=DecisionClient([
+            {"action": "explain_shortlist"},
+        ]))
+        visible = [
+            {
+                "score": 0.9,
+                "meta": service.store.meta[0],
+                "why": "Writerly is useful for blog writing.",
+            },
+            {
+                "score": 0.7,
+                "meta": service.store.meta[1],
+                "why": "ImageBox is a visual tool.",
+            },
+        ]
+        response = service.chat(
+            "why these?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="visible-only",
+            visible_tools=visible,
+        )
+
+        self.assertEqual(response["action"], "explain")
+        self.assertGreaterEqual(len(response["hits"]), 2)
+        self.assertIn("I chose these", response["message"])
+
+    def test_chat_fallback_free_only_after_greeting_asks_for_task(self):
+        service = make_service(client=FakeClient(embedding_failure=True))
+        conversation_id = "fallback-free-after-greeting"
+        service.chat("hello", retrieve_k=2, final_k=2, conversation_id=conversation_id)
+        response = service.chat("only free tools", retrieve_k=2, final_k=2, conversation_id=conversation_id)
+
+        self.assertEqual(response["action"], "clarify")
+        self.assertEqual(response["hits"], [])
+        self.assertIn("What task", response["message"])
+
+    def test_chat_fallback_handles_pivot_without_old_topic(self):
+        service = make_service(client=FakeClient(embedding_failure=True))
+        conversation_id = "fallback-pivot"
+        service.chat(
+            "find a writing tool for blog posts",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+        response = service.chat(
+            "nah I need something for private meeting notes instead",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["action"], "recommend")
+        refined = (response.get("refined_query") or "").lower()
+        self.assertIn("meeting", refined)
+        self.assertNotIn("blog", refined)
+
+    def test_chat_fallback_understands_why_tho(self):
+        service = make_service(client=FakeClient(embedding_failure=True))
+        conversation_id = "fallback-why-tho"
+        service.chat(
+            "find a writing tool for blog posts",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+        response = service.chat("why tho", retrieve_k=2, final_k=2, conversation_id=conversation_id)
+
+        self.assertEqual(response["action"], "explain")
+        self.assertIn("I would pick", response["message"])
+        self.assertNotIn("Start with", response["message"])
 
     def test_feedback_prompt_is_not_treated_as_search(self):
         service = make_service()

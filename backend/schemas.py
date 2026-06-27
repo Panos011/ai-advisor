@@ -114,6 +114,49 @@ class RecommendResponse(BaseModel):
     message: str | None = None
 
 
+class ChatRequest(BaseModel):
+    q: str = Field(..., min_length=1, max_length=MAX_QUERY_LENGTH)
+    retrieve_k: int = Field(30, ge=1, le=100)
+    final_k: int = Field(5, ge=1, le=10)
+    filters: DecisionFilters = Field(default_factory=DecisionFilters)
+    mode: str = Field("balanced", max_length=40)
+    conversation_id: str | None = Field(None, max_length=128)
+    history: list[ChatMessage] = Field(default_factory=list, max_length=MAX_HISTORY_TURNS)
+    visible_tools: list[SearchHit] = Field(default_factory=list, max_length=10)
+
+    @field_validator("q")
+    @classmethod
+    def clean_query(cls, value: str) -> str:
+        return _clean_required_text(value)
+
+    @field_validator("mode")
+    @classmethod
+    def clean_mode(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        return cleaned or "balanced"
+
+    @model_validator(mode="after")
+    def validate_k_values(self) -> "ChatRequest":
+        if self.final_k > self.retrieve_k:
+            raise ValueError("final_k must be less than or equal to retrieve_k")
+        return self
+
+
+class ChatResponse(BaseModel):
+    action: Literal[
+        "chat_only",
+        "clarify",
+        "recommend",
+        "refine",
+        "explain",
+        "pick_best",
+        "show_alternative",
+    ]
+    message: str
+    hits: list[SearchHit] = Field(default_factory=list)
+    refined_query: str | None = None
+
+
 class SearchResponse(BaseModel):
     hits: list[SearchHit]
 

@@ -57,6 +57,18 @@ MODE_BEST_FIT = "best_fit"
 MODE_ONE_BEST = "one_best"
 MODE_COMPARE = "compare"
 
+CHAT_ACTIONS = {
+    "chat_only",
+    "clarify",
+    "recommend",
+    "refine",
+    "explain_shortlist",
+    "explain_best",
+    "pick_best",
+    "show_alternative",
+    "tool_question",
+}
+
 _MODE_ALIASES = {
     "balanced": MODE_BEST_FIT,
     "best_fit": MODE_BEST_FIT,
@@ -534,10 +546,13 @@ def focus_latest_intent(q: str) -> str:
     text = normalize_query_text(q)
     if not text:
         return text
+    text = re.sub(r"^(?:nah|nope|no)\b[,\s]+", "", text, flags=re.IGNORECASE).strip()
     lowered = text.lower()
     best_pos = -1
     for marker in PIVOT_MARKERS:
         idx = lowered.rfind(marker)
+        if idx >= 0 and len(lowered[idx + len(marker):].split()) < 2:
+            continue
         if idx > best_pos:
             best_pos = idx
     if best_pos <= 0:
@@ -561,6 +576,8 @@ _DEV_ON_TOPIC_CATEGORIES = (
 def is_explanation_query(text: str) -> bool:
     normalized = normalize_query_text(text).lower().strip()
     if normalized in {"why", "why?", "why this", "why these", "why those"}:
+        return True
+    if re.fullmatch(r"why\s*(?:tho|though|exactly|again)?\??", normalized):
         return True
     return bool(re.search(
         r"\b("
@@ -1194,6 +1211,47 @@ def compact_meta(meta: dict[str, Any], summary: Any = None) -> dict[str, Any]:
     return dict(meta)
 
 
+def plain_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    if hasattr(value, "dict"):
+        return value.dict()
+    return {}
+
+
+def visible_tool_hits(visible_tools: Any) -> list[dict[str, Any]]:
+    hits: list[dict[str, Any]] = []
+    for item in visible_tools or []:
+        raw = plain_dict(item)
+        if not raw:
+            continue
+        meta = raw.get("meta")
+        if not isinstance(meta, dict):
+            continue
+        hits.append({
+            "score": float(raw.get("score", 0.0) or 0.0),
+            "meta": compact_meta(meta),
+            "why": raw.get("why") or local_reason("", meta),
+            "tradeoff": raw.get("tradeoff") or build_tradeoff(meta),
+            "best_for": raw.get("best_for") or build_best_for("", meta),
+            "fit_label": raw.get("fit_label") or "Good match",
+        })
+    return hits
+
+
+def compact_hit_for_prompt(hit: dict[str, Any]) -> dict[str, Any]:
+    meta = hit.get("meta") or {}
+    return {
+        "name": meta.get("Name", ""),
+        "categories": meta.get("Categories", ""),
+        "price": meta.get("Price", ""),
+        "why": hit.get("why", ""),
+        "best_for": hit.get("best_for", ""),
+    }
+
+
 def sanitize_reason(reason: Any, name: str = "This tool", query: str = "") -> str:
     text = normalize_display_text(reason)
     if not text:
@@ -1815,6 +1873,258 @@ class RecommendationService:
         message = recommendation_message(final_hits, q, mode, pick_best=pick_best)
         self.conversations.append(conversation_id, "assistant", message)
         return {"hits": final_hits, "message": message}
+
+    def chat(
+        self,
+        q: str,
+        retrieve_k: int,
+        final_k: int,
+        filters: Any = None,
+        mode: str = "balanced",
+        conversation_id: str | None = None,
+        history: Any = None,
+        visible_tools: Any = None,
+    ) -> dict[str, Any]:
+        self.metrics.increment("chat_requests")
+        q = normalize_query_text(q)
+        mode = normalize_mode(mode)
+
+        provided_hits = visible_tool_hits(visible_tools)
+        if conversation_id and provided_hits:
+            self.shortlists[conversation_id] = provided_hits
+            self.shortlist_pointers.setdefault(conversation_id, 0)
+
+        decision = self._chat_decision(q, filters, mode, conversation_id, history)
+        action = decision.get("action", "recommend")
+        if action not in CHAT_ACTIONS:
+            action = "recommend"
+
+        if action == "chat_only":
+            message = clean_assistant_message(decision.get("message") or non_search_response(q))
+            self.conversations.append(conversation_id, "user", q)
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"action": "chat_only", "hits": [], "message": message}
+
+        if action == "clarify":
+            message = clean_assistant_message(
+                decision.get("message")
+                or decision.get("question")
+                or default_clarifying_question(q)
+            )
+            self.conversations.append(conversation_id, "user", q)
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"action": "clarify", "hits": [], "message": message}
+
+        if action in {"explain_shortlist", "explain_best", "pick_best"}:
+            response = self._chat_explain(action, q, conversation_id, history)
+            return {
+                "action": "pick_best" if action == "pick_best" else "explain",
+                **response,
+            }
+
+        if action == "show_alternative":
+            response = self._chat_alternative(q, conversation_id, history)
+            return {"action": "show_alternative", **response}
+
+        if action == "tool_question":
+            response = self.recommend(
+                q,
+                retrieve_k,
+                final_k,
+                filters=filters,
+                mode=mode,
+                conversation_id=conversation_id,
+                history=history,
+            )
+            return {"action": "refine", **response}
+
+        refined_query = normalize_query_text(decision.get("refined_query") or q)
+        next_filters = self._merge_chat_filters(filters, decision.get("filters"))
+        next_mode = normalize_mode(decision.get("mode") or mode)
+        if action == "recommend":
+            next_mode = next_mode or mode
+        response = self.recommend(
+            refined_query,
+            retrieve_k,
+            final_k,
+            filters=next_filters,
+            mode=next_mode,
+            conversation_id=conversation_id,
+            history=history,
+        )
+        return {
+            "action": "refine" if action == "refine" else "recommend",
+            "refined_query": refined_query,
+            **response,
+        }
+
+    def _chat_explain(
+        self,
+        action: str,
+        q: str,
+        conversation_id: str | None,
+        history: Any,
+    ) -> dict[str, Any]:
+        prior_hits = self.shortlists.get(conversation_id) if conversation_id else None
+        self.conversations.append(conversation_id, "user", q)
+        if not prior_hits:
+            message = "I can explain the current tools after a search, but I need the visible results first."
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"hits": [], "message": message}
+
+        reason_query = self._latest_task_query(conversation_id, history) or q
+        if action == "explain_shortlist":
+            explained_hits = [
+                enrich_hit(dict(hit), reason_query)
+                for hit in prior_hits[: min(3, len(prior_hits))]
+            ]
+            for explained in explained_hits:
+                explained["why"] = local_reason(reason_query, explained.get("meta") or {})
+            message = shortlist_explanation_message(explained_hits, reason_query)
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"hits": explained_hits, "message": message}
+
+        top = enrich_hit(dict(prior_hits[0]), reason_query)
+        top["why"] = local_reason(reason_query, top.get("meta") or {})
+        message = recommendation_message([top], reason_query, MODE_ONE_BEST, pick_best=True)
+        self._set_shortlist_pointer(conversation_id, 0)
+        self.conversations.append(conversation_id, "assistant", message)
+        return {"hits": [top], "message": message}
+
+    def _chat_alternative(
+        self,
+        q: str,
+        conversation_id: str | None,
+        history: Any,
+    ) -> dict[str, Any]:
+        self.conversations.append(conversation_id, "user", q)
+        alt_hit, alt_idx = self._next_alternative_hit(conversation_id)
+        if not alt_hit:
+            message = no_more_alternatives_message()
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"hits": [], "message": message}
+
+        reason_query = self._latest_task_query(conversation_id, history) or q
+        single_hit = enrich_hit(dict(alt_hit), reason_query)
+        message = alternative_message(single_hit, reason_query)
+        self._set_shortlist_pointer(conversation_id, alt_idx)
+        self.conversations.append(conversation_id, "assistant", message)
+        return {"hits": [single_hit], "message": message}
+
+    def _latest_task_query(self, conversation_id: str | None, history: Any) -> str:
+        stored = self.conversations.get(conversation_id)
+        prior_messages = merge_history_messages(history, stored)
+        return next((m for m in reversed(prior_messages) if has_explicit_task(m)), "")
+
+    def _merge_chat_filters(self, filters: Any, decision_filters: Any) -> Any:
+        base = filters.model_dump() if hasattr(filters, "model_dump") else dict(filters or {})
+        if isinstance(decision_filters, dict):
+            for key in ("budget", "privacy", "integrations", "categories", "platforms", "skill_level"):
+                value = decision_filters.get(key)
+                if value not in (None, "", []):
+                    base[key] = value
+        return base or filters
+
+    def _chat_decision(
+        self,
+        q: str,
+        filters: Any,
+        mode: str,
+        conversation_id: str | None,
+        history: Any,
+    ) -> dict[str, Any]:
+        stored = self.conversations.get(conversation_id)
+        prior_messages = merge_history_messages(history, stored)
+        prior_hits = self.shortlists.get(conversation_id) if conversation_id else []
+        context = {
+            "latest_user_message": q,
+            "recent_user_messages": prior_messages[-6:],
+            "visible_tools": [compact_hit_for_prompt(hit) for hit in (prior_hits or [])[:5]],
+            "filters": filters.model_dump() if hasattr(filters, "model_dump") else (filters or {}),
+            "mode": mode,
+        }
+        system = (
+            "You are the conversation brain for an AI tool advisor app. "
+            "Classify the latest user message using the conversation history and visible tools. "
+            "Do not try to predict exact wording with rules; infer the user's intent naturally.\n"
+            "Actions:\n"
+            "- chat_only: greetings, thanks, app-help, feedback, or normal conversation that should not change tool cards.\n"
+            "- clarify: the user wants tools but the task is missing.\n"
+            "- recommend: a new tool search.\n"
+            "- refine: change filters or rerank the current search, e.g. free-only, cheaper, more private.\n"
+            "- explain_shortlist: user asks why these/current tools were shown.\n"
+            "- explain_best or pick_best: user asks which one you would choose or which is best.\n"
+            "- show_alternative: user asks for another option from the current list.\n"
+            "- tool_question: user asks about a specific visible tool or property, e.g. is it free, what about X.\n"
+            "Return ONLY JSON with keys: action, message, refined_query, filters, mode. "
+            "Use message for chat_only/clarify only. Never write 'Consultant view'."
+        )
+        try:
+            with self.metrics.timer("openai.chat_decision_ms"):
+                resp = self.client.chat.completions.create(
+                    model=self.settings.chat_model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+                    ],
+                    temperature=0.0,
+                    response_format={"type": "json_object"},
+                )
+            data = json.loads(resp.choices[0].message.content or "{}")
+            action = data.get("action")
+            if action in CHAT_ACTIONS:
+                self.metrics.increment("chat_decision_model_used")
+                return data
+            self.metrics.increment("chat_decision_invalid")
+        except Exception:
+            self.metrics.increment("chat_decision_fallbacks")
+
+        return self._fallback_chat_decision(q, filters, mode, conversation_id, history)
+
+    def _fallback_chat_decision(
+        self,
+        q: str,
+        filters: Any,
+        mode: str,
+        conversation_id: str | None,
+        history: Any,
+    ) -> dict[str, Any]:
+        has_shortlist = bool(conversation_id and self.shortlists.get(conversation_id))
+        if is_non_search_message(q):
+            return {"action": "chat_only", "message": non_search_response(q)}
+        if is_feedback_only_query(q):
+            return {"action": "clarify", "message": feedback_clarifying_question()}
+        if has_shortlist and is_shortlist_explanation_query(q):
+            return {"action": "explain_shortlist"}
+        if has_shortlist and is_explanation_query(q):
+            return {"action": "explain_best"}
+        if has_shortlist and is_pick_best_query(q):
+            return {"action": "pick_best"}
+        if has_shortlist and is_alternative_query(q):
+            return {"action": "show_alternative"}
+        if has_shortlist and (is_specific_tool_query(q) or is_criterion_pick_query(q)):
+            return {"action": "tool_question"}
+
+        focused = focus_latest_intent(q)
+        if has_explicit_task(focused):
+            return {"action": "recommend", "refined_query": focused}
+
+        prior_task = self._latest_task_query(conversation_id, history)
+        if requires_free_only(focused) and not non_filter_terms(focused):
+            if not prior_task:
+                return {"action": "clarify", "message": "What task should the free tool help with?"}
+            return {
+                "action": "refine",
+                "refined_query": build_retrieval_query(focused, [prior_task]),
+                "filters": {"budget": "free"},
+            }
+
+        context_query = build_retrieval_query(focused, [prior_task] if prior_task else [])
+        if requires_free_only(context_query) and not non_filter_terms(context_query):
+            return {"action": "clarify", "message": "What task should the free tool help with?"}
+        if needs_clarification(context_query):
+            return {"action": "clarify", "message": default_clarifying_question(focused)}
+        return {"action": "recommend", "refined_query": context_query}
 
     def clarify(self, q: str, conversation_id: str | None = None, history: Any = None) -> dict[str, Any]:
         if is_non_search_message(q):
