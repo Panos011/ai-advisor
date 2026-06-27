@@ -3238,51 +3238,10 @@ class RecommendationService:
 
 # === FastAPI App ===
 from contextlib import asynccontextmanager
-try:
-    from fastapi import FastAPI, HTTPException, Request
-    from fastapi.exceptions import RequestValidationError
-    from fastapi.responses import JSONResponse
-except ModuleNotFoundError:  # pragma: no cover - local unit-test fallback only
-    class HTTPException(Exception):
-        def __init__(self, status_code: int = 500, detail: str = ""):
-            super().__init__(detail)
-            self.status_code = status_code
-            self.detail = detail
-
-    class RequestValidationError(Exception):
-        pass
-
-    class _RouteOnlyApp:
-        def __init__(self, *args: Any, **kwargs: Any):
-            self.state = type("State", (), {})()
-
-        def exception_handler(self, *args: Any, **kwargs: Any):
-            def decorator(func: Any) -> Any:
-                return func
-            return decorator
-
-        def get(self, *args: Any, **kwargs: Any):
-            def decorator(func: Any) -> Any:
-                return func
-            return decorator
-
-        def post(self, *args: Any, **kwargs: Any):
-            def decorator(func: Any) -> Any:
-                return func
-            return decorator
-
-    FastAPI = _RouteOnlyApp
-    Request = Any
-
-    def JSONResponse(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        return {"args": args, "kwargs": kwargs}
-
-try:
-    from openai import OpenAI
-except ModuleNotFoundError:  # pragma: no cover - local unit-test fallback only
-    class OpenAI:
-        def __init__(self, *args: Any, **kwargs: Any):
-            raise RuntimeError("openai package is required to run the API server")
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from openai import OpenAI
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
