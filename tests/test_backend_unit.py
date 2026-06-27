@@ -42,6 +42,16 @@ class FakeIndex:
         return scores[:, :k], ids[:, :k]
 
 
+class WriterOnlyIndex:
+    d = 2
+    ntotal = 2
+
+    def search(self, _vec, k):
+        scores = np.array([[0.95]], dtype="float32")
+        ids = np.array([[0]], dtype="int64")
+        return scores[:, :k], ids[:, :k]
+
+
 class FakeEmbeddings:
     def __init__(self, should_fail=False):
         self.should_fail = should_fail
@@ -156,7 +166,7 @@ def make_service(client=None):
     return RecommendationService(store, client or FakeClient(), settings, RuntimeMetrics())
 
 
-def make_dev_service(client=None):
+def make_dev_service(client=None, index=None):
     meta = [
         {
             "Name": "Writerly",
@@ -178,7 +188,7 @@ def make_dev_service(client=None):
         },
     ]
     store = ToolStore(
-        index=FakeIndex(),
+        index=index or FakeIndex(),
         meta=meta,
         vectors=np.array([[1.0, 0.0], [0.0, 1.0]], dtype="float32"),
     )
@@ -653,6 +663,24 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["hits"][0]["meta"]["Name"], "CodeMate")
         self.assertNotIn("another distinct option", response["message"].lower())
 
+    def test_chat_planner_tool_routes_without_action_label(self):
+        service = make_dev_service(client=DecisionClient([
+            {
+                "tool": "search_tools",
+                "refined_query": "software engineer coding tool",
+            },
+        ]), index=WriterOnlyIndex())
+
+        response = service.chat(
+            "What about a more specific one like a Software Engineer?",
+            retrieve_k=1,
+            final_k=1,
+            conversation_id="planner-tool",
+        )
+
+        self.assertEqual(response["action"], "recommend")
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "CodeMate")
+
     def test_feedback_prompt_is_not_treated_as_search(self):
         service = make_service()
         prompt = "Wtf. Act like a practical software consultant."
@@ -790,6 +818,17 @@ class BackendUnitTests(unittest.TestCase):
         names = [hit["meta"]["Name"] for hit in response["hits"]]
         self.assertEqual(names, ["CodeMate"])
         self.assertNotIn("Writerly", names)
+
+    def test_hybrid_retrieval_adds_keyword_dev_candidate_when_faiss_misses(self):
+        service = make_dev_service(client=FakeClient(), index=WriterOnlyIndex())
+        response = service.recommend(
+            "software engineer code review tool",
+            retrieve_k=1,
+            final_k=1,
+        )
+
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "CodeMate")
+        self.assertNotEqual(response["hits"][0]["meta"]["Name"], "Writerly")
 
     def test_clean_best_for_rejects_query_echo(self):
         meta = {"Name": "DevTool", "Categories": "developer tools"}

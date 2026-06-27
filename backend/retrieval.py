@@ -74,6 +74,17 @@ CHAT_ACTIONS = {
     "tool_question",
 }
 
+CHAT_TOOLS = {
+    "none",
+    "search_tools",
+    "get_more_tools",
+    "compare_tools",
+    "explain_recommendation",
+    "refine_search",
+    "pick_best",
+    "answer_tool_question",
+}
+
 _MODE_ALIASES = {
     "balanced": MODE_BEST_FIT,
     "best_fit": MODE_BEST_FIT,
@@ -286,6 +297,25 @@ def non_search_response(text: str) -> str:
     if re.search(r"^(?:hi|hello|hey|yo|sup|good\s+)", normalized):
         return "Hi. Tell me what you need a tool for, including budget, privacy needs, or apps it must connect with."
     return "I can recommend AI tools, explain why a tool was chosen, compare the current shortlist, filter by budget or privacy, and pick the best option."
+
+
+def action_from_planner_tool(tool: Any) -> str | None:
+    name = str(tool or "").strip().lower()
+    if name == "search_tools":
+        return "recommend"
+    if name == "refine_search":
+        return "refine"
+    if name == "get_more_tools":
+        return "show_alternative"
+    if name == "compare_tools":
+        return "explain_shortlist"
+    if name == "explain_recommendation":
+        return "explain_best"
+    if name == "pick_best":
+        return "pick_best"
+    if name == "answer_tool_question":
+        return "tool_question"
+    return None
 
 
 def requires_free_only(text: str) -> bool:
@@ -1874,7 +1904,17 @@ class RecommendationService:
         with self.metrics.timer("faiss.recommend_search_ms"):
             scores, ids = self.store.index.search(vec, min(retrieve_k, len(self.store.meta)))
 
-        candidates = self._build_candidates(scores[0].tolist(), ids[0].tolist())
+        candidates = self._hybrid_candidates(
+            retrieval_query,
+            scores[0].tolist(),
+            ids[0].tolist(),
+            retrieve_k,
+        )
+        if is_coding_query(retrieval_query) or is_chatbot_query(retrieval_query):
+            candidates = [
+                candidate for candidate in candidates
+                if not off_topic_for_query(retrieval_query, str(candidate.get("categories", "")))
+            ]
         filtered_candidates = apply_decision_filters(candidates, filters, self.store.meta)
         if len(filtered_candidates) >= effective_final_k:
             candidates = filtered_candidates
@@ -1904,21 +1944,17 @@ class RecommendationService:
         )
 
         if not final_hits:
-            top = [
-                (i, s)
-                for i, s in zip(ids[0].tolist(), scores[0].tolist())
-                if i != -1 and (not free_only or is_free_tool(self.store.meta[i]))
-            ]
             final_hits = [
                 enrich_hit(
                     {
-                        "score": float(s),
-                        "meta": compact_meta(self.store.meta[i]),
-                        "why": local_reason(q, self.store.meta[i]),
+                        "score": float(candidate.get("score", 0.0)),
+                        "meta": compact_meta(self.store.meta[int(candidate["id"])]),
+                        "why": local_reason(q, self.store.meta[int(candidate["id"])]),
                     },
                     q,
                 )
-                for i, s in top[:effective_final_k]
+                for candidate in candidates[:effective_final_k]
+                if not free_only or is_free_tool(self.store.meta[int(candidate["id"])])
             ]
             self.metrics.increment("llm_rank_fallbacks")
 
@@ -1951,9 +1987,9 @@ class RecommendationService:
             self.shortlist_pointers.setdefault(conversation_id, 0)
 
         decision = self._chat_decision(q, filters, mode, conversation_id, history)
-        action = decision.get("action", "recommend")
+        action = decision.get("action") or action_from_planner_tool(decision.get("tool")) or "recommend"
         if action not in CHAT_ACTIONS:
-            action = "recommend"
+            action = action_from_planner_tool(decision.get("tool")) or "recommend"
 
         if action == "chat_only":
             message = clean_assistant_message(decision.get("message") or non_search_response(q))
@@ -2167,15 +2203,22 @@ class RecommendationService:
             "mode": mode,
         }
         system = (
-            "You are the conversation brain for an AI tool advisor app. "
-            "The app should feel like a GPT wrapper: the user sends one natural chat message, "
-            "then the backend decides whether to talk, ask one clarification, search, refine, explain, "
-            "pick the best option, or answer from visible tool cards. "
-            "Classify the latest user message using the conversation history and visible tools. "
-            "When tools are needed, the backend will run FAISS vector retrieval, MMR diversification, "
-            "and RAG ranking over the catalog before returning structured tool cards. "
-            "Your job here is routing only; do not invent tool results. "
+            "You are the conversation brain and planner for a GPT-style AI tool advisor. "
+            "The user sends one natural chat message. Decide the next internal tool call and action. "
+            "Do not invent tool results; choose a tool and let the backend run retrieval/ranking. "
+            "When tools are needed, the backend uses hybrid keyword + FAISS retrieval, MMR diversification, "
+            "and RAG ranking over catalog records before returning structured tool cards. "
             "Do not try to predict exact wording with rules; infer the user's intent naturally.\n"
+            "Internal tools:\n"
+            "- none: small talk, app help, feedback, or clarification text only.\n"
+            "- search_tools: search the full catalog for a new concrete task.\n"
+            "- refine_search: change or narrow the previous search using the latest request.\n"
+            "- get_more_tools: fetch a distinct alternative for the current task.\n"
+            "- compare_tools: explain or compare visible/current tools.\n"
+            "- explain_recommendation: explain why one visible/current tool was recommended.\n"
+            "- pick_best: choose the best visible/current option.\n"
+            "- answer_tool_question: answer a question about a visible/current tool or property.\n"
+            "If the user asks for another or better tool AND names a concrete task like coding, software engineering, chatbot, notes, images, or video, use search_tools/refine_search instead of get_more_tools.\n"
             "Actions:\n"
             "- chat_only: greetings, thanks, app-help, feedback, or normal conversation that should not change tool cards.\n"
             "- clarify: the user wants tools but the task is missing.\n"
@@ -2185,8 +2228,9 @@ class RecommendationService:
             "- explain_best or pick_best: user asks which one you would choose or which is best.\n"
             "- show_alternative: user asks for another option from the current list.\n"
             "- tool_question: user asks about a specific visible tool or property, e.g. is it free, what about X.\n"
-            "Return ONLY JSON with keys: action, message, refined_query, filters, mode. "
-            "Use message for chat_only/clarify only. Never write 'Consultant view'."
+            "Return ONLY JSON with keys: action, tool, message, refined_query, filters, mode. "
+            "Use refined_query for the query the backend should retrieve. Use message only for chat_only/clarify. "
+            "Never write 'Consultant view'."
         )
         try:
             with self.metrics.timer("openai.chat_decision_ms"):
@@ -2201,7 +2245,8 @@ class RecommendationService:
                 )
             data = json.loads(resp.choices[0].message.content or "{}")
             action = data.get("action")
-            if action in CHAT_ACTIONS:
+            tool = data.get("tool")
+            if action in CHAT_ACTIONS or tool in CHAT_TOOLS:
                 self.metrics.increment("chat_decision_model_used")
                 return data
             self.metrics.increment("chat_decision_invalid")
@@ -2424,11 +2469,38 @@ class RecommendationService:
             candidates.append(self._candidate_for_id(id_, score))
         return candidates
 
+    def _hybrid_candidates(
+        self,
+        q: str,
+        faiss_scores: list[float],
+        faiss_ids: list[int],
+        retrieve_k: int,
+    ) -> list[dict[str, Any]]:
+        """Merge semantic FAISS hits with exact keyword/category hits before reranking."""
+        by_id: dict[int, dict[str, Any]] = {}
+        for candidate in self._build_candidates(faiss_scores, faiss_ids):
+            by_id[int(candidate["id"])] = candidate
+
+        keyword_limit = min(len(self.store.meta), max(retrieve_k, 50))
+        for keyword_score, id_ in keyword_scores(q, keyword_limit, self.store.meta):
+            candidate = by_id.get(id_)
+            if candidate is None:
+                by_id[id_] = self._candidate_for_id(id_, keyword_score)
+                by_id[id_]["retrieval_source"] = "keyword"
+            else:
+                candidate["score"] = max(float(candidate.get("score", 0.0)), float(keyword_score))
+                candidate["retrieval_source"] = "hybrid"
+
+        merged = list(by_id.values())
+        merged.sort(key=lambda candidate: float(candidate.get("score", 0.0)), reverse=True)
+        return merged[: min(len(merged), max(retrieve_k * 2, retrieve_k + 10))]
+
     def _candidate_for_id(self, id_: int, score: float) -> dict[str, Any]:
         m = self.store.meta[id_]
         return {
             "id": id_,
             "score": float(score),
+            "retrieval_source": "faiss",
             "name": m.get("Name", ""),
             "categories": m.get("Categories", ""),
             "price": m.get("Price", ""),
