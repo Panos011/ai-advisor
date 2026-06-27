@@ -537,7 +537,9 @@ def is_writing_query(q: str) -> bool:
 
 def is_coding_query(q: str) -> bool:
     return bool(re.search(
-        r"\b(cod(?:e|ing)|develop(?:er|ment)?|program(?:ming)?|debug|python|javascript|typescript|api|sdk|software\s+development)\b",
+        r"\b(cod(?:e|ing)|develop(?:er|ment)?|program(?:ming)?|debug|python|javascript|typescript|api|sdk|"
+        r"software\s+(?:development|engineer|engineering)|software\s+engineers?|engineers?|engineering|"
+        r"ide|repository|repositories|pull\s+request|code\s+review)\b",
         q.lower(),
     ))
 
@@ -584,7 +586,8 @@ def focus_latest_intent(q: str) -> str:
 _DEV_OFF_TOPIC_CATEGORIES = (
     "website builders", "website builder", "image generators", "image generator",
     "video generators", "video", "music", "fitness", "health", "dating", "travel",
-    "presentation", "social media", "logo",
+    "presentation", "social media", "logo", "writing generators", "writing generator",
+    "copywriting", "marketing", "content creation", "content generator",
 )
 _DEV_ON_TOPIC_CATEGORIES = (
     "developer tools", "developer", "coding", "code", "api", "chatbot", "chatbots",
@@ -762,6 +765,26 @@ def is_alternative_query(text: str) -> bool:
     """Detect requests for a different tool from the existing shortlist."""
     normalized = normalize_query_text(text).lower().strip()
     return any(re.search(pattern, normalized) for pattern in _ALTERNATIVE_PATTERNS)
+
+
+_ALTERNATIVE_REQUEST_WORDS = {
+    "another", "other", "else", "different", "next", "better", "same",
+    "gave", "given", "tool", "tools", "one", "option", "app", "apps",
+}
+
+
+def alternative_requests_new_search(text: str) -> bool:
+    """True when an alternative request also states a concrete new/revised task."""
+    if not is_alternative_query(text):
+        return False
+    normalized = normalize_query_text(text).lower().strip()
+    if is_coding_query(normalized) or is_chatbot_query(normalized):
+        return True
+    meaningful_terms = [
+        term for term in query_terms(normalized)
+        if term not in _ALTERNATIVE_REQUEST_WORDS
+    ]
+    return request_goal(normalized) in KNOWN_SPECIFIC_GOALS and len(meaningful_terms) >= 2
 
 
 def is_criterion_pick_query(text: str) -> bool:
@@ -1729,7 +1752,12 @@ class RecommendationService:
 
         # Alternative request: "Is there any other tool?" / "Show me another" / "Not that one".
         # Return the next hit from the stored shortlist instead of re-searching.
-        if is_alternative_query(q) and conversation_id and self.shortlists.get(conversation_id):
+        if (
+            is_alternative_query(q)
+            and not alternative_requests_new_search(q)
+            and conversation_id
+            and self.shortlists.get(conversation_id)
+        ):
             self.metrics.increment("recommend_alternative_requests")
             alt_hit, alt_idx = self._next_alternative_hit(conversation_id)
             if alt_hit:
@@ -1784,6 +1812,9 @@ class RecommendationService:
             pick_best = False
             if has_explicit_task(q):
                 prior_messages = []
+
+        if alternative_requests_new_search(q):
+            prior_messages = []
 
         retrieval_query = build_retrieval_query(q, prior_messages)
 
@@ -1948,7 +1979,7 @@ class RecommendationService:
             }
 
         if action == "show_alternative":
-            response = self._chat_alternative(q, conversation_id, history)
+            response = self._chat_alternative(q, conversation_id, history, retrieve_k, final_k, filters, mode)
             return {"action": "show_alternative", **response}
 
         if action == "tool_question":
@@ -2021,10 +2052,28 @@ class RecommendationService:
         q: str,
         conversation_id: str | None,
         history: Any,
+        retrieve_k: int,
+        final_k: int,
+        filters: Any,
+        mode: str,
     ) -> dict[str, Any]:
         self.conversations.append(conversation_id, "user", q)
         alt_hit, alt_idx = self._next_alternative_hit(conversation_id)
         if not alt_hit:
+            reason_query = self._latest_task_query(conversation_id, history)
+            fresh = self._fresh_distinct_alternative(
+                reason_query,
+                self.shortlists.get(conversation_id) if conversation_id else [],
+                retrieve_k,
+                final_k,
+                filters,
+                mode,
+            )
+            if fresh:
+                message = alternative_message(fresh, reason_query)
+                self.conversations.append(conversation_id, "assistant", message)
+                return {"hits": [fresh], "message": message}
+
             message = no_more_alternatives_message()
             self.conversations.append(conversation_id, "assistant", message)
             return {"hits": [], "message": message}
@@ -2035,6 +2084,38 @@ class RecommendationService:
         self._set_shortlist_pointer(conversation_id, alt_idx)
         self.conversations.append(conversation_id, "assistant", message)
         return {"hits": [single_hit], "message": message}
+
+    def _fresh_distinct_alternative(
+        self,
+        reason_query: str,
+        prior_hits: list[dict[str, Any]] | None,
+        retrieve_k: int,
+        final_k: int,
+        filters: Any,
+        mode: str,
+    ) -> dict[str, Any] | None:
+        if not reason_query:
+            return None
+
+        prior_names = {
+            str((hit.get("meta") or {}).get("Name", "")).strip().lower()
+            for hit in (prior_hits or [])
+            if (hit.get("meta") or {}).get("Name")
+        }
+        response = self.recommend(
+            reason_query,
+            max(retrieve_k, 50),
+            max(final_k, 5),
+            filters=filters,
+            mode=MODE_COMPARE if normalize_mode(mode) != MODE_ONE_BEST else MODE_BEST_FIT,
+            conversation_id=None,
+            history=None,
+        )
+        for hit in response.get("hits", []):
+            name = str((hit.get("meta") or {}).get("Name", "")).strip().lower()
+            if name and name not in prior_names:
+                return enrich_hit(dict(hit), reason_query)
+        return None
 
     def _latest_task_query(self, conversation_id: str | None, history: Any) -> str:
         stored = self.conversations.get(conversation_id)
@@ -2071,6 +2152,8 @@ class RecommendationService:
             return {"action": "explain_best"}
         if has_shortlist and is_pick_best_query(q):
             return {"action": "pick_best"}
+        if has_shortlist and alternative_requests_new_search(q):
+            return {"action": "recommend", "refined_query": q}
         if has_shortlist and is_alternative_query(q):
             return {"action": "show_alternative"}
         if has_shortlist and (is_specific_tool_query(q) or is_criterion_pick_query(q)):
@@ -2146,6 +2229,8 @@ class RecommendationService:
             return {"action": "explain_best"}
         if has_shortlist and is_pick_best_query(q):
             return {"action": "pick_best"}
+        if has_shortlist and alternative_requests_new_search(q):
+            return {"action": "recommend", "refined_query": q}
         if has_shortlist and is_alternative_query(q):
             return {"action": "show_alternative"}
         if has_shortlist and (is_specific_tool_query(q) or is_criterion_pick_query(q)):

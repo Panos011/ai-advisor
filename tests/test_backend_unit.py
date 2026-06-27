@@ -10,17 +10,20 @@ from backend.retrieval import (
     ConversationStore,
     RecommendationService,
     ToolStore,
+    alternative_requests_new_search,
     build_retrieval_query,
     clean_assistant_message,
     clean_best_for,
     focus_latest_intent,
     has_explicit_task,
+    is_coding_query,
     is_free_tool,
     is_pick_best_query,
     is_referential_pick,
     local_reason,
     merge_history_messages,
     normalize_mode,
+    off_topic_for_query,
     recommendation_message,
     request_goal,
     sanitize_reason,
@@ -151,6 +154,36 @@ def make_service(client=None):
     )
     settings = Settings(cache_ttl_seconds=60, cache_max_entries=8)
     return RecommendationService(store, client or FakeClient(), settings, RuntimeMetrics())
+
+
+def make_dev_service(client=None):
+    meta = [
+        {
+            "Name": "Writerly",
+            "Categories": "writing generators | copywriting | marketing",
+            "Price": "Free tier",
+            "Description": "Writing assistant for blog posts and marketing copy.",
+            "Features": "Drafts blog posts and rewrites content.",
+            "Pros": "Useful for writing content quickly.",
+            "Use_cases": "Blog writing",
+        },
+        {
+            "Name": "CodeMate",
+            "Categories": "developer tools | coding | code assistant",
+            "Price": "Free tier",
+            "Description": "AI software engineering assistant for code review, debugging, pull requests, and repositories.",
+            "Features": "Helps software engineers write, review, and debug code.",
+            "Pros": "Useful for developer workflows.",
+            "Use_cases": "Software engineering",
+        },
+    ]
+    store = ToolStore(
+        index=FakeIndex(),
+        meta=meta,
+        vectors=np.array([[1.0, 0.0], [0.0, 1.0]], dtype="float32"),
+    )
+    settings = Settings(cache_ttl_seconds=60, cache_max_entries=8)
+    return RecommendationService(store, client or FakeClient(embedding_failure=True), settings, RuntimeMetrics())
 
 
 class BackendUnitTests(unittest.TestCase):
@@ -596,6 +629,30 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["hits"][0]["meta"]["Name"], "ImageBox")
         self.assertIn("Another option is", response["message"])
 
+    def test_chat_new_coding_alternative_runs_fresh_search(self):
+        service = make_dev_service()
+        conversation_id = "chat-better-coding"
+        service.chat(
+            "find a writing tool for blog posts",
+            retrieve_k=2,
+            final_k=1,
+            conversation_id=conversation_id,
+        )
+
+        self.assertTrue(alternative_requests_new_search(
+            "I want another coding tool that is better than the one you gave me"
+        ))
+        response = service.chat(
+            "I want another coding tool that is better than the one you gave me",
+            retrieve_k=2,
+            final_k=1,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["action"], "recommend")
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "CodeMate")
+        self.assertNotIn("another distinct option", response["message"].lower())
+
     def test_feedback_prompt_is_not_treated_as_search(self):
         service = make_service()
         prompt = "Wtf. Act like a practical software consultant."
@@ -719,6 +776,20 @@ class BackendUnitTests(unittest.TestCase):
     def test_request_goal_handles_chatbot_and_coding(self):
         self.assertEqual(request_goal("I am creating a chatbot so I need the best AI tool"), "building a chatbot")
         self.assertEqual(request_goal("I need a coding tool"), "coding and development")
+        self.assertEqual(request_goal("I need a software engineer tool"), "coding and development")
+
+    def test_software_engineer_query_blocks_writing_categories(self):
+        query = "What about a more specific one like a Software Engineer?"
+
+        self.assertTrue(is_coding_query(query))
+        self.assertTrue(off_topic_for_query(query, "copywriting | marketing | writing generators"))
+        self.assertFalse(off_topic_for_query(query, "developer tools | coding | code assistant"))
+
+        service = make_dev_service()
+        response = service.recommend(query, retrieve_k=2, final_k=2)
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+        self.assertEqual(names, ["CodeMate"])
+        self.assertNotIn("Writerly", names)
 
     def test_clean_best_for_rejects_query_echo(self):
         meta = {"Name": "DevTool", "Categories": "developer tools"}
