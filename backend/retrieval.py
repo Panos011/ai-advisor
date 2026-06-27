@@ -2205,25 +2205,6 @@ class RecommendationService:
         stored = self.conversations.get(conversation_id)
         prior_messages = merge_history_messages(history, stored)
         prior_hits = self.shortlists.get(conversation_id) if conversation_id else []
-        has_shortlist = bool(prior_hits)
-        focused = focus_latest_intent(q)
-
-        # High-confidence follow-ups should not be allowed to become fresh searches
-        # just because the model classified them too broadly.
-        if has_shortlist and has_explicit_task(focused):
-            return {"action": "recommend", "tool": "search_tools", "refined_query": focused}
-        if has_shortlist and is_shortlist_explanation_query(q):
-            return {"action": "explain_shortlist"}
-        if has_shortlist and is_explanation_query(q):
-            return {"action": "explain_best"}
-        if has_shortlist and is_pick_best_query(q):
-            return {"action": "pick_best"}
-        if has_shortlist and alternative_requests_new_search(q):
-            return {"action": "recommend", "refined_query": q}
-        if has_shortlist and is_alternative_query(q):
-            return {"action": "show_alternative"}
-        if has_shortlist and (is_specific_tool_query(q) or is_criterion_pick_query(q)):
-            return {"action": "tool_question"}
 
         context = {
             "latest_user_message": q,
@@ -2235,10 +2216,12 @@ class RecommendationService:
         system = (
             "You are the conversation brain and planner for a GPT-style AI tool advisor. "
             "The user sends one natural chat message. Decide the next internal tool call and action. "
+            "Use semantic reasoning first: decide whether the latest message introduces a new task, "
+            "continues the previous task, refines filters, asks about visible tools, or asks for an explanation. "
             "Do not invent tool results; choose a tool and let the backend run retrieval/ranking. "
             "When tools are needed, the backend uses hybrid keyword + FAISS retrieval, MMR diversification, "
             "and RAG ranking over catalog records before returning structured tool cards. "
-            "Do not try to predict exact wording with rules; infer the user's intent naturally.\n"
+            "Do not match wording mechanically; infer the user's intent naturally from the message, history, and visible tools.\n"
             "Internal tools:\n"
             "- none: small talk, app help, feedback, or clarification text only.\n"
             "- search_tools: search the full catalog for a new concrete task.\n"
@@ -2248,7 +2231,11 @@ class RecommendationService:
             "- explain_recommendation: explain why one visible/current tool was recommended.\n"
             "- pick_best: choose the best visible/current option.\n"
             "- answer_tool_question: answer a question about a visible/current tool or property.\n"
-            "If the user asks for another or better tool AND names a concrete task like coding, software engineering, chatbot, notes, images, or video, use search_tools/refine_search instead of get_more_tools.\n"
+            "If the latest message names a different concrete task than the previous one, use search_tools. "
+            "Examples: after writing tools, 'what about a coding tool' is a new coding search; "
+            "after coding tools, 'best tools for music' is a new music/audio search. "
+            "If the user asks for another or better tool AND names a concrete task like coding, software engineering, chatbot, notes, images, music, or video, use search_tools/refine_search instead of get_more_tools. "
+            "Only use visible/current tools when the user clearly refers to them, e.g. 'why these', 'which one', 'is it free', or 'show another from these'.\n"
             "Actions:\n"
             "- chat_only: greetings, thanks, app-help, feedback, or normal conversation that should not change tool cards.\n"
             "- clarify: the user wants tools but the task is missing.\n"

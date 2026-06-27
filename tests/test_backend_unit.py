@@ -752,6 +752,35 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["hits"][0]["meta"]["Name"], "CodeMate")
         self.assertNotEqual(response["hits"][0]["meta"]["Name"], "Writerly")
 
+    def test_openai_planner_decides_task_switch_before_fallback_rules(self):
+        service = make_task_switch_service(client=DecisionClient([
+            {
+                "action": "recommend",
+                "tool": "search_tools",
+                "refined_query": "coding tool for software development",
+            },
+        ]))
+        conversation_id = "planner-first-task-switch"
+        service.shortlists[conversation_id] = [
+            {
+                "score": 0.9,
+                "meta": service.store.meta[0],
+                "why": "Writerly is useful for blog posts.",
+            }
+        ]
+
+        response = service.chat(
+            "What about a coding tool",
+            retrieve_k=1,
+            final_k=1,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["action"], "recommend")
+        self.assertEqual(response["refined_query"], "coding tool for software development")
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "CodeMate")
+        self.assertGreater(service.client.chat.completions.calls, 0)
+
     def test_chat_music_request_overrides_coding_shortlist(self):
         service = make_task_switch_service()
         conversation_id = "task-switch-music"
