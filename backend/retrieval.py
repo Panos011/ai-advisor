@@ -333,6 +333,11 @@ def requires_free_only(text: str) -> bool:
     ))
 
 
+def requires_open_source(text: str) -> bool:
+    normalized = normalize_query_text(text).lower()
+    return bool(re.search(r"\bopen\s*[- ]?\s*source\b|\boss\b|\bsource\s+available\b", normalized))
+
+
 def non_filter_terms(text: str) -> list[str]:
     return [term for term in query_terms(text) if term not in FREE_FILTER_WORDS]
 
@@ -358,6 +363,11 @@ def is_free_tool(meta: dict[str, Any]) -> bool:
         price,
     ))
     return positive and not negative
+
+
+def is_open_source_tool(meta: dict[str, Any]) -> bool:
+    blob = metadata_blob(meta)
+    return bool(re.search(r"\bopen\s*[- ]?\s*source\b|\boss\b|\bsource\s+available\b|\bgithub\b", blob))
 
 
 # === Decision Filter and Enrichment Helpers ===
@@ -399,6 +409,10 @@ def matches_budget_filter(meta: dict[str, Any], budget: str) -> bool:
     return True
 
 
+def matches_open_source_filter(meta: dict[str, Any], required: bool) -> bool:
+    return not required or is_open_source_tool(meta)
+
+
 def apply_decision_filters(
     candidates: list[dict[str, Any]],
     filters: Any,
@@ -408,6 +422,7 @@ def apply_decision_filters(
         return candidates
 
     budget = filter_value(filters, "budget", "any") or "any"
+    open_source_required = bool(filter_value(filters, "open_source", False) or filter_value(filters, "openSource", False))
     privacy = filter_value(filters, "privacy", "standard") or "standard"
     integrations = [str(item).lower() for item in (filter_value(filters, "integrations", []) or [])]
     categories = [str(item).lower() for item in (filter_value(filters, "categories", []) or [])]
@@ -421,6 +436,8 @@ def apply_decision_filters(
         category_text = str(meta.get("Categories", "")).lower()
 
         if not matches_budget_filter(meta, str(budget)):
+            continue
+        if not matches_open_source_filter(meta, open_source_required):
             continue
 
         if privacy == "privacy-first" and not re.search(
@@ -961,6 +978,65 @@ def alternative_message(hit: dict[str, Any], query: str) -> str:
     return clean_assistant_message(message)
 
 
+def complete_free_status_message(hits: list[dict[str, Any]]) -> str:
+    names = [
+        str((hit.get("meta") or {}).get("Name", "This tool")).strip() or "This tool"
+        for hit in hits[:3]
+    ]
+    if not names:
+        return "I need the current tool cards before I can check whether they are completely free."
+
+    lines = []
+    for hit in hits[:3]:
+        meta = hit.get("meta") or {}
+        name = str(meta.get("Name", "This tool")).strip() or "This tool"
+        price = normalize_display_text(meta.get("Price", ""))
+        lower = price.lower()
+        if is_open_source_tool(meta) or re.search(r"\b(completely free|fully free|free forever|open source)\b", lower):
+            lines.append(f"{name} looks free/open-source from the catalogue data.")
+        elif is_free_tool(meta):
+            lines.append(f"{name} is not clearly completely free; it looks like free access with limits, a trial, or paid upgrades.")
+        else:
+            lines.append(f"{name} is not listed as completely free.")
+    return " ".join(lines)
+
+
+def open_source_status_message(hits: list[dict[str, Any]]) -> str:
+    if not hits:
+        return "I need the current tool cards before I can check whether they are open source."
+
+    lines = []
+    for hit in hits[:3]:
+        meta = hit.get("meta") or {}
+        name = str(meta.get("Name", "This tool")).strip() or "This tool"
+        if is_open_source_tool(meta):
+            lines.append(f"{name} appears to have open-source or source-available signals in the catalogue.")
+        else:
+            lines.append(f"{name} is not listed as open source in the catalogue data.")
+    return " ".join(lines)
+
+
+def fallback_tool_question_message(q: str, hits: list[dict[str, Any]], reason_query: str) -> str:
+    question = normalize_query_text(q).lower()
+    if requires_open_source(question):
+        return open_source_status_message(hits)
+    if re.search(r"\b(completely\s+free|fully\s+free|100%\s+free|free\s+forever)\b", question):
+        return complete_free_status_message(hits)
+    if re.search(r"\bfree\b|no\s+cost|without\s+paying", question):
+        parts = []
+        for hit in hits[:3]:
+            meta = hit.get("meta") or {}
+            name = str(meta.get("Name", "This tool")).strip() or "This tool"
+            if is_free_tool(meta):
+                parts.append(f"{name} has free access listed, but check whether it is a trial, limited tier, or freemium plan.")
+            else:
+                parts.append(f"{name} does not show a clear free plan in the catalogue.")
+        return " ".join(parts)
+
+    top = enrich_hit(dict(hits[0]), reason_query)
+    return specific_tool_message(top, reason_query)
+
+
 def needs_clarification(q: str) -> bool:
     if is_feedback_only_query(q):
         return True
@@ -1408,6 +1484,7 @@ def keyword_scores(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[tupl
     if not terms:
         return []
     free_only = requires_free_only(q)
+    open_source_only = requires_open_source(q)
     ranking_terms = [term for term in terms if term not in FREE_FILTER_WORDS]
     if free_only and not ranking_terms:
         return []
@@ -1415,6 +1492,8 @@ def keyword_scores(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[tupl
     scored = []
     for idx, meta in enumerate(meta_rows):
         if free_only and not is_free_tool(meta):
+            continue
+        if open_source_only and not is_open_source_tool(meta):
             continue
 
         text_items = tokens(meta_text(meta))
@@ -1445,6 +1524,8 @@ def keyword_scores(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[tupl
             continue
         if "free" in terms and is_free_tool(meta):
             score += 4.0
+        if open_source_only and is_open_source_tool(meta):
+            score += 12.0
         if is_writing_query(q):
             if any(term in category_items for term in ("writing", "copywriting", "seo", "marketing")):
                 score += 10.0
@@ -1888,8 +1969,15 @@ class RecommendationService:
                 "message": "Tell me the task, budget, or must-have integrations and I will search for better matches.",
             }
         free_only = requires_free_only(retrieval_query)
+        open_source_only = requires_open_source(retrieval_query)
         if free_only and filters is None:
             filters = {"budget": "free"}
+        if open_source_only:
+            filter_dict = filters.model_dump() if hasattr(filters, "model_dump") else dict(filters or {})
+            filter_dict["open_source"] = True
+            if free_only and "budget" not in filter_dict:
+                filter_dict["budget"] = "free"
+            filters = filter_dict
 
         effective_final_k = final_k
         if mode == MODE_ONE_BEST:
@@ -1950,6 +2038,11 @@ class RecommendationService:
                 candidate for candidate in candidates
                 if is_free_tool(self.store.meta[int(candidate["id"])])
             ]
+        if open_source_only:
+            candidates = [
+                candidate for candidate in candidates
+                if is_open_source_tool(self.store.meta[int(candidate["id"])])
+            ]
         if not candidates:
             return {"hits": [], "message": recommendation_message([], q, mode, pick_best=pick_best)}
 
@@ -1982,6 +2075,7 @@ class RecommendationService:
                 )
                 for candidate in candidates[:effective_final_k]
                 if not free_only or is_free_tool(self.store.meta[int(candidate["id"])])
+                if not open_source_only or is_open_source_tool(self.store.meta[int(candidate["id"])])
             ]
             self.metrics.increment("llm_rank_fallbacks")
 
@@ -2046,16 +2140,8 @@ class RecommendationService:
             return {"action": "show_alternative", **response}
 
         if action == "tool_question":
-            response = self.recommend(
-                q,
-                retrieve_k,
-                final_k,
-                filters=filters,
-                mode=mode,
-                conversation_id=conversation_id,
-                history=history,
-            )
-            return {"action": "refine", **response}
+            response = self._chat_tool_question(q, conversation_id, history)
+            return {"action": "explain", **response}
 
         refined_query = normalize_query_text(decision.get("refined_query") or q)
         next_filters = self._merge_chat_filters(filters, decision.get("filters"))
@@ -2148,6 +2234,77 @@ class RecommendationService:
         self.conversations.append(conversation_id, "assistant", message)
         return {"hits": [single_hit], "message": message}
 
+    def _chat_tool_question(
+        self,
+        q: str,
+        conversation_id: str | None,
+        history: Any,
+    ) -> dict[str, Any]:
+        prior_hits = self.shortlists.get(conversation_id) if conversation_id else None
+        self.conversations.append(conversation_id, "user", q)
+        if not prior_hits:
+            message = "I can answer that after a search, but I need the current tool cards first."
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"hits": [], "message": message}
+
+        reason_query = self._latest_task_query(conversation_id, history) or q
+        hits = [
+            enrich_hit(dict(hit), reason_query)
+            for hit in prior_hits[: min(3, len(prior_hits))]
+        ]
+        message = self._model_tool_question_answer(q, reason_query, hits)
+        if not message:
+            message = fallback_tool_question_message(q, hits, reason_query)
+
+        message = clean_assistant_message(message)
+        self.conversations.append(conversation_id, "assistant", message)
+        return {
+            "hits": hits,
+            "message": message,
+        }
+
+    def _model_tool_question_answer(
+        self,
+        q: str,
+        reason_query: str,
+        hits: list[dict[str, Any]],
+    ) -> str:
+        if not hits:
+            return ""
+        system = (
+            "You answer follow-up questions about visible AI tool cards. "
+            "Use only the provided visible AI tool cards and catalogue fields; do not invent pricing, licenses, features, or tools. "
+            "If the user asks whether tools are completely free, distinguish completely free/open-source from free tier, free trial, freemium, or paid upgrades. "
+            "If the user asks for open-source tools, say which visible tools have open-source or source-available evidence and which do not. "
+            "If the catalogue data is unclear, say it is unclear and suggest verifying before relying on it. "
+            "Answer conversationally in 1-3 short sentences. "
+            "Return ONLY JSON with key: message."
+        )
+        payload = {
+            "latest_question": q,
+            "current_task": reason_query,
+            "visible_tools": [compact_hit_for_prompt(hit) for hit in hits],
+        }
+        try:
+            with self.metrics.timer("openai.tool_question_ms"):
+                resp = self.client.chat.completions.create(
+                    model=self.settings.chat_model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                    ],
+                    temperature=0.0,
+                    response_format={"type": "json_object"},
+                )
+            data = json.loads(resp.choices[0].message.content or "{}")
+            message = clean_assistant_message(data.get("message", ""))
+            if message:
+                self.metrics.increment("tool_question_model_used")
+                return message
+        except Exception:
+            self.metrics.increment("tool_question_model_fallbacks")
+        return ""
+
     def _fresh_distinct_alternative(
         self,
         reason_query: str,
@@ -2188,7 +2345,7 @@ class RecommendationService:
     def _merge_chat_filters(self, filters: Any, decision_filters: Any) -> Any:
         base = filters.model_dump() if hasattr(filters, "model_dump") else dict(filters or {})
         if isinstance(decision_filters, dict):
-            for key in ("budget", "privacy", "integrations", "categories", "platforms", "skill_level"):
+            for key in ("budget", "privacy", "integrations", "categories", "platforms", "skill_level", "open_source"):
                 value = decision_filters.get(key)
                 if value not in (None, "", []):
                     base[key] = value
@@ -2659,6 +2816,7 @@ class RecommendationService:
         final_hits = []
         seen_ids = set()
         free_only = requires_free_only(q)
+        open_source_only = requires_open_source(q)
         for item in selected:
             if len(final_hits) >= limit:
                 break
@@ -2674,6 +2832,8 @@ class RecommendationService:
             if 0 <= id_int < len(self.store.meta):
                 meta = self.store.meta[id_int]
                 if free_only and not is_free_tool(meta):
+                    continue
+                if open_source_only and not is_open_source_tool(meta):
                     continue
                 summary = item.get("summary") or item.get("description") or ""
                 final_hits.append(enrich_hit({

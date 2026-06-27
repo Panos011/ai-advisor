@@ -125,6 +125,14 @@ class DecisionChatCompletions:
         if "conversation brain" in system:
             content = json.dumps(self.decisions.pop(0) if self.decisions else {"action": "chat_only", "message": "Okay."})
             return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+        if "visible AI tool cards" in system:
+            content = json.dumps({
+                "message": (
+                    "Claude is not clearly completely free; it appears to have limited free access or paid upgrades. "
+                    "Tabnine is not listed as completely free."
+                )
+            })
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
 
         self.rank_calls += 1
         content = json.dumps({
@@ -243,6 +251,36 @@ def make_task_switch_service(client=None):
     )
     settings = Settings(cache_ttl_seconds=60, cache_max_entries=8)
     return RecommendationService(store, client or FakeClient(), settings, RuntimeMetrics())
+
+
+def make_open_source_service(client=None):
+    meta = [
+        {
+            "Name": "ClosedCode",
+            "Categories": "developer tools | coding | code assistant",
+            "Price": "Free Tier: limited free access.|Pro Tier: paid upgrades available.",
+            "Description": "Closed AI coding assistant for debugging and code completion.",
+            "Features": "Helps write and debug code.",
+            "Pros": "Useful for software engineering workflows.",
+            "Use_cases": "Software engineering",
+        },
+        {
+            "Name": "OpenCode",
+            "Categories": "developer tools | coding | open source",
+            "Price": "Open Source: Free to use and self-host.",
+            "Description": "Open source coding assistant for software engineers with GitHub repository support.",
+            "Features": "Open-source code review, debugging, and repository workflows.",
+            "Pros": "Free and open source.",
+            "Use_cases": "Software engineering",
+        },
+    ]
+    store = ToolStore(
+        index=FakeIndex(),
+        meta=meta,
+        vectors=np.array([[1.0, 0.0], [0.0, 1.0]], dtype="float32"),
+    )
+    settings = Settings(cache_ttl_seconds=60, cache_max_entries=8)
+    return RecommendationService(store, client or FakeClient(embedding_failure=True), settings, RuntimeMetrics())
 
 
 class BackendUnitTests(unittest.TestCase):
@@ -802,6 +840,72 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["action"], "recommend")
         self.assertEqual(response["hits"][0]["meta"]["Name"], "MusicBox")
         self.assertNotEqual(response["hits"][0]["meta"]["Name"], "CodeMate")
+
+    def test_chat_tool_question_answers_free_status_from_visible_cards(self):
+        service = make_service(client=DecisionClient([
+            {
+                "action": "tool_question",
+                "tool": "answer_tool_question",
+            },
+        ]))
+        conversation_id = "tool-question-free"
+        service.shortlists[conversation_id] = [
+            {
+                "score": 0.9,
+                "meta": {
+                    "Name": "Claude",
+                    "Categories": "ai chatbots | code assistant",
+                    "Price": "Free Tier: limited free access.|Pro Tier: paid upgrades available.",
+                    "Description": "AI assistant for research and coding.",
+                },
+                "why": "Claude can help with coding and research.",
+            },
+            {
+                "score": 0.8,
+                "meta": {
+                    "Name": "Tabnine",
+                    "Categories": "code assistant",
+                    "Price": "Paid plan.",
+                    "Description": "Code completion assistant.",
+                },
+                "why": "Tabnine helps complete code.",
+            },
+        ]
+
+        response = service.chat(
+            "Are these tools that you recommended me completely free ?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["action"], "explain")
+        self.assertIn("not clearly completely free", response["message"])
+        self.assertIn("not listed as completely free", response["message"])
+        self.assertNotIn("Start with", response["message"])
+        self.assertEqual(service.client.embeddings.calls, 0)
+
+    def test_open_source_free_refine_filters_recommendations(self):
+        service = make_open_source_service()
+        conversation_id = "open-source-refine"
+        service.chat(
+            "I need a coding tool",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        response = service.chat(
+            "I want it to be an open source tool that is free",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["action"], "recommend")
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+        self.assertEqual(names, ["OpenCode"])
+        self.assertNotIn("ClosedCode", names)
 
     def test_feedback_prompt_is_not_treated_as_search(self):
         service = make_service()
