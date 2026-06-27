@@ -862,9 +862,12 @@ class BackendUnitTests(unittest.TestCase):
             conversation_id=conversation_id,
         )
 
+        # Both catalogue tools were already shown, so the only correct answer is "no other
+        # distinct option" -- never a fresh search and never an already-shown tool.
         self.assertEqual(response["action"], "show_alternative")
-        self.assertEqual(response["hits"][0]["meta"]["Name"], "ImageBox")
-        self.assertIn("Another option is", response["message"])
+        self.assertEqual(response["hits"], [])
+        self.assertIn("another distinct option", response["message"].lower())
+        self.assertNotIn("Start with", response["message"])
 
     def test_chat_feedback_does_not_restart_recommendations(self):
         service = make_service()
@@ -953,7 +956,7 @@ class BackendUnitTests(unittest.TestCase):
         self.assertIn("AI advisor", response["message"])
         self.assertNotIn("Start with", response["message"])
 
-    def test_chat_plural_alternatives_uses_current_shortlist(self):
+    def test_chat_plural_alternatives_excludes_already_shown_tools(self):
         service = make_service()
         conversation_id = "chat-plural-alternatives"
         service.recommend(
@@ -970,12 +973,14 @@ class BackendUnitTests(unittest.TestCase):
             conversation_id=conversation_id,
         )
 
+        # The whole shortlist was displayed, so an "alternative" must come from outside it.
+        # With only two tools (both shown), the honest answer is "no other distinct option".
         self.assertEqual(response["action"], "show_alternative")
-        self.assertEqual(response["hits"][0]["meta"]["Name"], "ImageBox")
-        self.assertIn("Another option is", response["message"])
+        self.assertEqual(response["hits"], [])
+        self.assertIn("another distinct option", response["message"].lower())
         self.assertNotIn("Start with", response["message"])
 
-    def test_chat_plural_alternatives_can_use_visible_tools_without_memory(self):
+    def test_chat_plural_alternatives_excludes_visible_tools_without_memory(self):
         service = make_service()
         visible = [
             {
@@ -997,9 +1002,58 @@ class BackendUnitTests(unittest.TestCase):
             visible_tools=visible,
         )
 
+        # Both visible tools are excluded as "already shown", so no distinct option remains.
+        self.assertEqual(response["action"], "show_alternative")
+        self.assertEqual(response["hits"], [])
+        self.assertIn("another distinct option", response["message"].lower())
+        self.assertNotIn("Start with", response["message"])
+
+    def test_chat_alternative_returns_a_genuinely_new_tool(self):
+        service = make_service()
+        conversation_id = "chat-fresh-alt"
+        # Only one tool was shown (one_best), so the second catalogue tool is a real,
+        # not-yet-seen alternative the user should get.
+        service.recommend(
+            "find a writing tool for blog posts",
+            retrieve_k=2,
+            final_k=1,
+            mode="one_best",
+            conversation_id=conversation_id,
+        )
+
+        response = service.chat(
+            "any alternatives?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
         self.assertEqual(response["action"], "show_alternative")
         self.assertEqual(response["hits"][0]["meta"]["Name"], "ImageBox")
         self.assertIn("Another option is", response["message"])
+
+    def test_chat_compare_request_does_not_restart_search(self):
+        # Even if the planner says "recommend", a "their differences" question about the
+        # current shortlist must be answered from those tools, not re-run as a new search.
+        service = make_service(client=DecisionClient([
+            {"action": "recommend", "refined_query": "writing tools"},
+        ]))
+        conversation_id = "chat-compare-guard"
+        service.recommend(
+            "find a writing tool for blog posts",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        response = service.chat(
+            "Ok tell me their differences",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["action"], "explain")
         self.assertNotIn("Start with", response["message"])
 
     def test_chat_new_coding_alternative_runs_fresh_search(self):

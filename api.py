@@ -1076,6 +1076,17 @@ def is_shortlist_explanation_query(text: str) -> bool:
     ))
 
 
+def is_compare_request(text: str) -> bool:
+    """Detect a request to compare/contrast the tools already shown (not bare 'different')."""
+    normalized = normalize_query_text(text).lower().strip()
+    return bool(re.search(
+        r"\b(?:differences?|the\s+difference|how\s+do\s+they\s+(?:differ|compare)|"
+        r"compare\s+(?:them|these|those|the\s+(?:two|three|options|tools))|comparison|"
+        r"pros\s+and\s+cons|side\s+by\s+side|tell\s+me\s+(?:their|the)\s+differences?)\b",
+        normalized,
+    ))
+
+
 def is_refinement_query(text: str) -> bool:
     normalized = text.lower().strip()
     return bool(re.search(
@@ -2560,6 +2571,21 @@ class RecommendationService:
         if action not in CHAT_ACTIONS:
             action = action_from_planner_tool(decision.get("tool")) or "recommend"
 
+        # Guard: a question about the tools already on screen (differences, why, which is
+        # best) must be answered from those tools, never re-run as a fresh search that
+        # repeats the shortlist. Only override when the message introduces no new task.
+        if (
+            has_context_hits
+            and action in {"recommend", "refine"}
+            and not has_explicit_task(q)
+        ):
+            if is_compare_request(q):
+                action = "tool_question"
+            elif is_pick_best_query(q):
+                action = "pick_best"
+            elif is_explanation_query(q):
+                action = "explain_shortlist"
+
         if action == "chat_only":
             message = self._model_chat_only_response(q, conversation_id, history)
             if not message:
@@ -2660,35 +2686,29 @@ class RecommendationService:
     ) -> dict[str, Any]:
         self.conversations.append(conversation_id, "user", q)
         visible_hits = visible_hits or []
-        alt_hit, alt_idx = self._next_alternative_hit(conversation_id)
-        if not alt_hit and visible_hits:
-            if len(visible_hits) > 1:
-                alt_hit, alt_idx = visible_hits[1], 1
-        if not alt_hit:
-            reason_query = self._latest_task_query(conversation_id, history)
-            fresh = self._fresh_distinct_alternative(
-                reason_query,
-                visible_hits or (self.shortlists.get(conversation_id) if conversation_id else []),
-                retrieve_k,
-                final_k,
-                filters,
-                mode,
-            )
-            if fresh:
-                message = alternative_message(fresh, reason_query)
-                self.conversations.append(conversation_id, "assistant", message)
-                return {"hits": [fresh], "message": message}
-
-            message = no_more_alternatives_message()
-            self.conversations.append(conversation_id, "assistant", message)
-            return {"hits": [], "message": message}
-
+        # Everything the user has already been shown (the full displayed shortlist plus the
+        # cards currently on screen) is off the table for an "alternative" — otherwise we
+        # hand back a tool they already saw.
+        already_shown = list(visible_hits) + list(
+            self.shortlists.get(conversation_id) if conversation_id else []
+        )
         reason_query = self._latest_task_query(conversation_id, history) or q
-        single_hit = enrich_hit(dict(alt_hit), reason_query)
-        message = alternative_message(single_hit, reason_query)
-        self._set_shortlist_pointer(conversation_id, alt_idx)
+        fresh = self._fresh_distinct_alternative(
+            reason_query,
+            already_shown,
+            retrieve_k,
+            final_k,
+            filters,
+            mode,
+        )
+        if fresh:
+            message = alternative_message(fresh, reason_query)
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"hits": [fresh], "message": message}
+
+        message = no_more_alternatives_message()
         self.conversations.append(conversation_id, "assistant", message)
-        return {"hits": [single_hit], "message": message}
+        return {"hits": [], "message": message}
 
     def _chat_tool_question(
         self,
