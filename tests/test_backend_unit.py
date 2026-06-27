@@ -52,6 +52,16 @@ class WriterOnlyIndex:
         return scores[:, :k], ids[:, :k]
 
 
+class FirstOnlyThreeIndex:
+    d = 2
+    ntotal = 3
+
+    def search(self, _vec, k):
+        scores = np.array([[0.95]], dtype="float32")
+        ids = np.array([[0]], dtype="int64")
+        return scores[:, :k], ids[:, :k]
+
+
 class FakeEmbeddings:
     def __init__(self, should_fail=False):
         self.should_fail = should_fail
@@ -194,6 +204,45 @@ def make_dev_service(client=None, index=None):
     )
     settings = Settings(cache_ttl_seconds=60, cache_max_entries=8)
     return RecommendationService(store, client or FakeClient(embedding_failure=True), settings, RuntimeMetrics())
+
+
+def make_task_switch_service(client=None):
+    meta = [
+        {
+            "Name": "Writerly",
+            "Categories": "writing generators | copywriting | marketing",
+            "Price": "Free tier",
+            "Description": "Writing assistant for blog posts and marketing copy.",
+            "Features": "Drafts blog posts and rewrites content.",
+            "Pros": "Useful for writing content quickly.",
+            "Use_cases": "Blog writing",
+        },
+        {
+            "Name": "CodeMate",
+            "Categories": "developer tools | coding | code assistant",
+            "Price": "Free tier",
+            "Description": "AI coding assistant for software engineers, debugging, code review, pull requests, and repositories.",
+            "Features": "Helps developers write, review, and debug code.",
+            "Pros": "Useful for software engineering workflows.",
+            "Use_cases": "Software engineering",
+        },
+        {
+            "Name": "MusicBox",
+            "Categories": "music | audio | voice generator",
+            "Price": "Free tier",
+            "Description": "AI music generation tool for creating songs, beats, melodies, and audio ideas.",
+            "Features": "Generates music, sound, beats, and singing voice drafts.",
+            "Pros": "Useful for music production.",
+            "Use_cases": "Music creation",
+        },
+    ]
+    store = ToolStore(
+        index=FirstOnlyThreeIndex(),
+        meta=meta,
+        vectors=np.array([[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]], dtype="float32"),
+    )
+    settings = Settings(cache_ttl_seconds=60, cache_max_entries=8)
+    return RecommendationService(store, client or FakeClient(), settings, RuntimeMetrics())
 
 
 class BackendUnitTests(unittest.TestCase):
@@ -681,6 +730,50 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["action"], "recommend")
         self.assertEqual(response["hits"][0]["meta"]["Name"], "CodeMate")
 
+    def test_chat_specific_task_followup_overrides_visible_shortlist(self):
+        service = make_task_switch_service()
+        conversation_id = "task-switch-coding"
+        service.chat(
+            "Find an AI writing tool for blog posts",
+            retrieve_k=1,
+            final_k=1,
+            conversation_id=conversation_id,
+        )
+
+        self.assertTrue(has_explicit_task("What about a coding tool"))
+        response = service.chat(
+            "What about a coding tool",
+            retrieve_k=1,
+            final_k=1,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["action"], "recommend")
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "CodeMate")
+        self.assertNotEqual(response["hits"][0]["meta"]["Name"], "Writerly")
+
+    def test_chat_music_request_overrides_coding_shortlist(self):
+        service = make_task_switch_service()
+        conversation_id = "task-switch-music"
+        service.chat(
+            "Actually I want a coding tool",
+            retrieve_k=1,
+            final_k=1,
+            conversation_id=conversation_id,
+        )
+
+        self.assertTrue(has_explicit_task("Give me the best tools for music"))
+        response = service.chat(
+            "Give me the best tools for music",
+            retrieve_k=1,
+            final_k=1,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["action"], "recommend")
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "MusicBox")
+        self.assertNotEqual(response["hits"][0]["meta"]["Name"], "CodeMate")
+
     def test_feedback_prompt_is_not_treated_as_search(self):
         service = make_service()
         prompt = "Wtf. Act like a practical software consultant."
@@ -805,6 +898,7 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(request_goal("I am creating a chatbot so I need the best AI tool"), "building a chatbot")
         self.assertEqual(request_goal("I need a coding tool"), "coding and development")
         self.assertEqual(request_goal("I need a software engineer tool"), "coding and development")
+        self.assertEqual(request_goal("Give me the best tools for music"), "creating music and audio")
 
     def test_software_engineer_query_blocks_writing_categories(self):
         query = "What about a more specific one like a Software Engineer?"

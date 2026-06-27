@@ -533,6 +533,8 @@ def query_terms(text: str) -> list[str]:
         expanded += " code coding developer programming python javascript debugging"
     if is_chatbot_query(normalized):
         expanded += " chatbot chatbots conversational assistant customer support bot"
+    if is_music_query(normalized):
+        expanded += " music audio song songs beat beats sound voice generator composition production"
     words = re.findall(r"[a-z0-9]+", expanded)
     stopwords = {
         "a", "an", "and", "are", "as", "at", "be", "for", "from", "i", "in",
@@ -576,6 +578,14 @@ def is_coding_query(q: str) -> bool:
 
 def is_chatbot_query(q: str) -> bool:
     return bool(re.search(r"\b(chatbot|chat\s?bot|conversational|virtual\s+assistant|support\s+bot|dialogue|dialog)\b", q.lower()))
+
+
+def is_music_query(q: str) -> bool:
+    return bool(re.search(
+        r"\b(music|song|songs|beat|beats|audio\s+generation|music\s+generation|sound\s+design|"
+        r"voice\s+generator|singing|lyrics|melody|composition|producer|production)\b",
+        q.lower(),
+    ))
 
 
 # Phrases that signal the user is overriding the previous topic, not refining it.
@@ -1002,6 +1012,15 @@ def off_topic_for_query(q: str, categories: str) -> bool:
         if category_tokens & blocked and "present" not in text and "slide" not in text:
             return True
         return not bool(re.search(r"\b(presentation|presentations|slides?|deck|powerpoint)\b", text))
+    if is_music_query(q):
+        blocked = {
+            "code", "coding", "developer", "chatbot", "chatbots", "writing",
+            "copywriting", "marketing", "travel", "fitness", "health", "dating",
+            "presentation", "website",
+        }
+        if category_tokens & blocked:
+            return True
+        return not bool(re.search(r"\b(music|audio|song|sound|voice|beat|lyric|melody|composition|producer)\b", text))
     if is_coding_query(q):
         blocked = {"image", "images", "logo", "video", "music", "travel", "dating", "fitness", "health"}
         if category_tokens & blocked:
@@ -1053,6 +1072,8 @@ def request_goal(q: str) -> str:
         return "writing content"
     if "transcrib" in text or "audio" in text:
         return "transcribing audio"
+    if is_music_query(q):
+        return "creating music and audio"
     if "image" in text:
         return "generating images"
     if any(term in text for term in ("video", "youtube")):
@@ -1074,21 +1095,27 @@ KNOWN_SPECIFIC_GOALS = frozenset({
     "essay writing", "writing blog posts", "creating social media posts",
     "writing content", "transcribing audio", "generating images", "creating videos",
     "creating presentations", "coding and development", "automating workflows",
-    "researching information",
+    "researching information", "creating music and audio",
 })
 
 
 def has_explicit_task(text: str) -> bool:
     """True when the message names a concrete task on its own (not just a filter)."""
+    goal = request_goal(text)
     if (
         is_explanation_query(text)
-        or is_pick_best_query(text)
-        or is_specific_tool_query(text)
         or is_criterion_pick_query(text)
-        or is_alternative_query(text)
     ):
         return False
-    return request_goal(text) in KNOWN_SPECIFIC_GOALS
+    if is_alternative_query(text):
+        return alternative_requests_new_search(text)
+    if goal in KNOWN_SPECIFIC_GOALS:
+        if is_pick_best_query(text) and is_referential_pick(text):
+            return False
+        return True
+    if is_pick_best_query(text) or is_specific_tool_query(text):
+        return False
+    return False
 
 
 def evidence_fragments(value: str) -> list[str]:
@@ -1910,7 +1937,7 @@ class RecommendationService:
             ids[0].tolist(),
             retrieve_k,
         )
-        if is_coding_query(retrieval_query) or is_chatbot_query(retrieval_query):
+        if is_coding_query(retrieval_query) or is_chatbot_query(retrieval_query) or is_music_query(retrieval_query):
             candidates = [
                 candidate for candidate in candidates
                 if not off_topic_for_query(retrieval_query, str(candidate.get("categories", "")))
@@ -2179,9 +2206,12 @@ class RecommendationService:
         prior_messages = merge_history_messages(history, stored)
         prior_hits = self.shortlists.get(conversation_id) if conversation_id else []
         has_shortlist = bool(prior_hits)
+        focused = focus_latest_intent(q)
 
         # High-confidence follow-ups should not be allowed to become fresh searches
         # just because the model classified them too broadly.
+        if has_shortlist and has_explicit_task(focused):
+            return {"action": "recommend", "tool": "search_tools", "refined_query": focused}
         if has_shortlist and is_shortlist_explanation_query(q):
             return {"action": "explain_shortlist"}
         if has_shortlist and is_explanation_query(q):
@@ -2268,6 +2298,9 @@ class RecommendationService:
             return {"action": "chat_only", "message": non_search_response(q)}
         if is_feedback_only_query(q):
             return {"action": "clarify", "message": feedback_clarifying_question()}
+        focused = focus_latest_intent(q)
+        if has_shortlist and has_explicit_task(focused):
+            return {"action": "recommend", "tool": "search_tools", "refined_query": focused}
         if has_shortlist and is_shortlist_explanation_query(q):
             return {"action": "explain_shortlist"}
         if has_shortlist and is_explanation_query(q):
@@ -2281,7 +2314,6 @@ class RecommendationService:
         if has_shortlist and (is_specific_tool_query(q) or is_criterion_pick_query(q)):
             return {"action": "tool_question"}
 
-        focused = focus_latest_intent(q)
         if has_explicit_task(focused):
             return {"action": "recommend", "refined_query": focused}
 
