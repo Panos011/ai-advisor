@@ -5,10 +5,15 @@ from types import SimpleNamespace
 import numpy as np
 from pydantic import ValidationError
 
-from backend.metrics import RuntimeMetrics
-from backend.retrieval import (
+from api import (
+    ChatRequest,
+    ChatResponse,
     ConversationStore,
+    RecommendRequest,
     RecommendationService,
+    RuntimeMetrics,
+    SearchRequest,
+    Settings,
     ToolStore,
     alternative_requests_new_search,
     build_retrieval_query,
@@ -28,8 +33,6 @@ from backend.retrieval import (
     request_goal,
     sanitize_reason,
 )
-from backend.schemas import ChatRequest, ChatResponse, RecommendRequest, SearchRequest
-from backend.settings import Settings
 
 
 class FakeIndex:
