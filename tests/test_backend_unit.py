@@ -30,6 +30,7 @@ from api import (
     normalize_mode,
     off_topic_for_query,
     recommendation_message,
+    recent_dialogue_turns,
     request_goal,
     sanitize_reason,
 )
@@ -174,6 +175,26 @@ class FailingChatOnlyClient:
     def __init__(self, decisions):
         self.embeddings = FakeEmbeddings()
         self.chat = SimpleNamespace(completions=FailingChatOnlyCompletions(decisions))
+
+
+class CapturingChatCompletions(DecisionChatCompletions):
+    """Records the messages array of every chat-only call for assertion."""
+
+    def __init__(self, decisions):
+        super().__init__(decisions)
+        self.chat_only_messages = None
+
+    def create(self, **kwargs):
+        system = (kwargs.get("messages") or [{}])[0].get("content", "")
+        if "conversational AI assistant inside an AI tool advisor app" in system:
+            self.chat_only_messages = kwargs.get("messages")
+        return super().create(**kwargs)
+
+
+class CapturingClient:
+    def __init__(self, decisions):
+        self.embeddings = FakeEmbeddings()
+        self.chat = SimpleNamespace(completions=CapturingChatCompletions(decisions))
 
 
 def make_service(client=None):
@@ -674,6 +695,83 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["hits"], [])
         self.assertIn("recommend AI tools", response["message"])
 
+    def test_recent_dialogue_turns_preserves_assistant_replies(self):
+        history = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "Hi! What do you need a tool for?"},
+            {"role": "user", "content": "thanks"},
+            {"role": "assistant", "content": "Hi! What do you need a tool for?"},
+        ]
+        turns = recent_dialogue_turns(history)
+        roles = [turn["role"] for turn in turns]
+        self.assertIn("assistant", roles)
+        # Exact (role, content) duplicate assistant line is collapsed.
+        self.assertEqual(roles.count("assistant"), 1)
+        self.assertEqual(turns[0], {"role": "user", "content": "hi"})
+
+    def test_chat_only_threads_prior_assistant_turn_to_model(self):
+        service = make_service(client=CapturingClient([]))
+        history = [
+            {"role": "user", "content": "what can you do?"},
+            {"role": "assistant", "content": "I can find, compare, and filter AI tools."},
+        ]
+        service.chat(
+            "and how are you?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="thread-test",
+            history=history,
+        )
+        sent = service.client.chat.completions.chat_only_messages
+        self.assertIsNotNone(sent)
+        threaded = [m for m in sent if m["role"] == "assistant"]
+        self.assertTrue(
+            any("find, compare, and filter" in m["content"] for m in threaded),
+            "assistant's prior reply should be threaded into the chat-only prompt",
+        )
+
+    def test_pre_routed_recommend_skips_conversational_gating(self):
+        # Default (pre_routed=False): a criterion-style follow-up is diverted to the
+        # shortlist pick path, recording the criterion-pick metric.
+        gated = make_service()
+        gated.recommend(
+            "Find an AI writing tool for blog posts",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="gated",
+        )
+        gated.recommend(
+            "which one is the cheapest",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="gated",
+        )
+        self.assertIn(
+            "recommend_criterion_pick_requests",
+            gated.metrics.snapshot()["counters"],
+        )
+
+        # pre_routed=True: the planner already classified intent, so recommend() must
+        # NOT re-classify; it runs a fresh search instead of the criterion-pick path.
+        routed = make_service()
+        routed.recommend(
+            "Find an AI writing tool for blog posts",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="routed",
+        )
+        routed.recommend(
+            "which one is the cheapest",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="routed",
+            pre_routed=True,
+        )
+        self.assertNotIn(
+            "recommend_criterion_pick_requests",
+            routed.metrics.snapshot()["counters"],
+        )
+
     def test_chat_uses_visible_tools_when_server_memory_is_missing(self):
         service = make_service(client=DecisionClient([
             {"action": "explain_shortlist"},
@@ -825,6 +923,35 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["hits"], [])
         self.assertNotIn("Start with", response["message"])
         self.assertNotIn("well suited", response["message"])
+
+    def test_chat_how_old_are_you_does_not_start_recommendations(self):
+        service = make_service()
+        response = service.chat(
+            "how old are you ?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="chat-age-question",
+        )
+
+        self.assertEqual(response["action"], "chat_only")
+        self.assertEqual(response["hits"], [])
+        self.assertIn("age", response["message"].lower())
+        self.assertNotIn("Start with", response["message"])
+        self.assertNotIn("well suited", response["message"])
+
+    def test_chat_identity_question_does_not_start_recommendations(self):
+        service = make_service()
+        response = service.chat(
+            "what are you?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="chat-identity-question",
+        )
+
+        self.assertEqual(response["action"], "chat_only")
+        self.assertEqual(response["hits"], [])
+        self.assertIn("AI advisor", response["message"])
+        self.assertNotIn("Start with", response["message"])
 
     def test_chat_plural_alternatives_uses_current_shortlist(self):
         service = make_service()

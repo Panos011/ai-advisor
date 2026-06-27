@@ -396,6 +396,7 @@ FEEDBACK_PATTERNS = (
 NON_SEARCH_PATTERNS = (
     r"^(?:hi|hello|hey|yo|sup|good\s+(?:morning|afternoon|evening))[\s!.?]*$",
     r"^(?:(?:hi|hello|hey|yo)[,\s]+)?(?:how\s+(?:are|r)\s+(?:you|u)|how'?s\s+it\s+going|what'?s\s+up)[\s!.?]*$",
+    r"\b(?:how\s+old\s+are\s+you|what\s+is\s+your\s+age|who\s+made\s+you|who\s+created\s+you|what\s+are\s+you|are\s+you\s+(?:real|human|a\s+bot|an?\s+ai)|tell\s+me\s+about\s+yourself)\b",
     r"^(?:thanks|thank\s+you|thx|cheers|ok|okay|nice|cool|great|perfect|awesome)[\s!.?]*$",
     r"\bwhat\s+can\s+you\s+do\b",
     r"\bhow\s+do\s+i\s+use\s+this\b",
@@ -579,6 +580,35 @@ def merge_history_messages(
     return messages[-limit:]
 
 
+def recent_dialogue_turns(
+    history: Any,
+    stored: list[dict[str, str]] | None = None,
+    limit: int = 8,
+) -> list[dict[str, str]]:
+    """Return recent role-tagged turns (both user AND assistant) for conversational context.
+
+    Unlike merge_history_messages (which keeps only user messages for retrieval/task
+    extraction), this preserves the assistant's own replies so the chat and planner
+    models can actually follow a multi-turn conversation.
+    """
+    turns: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for source in (stored or [], history or []):
+        for item in source:
+            role = item.get("role") if isinstance(item, dict) else getattr(item, "role", "user")
+            content = item.get("content") if isinstance(item, dict) else getattr(item, "content", "")
+            cleaned = normalize_query_text(content)
+            if not cleaned:
+                continue
+            role = "assistant" if role == "assistant" else "user"
+            key = (role, cleaned)
+            if key in seen:
+                continue
+            seen.add(key)
+            turns.append({"role": role, "content": cleaned})
+    return turns[-limit:]
+
+
 def build_retrieval_query(current: str, prior_user_messages: list[str]) -> str:
     """Combine the latest message with recent task context for retrieval/ranking."""
     current_clean = normalize_query_text(current)
@@ -650,6 +680,10 @@ def non_search_response(text: str) -> str:
         return "You are welcome. Tell me the next task, or ask me to explain, compare, filter, or pick from the current tools."
     if re.search(r"\bhow\s+(?:are|r)\s+(?:you|u)\b|\bhow'?s\s+it\s+going\b|\bwhat'?s\s+up\b", normalized):
         return "I am here and ready to help. We can talk normally, or you can ask me to find, compare, filter, or explain AI tools."
+    if re.search(r"\bhow\s+old\s+are\s+you\b|\bwhat\s+is\s+your\s+age\b", normalized):
+        return "I do not have an age. I am the AI Tool Advisor, here to chat normally or help you find, compare, and filter AI tools."
+    if re.search(r"\bwho\s+made\s+you\b|\bwho\s+created\s+you\b|\bwhat\s+are\s+you\b|\bare\s+you\s+(?:real|human|a\s+bot|an?\s+ai)\b|\btell\s+me\s+about\s+yourself\b", normalized):
+        return "I am an AI advisor inside CommAI. I can chat normally, but my main job is helping you find, compare, filter, and understand AI tools."
     if re.search(r"^(?:hi|hello|hey|yo|sup|good\s+)", normalized):
         return "Hi. Tell me what you need a tool for, including budget, privacy needs, or apps it must connect with."
     return "I can recommend AI tools, explain why a tool was chosen, compare the current shortlist, filter by budget or privacy, and pick the best option."
@@ -1772,9 +1806,9 @@ def visible_tool_hits(visible_tools: Any) -> list[dict[str, Any]]:
             "score": float(raw.get("score", 0.0) or 0.0),
             "meta": compact_meta(meta),
             "why": raw.get("why") or local_reason("", meta),
-            "tradeoff": raw.get("tradeoff") or build_tradeoff(meta),
-            "best_for": raw.get("best_for") or build_best_for("", meta),
-            "fit_label": raw.get("fit_label") or "Good match",
+            "tradeoff": raw.get("tradeoff") or raw.get("trade_off") or build_tradeoff(meta),
+            "best_for": raw.get("best_for") or raw.get("bestFor") or build_best_for("", meta),
+            "fit_label": raw.get("fit_label") or raw.get("fitLabel") or "Good match",
         })
     return hits
 
@@ -2135,19 +2169,25 @@ class RecommendationService:
         mode: str = "balanced",
         conversation_id: str | None = None,
         history: Any = None,
+        pre_routed: bool = False,
     ) -> dict[str, Any]:
+        # pre_routed=True means the chat() planner already classified intent as a
+        # fresh/refined search, so we skip recommend()'s own conversational gating
+        # (explanation / specific-tool / criterion / alternative / pick-best) and go
+        # straight to retrieval + ranking. The standalone /recommend endpoint leaves
+        # pre_routed=False so it still behaves conversationally on its own.
         self.metrics.increment("recommend_requests")
         mode = normalize_mode(mode)
-        if is_non_search_message(q):
+        if not pre_routed and is_non_search_message(q):
             self.metrics.increment("recommend_non_search_blocked")
             return {"hits": [], "message": non_search_response(q)}
-        if is_feedback_only_query(q):
+        if not pre_routed and is_feedback_only_query(q):
             self.metrics.increment("recommend_feedback_query_blocked")
             return {
                 "hits": [],
                 "message": feedback_clarifying_question(),
             }
-        if is_explanation_query(q):
+        if not pre_routed and is_explanation_query(q):
             self.metrics.increment("recommend_explain_query_blocked")
             prior_hits = self.shortlists.get(conversation_id) if conversation_id else None
             if prior_hits:
@@ -2203,7 +2243,7 @@ class RecommendationService:
         # Specific-tool follow-up: "What about Claude?" or "Is Claude good too?"
         # Answer from the existing shortlist (or the catalog) instead of running a new search.
         tool_name = extract_tool_name(q)
-        if tool_name and conversation_id and self.shortlists.get(conversation_id):
+        if not pre_routed and tool_name and conversation_id and self.shortlists.get(conversation_id):
             self.metrics.increment("recommend_specific_tool_requests")
             prior_hits = self.shortlists[conversation_id]
             hit = self._find_hit_by_name(prior_hits, tool_name)
@@ -2226,7 +2266,7 @@ class RecommendationService:
         # Criterion-based pick: "Which one is the cheapest/free/paid?"
         # Re-rank the existing shortlist and return the top match for that criterion.
         criterion = criterion_from_query(q)
-        if is_criterion_pick_query(q) and conversation_id and self.shortlists.get(conversation_id):
+        if not pre_routed and is_criterion_pick_query(q) and conversation_id and self.shortlists.get(conversation_id):
             self.metrics.increment("recommend_criterion_pick_requests")
             prior_hits = self.shortlists[conversation_id]
             sorted_hits = _sort_hits_by_criterion(prior_hits, criterion)
@@ -2248,7 +2288,8 @@ class RecommendationService:
         # Alternative request: "Is there any other tool?" / "Show me another" / "Not that one".
         # Return the next hit from the stored shortlist instead of re-searching.
         if (
-            is_alternative_query(q)
+            not pre_routed
+            and is_alternative_query(q)
             and not alternative_requests_new_search(q)
             and conversation_id
             and self.shortlists.get(conversation_id)
@@ -2268,7 +2309,8 @@ class RecommendationService:
 
         # "Which one of these is the best?" -> pick the single best from the
         # shortlist we already returned for this conversation, if we have one.
-        pick_best = is_pick_best_query(q)
+        # When pre_routed, the planner owns this decision, so never re-classify here.
+        pick_best = (not pre_routed) and is_pick_best_query(q)
         if pick_best and conversation_id and self.shortlists.get(conversation_id):
             self.metrics.increment("recommend_pick_best_requests")
             prior_hits = self.shortlists[conversation_id]
@@ -2460,9 +2502,19 @@ class RecommendationService:
         mode = normalize_mode(mode)
 
         provided_hits = visible_tool_hits(visible_tools)
-        if conversation_id and provided_hits:
-            self.shortlists[conversation_id] = provided_hits
-            self.shortlist_pointers.setdefault(conversation_id, 0)
+        if provided_hits:
+            if conversation_id:
+                stored_hits = self.shortlists.get(conversation_id) or []
+                # Keep the richer shortlist so "show another" can cycle through the
+                # original full shortlist even when the frontend only passes the last
+                # visible cards.
+                if len(provided_hits) >= len(stored_hits):
+                    self.shortlists[conversation_id] = provided_hits
+                self.shortlist_pointers.setdefault(conversation_id, 0)
+            else:
+                # No conversation memory, but we can still answer from the cards
+                # the frontend just passed us.
+                self.shortlist_pointers.setdefault("__visible_only__", 0)
         has_context_hits = bool(provided_hits or (conversation_id and self.shortlists.get(conversation_id)))
 
         if is_non_search_message(q):
@@ -2552,6 +2604,7 @@ class RecommendationService:
             mode=next_mode,
             conversation_id=conversation_id,
             history=history,
+            pre_routed=True,
         )
         return {
             "action": "refine" if action == "refine" else "recommend",
@@ -2702,7 +2755,8 @@ class RecommendationService:
             if message:
                 self.metrics.increment("tool_question_model_used")
                 return message
-        except Exception:
+        except Exception as exc:
+            logger.warning("Tool-question model reply failed (%s): %s", type(exc).__name__, exc)
             self.metrics.increment("tool_question_model_fallbacks")
         return ""
 
@@ -2713,7 +2767,7 @@ class RecommendationService:
         history: Any,
     ) -> str:
         stored = self.conversations.get(conversation_id)
-        prior_messages = merge_history_messages(history, stored)
+        turns = recent_dialogue_turns(history, stored)
         prior_hits = self.shortlists.get(conversation_id) if conversation_id else []
         system = (
             "You are a conversational AI assistant inside an AI tool advisor app. "
@@ -2726,17 +2780,17 @@ class RecommendationService:
         )
         payload = {
             "latest_user_message": q,
-            "recent_user_messages": prior_messages[-8:],
             "visible_tools": [compact_hit_for_prompt(hit) for hit in (prior_hits or [])[:3]],
         }
+        chat_messages: list[dict[str, str]] = [{"role": "system", "content": system}]
+        for turn in turns:
+            chat_messages.append({"role": turn["role"], "content": turn["content"]})
+        chat_messages.append({"role": "user", "content": json.dumps(payload, ensure_ascii=False)})
         try:
             with self.metrics.timer("openai.chat_only_ms"):
                 resp = self.client.chat.completions.create(
                     model=self.settings.chat_model,
-                    messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-                    ],
+                    messages=chat_messages,
                     temperature=0.4,
                     response_format={"type": "json_object"},
                 )
@@ -2745,7 +2799,8 @@ class RecommendationService:
             if message:
                 self.metrics.increment("chat_only_model_used")
                 return message
-        except Exception:
+        except Exception as exc:
+            logger.warning("Chat-only model reply failed (%s): %s", type(exc).__name__, exc)
             self.metrics.increment("chat_only_model_fallbacks")
         return ""
 
@@ -2774,6 +2829,7 @@ class RecommendationService:
             mode=MODE_COMPARE if normalize_mode(mode) != MODE_ONE_BEST else MODE_BEST_FIT,
             conversation_id=None,
             history=None,
+            pre_routed=True,
         )
         for hit in response.get("hits", []):
             name = str((hit.get("meta") or {}).get("Name", "")).strip().lower()
@@ -2810,6 +2866,7 @@ class RecommendationService:
         context = {
             "latest_user_message": q,
             "recent_user_messages": prior_messages[-6:],
+            "recent_turns": recent_dialogue_turns(history, stored, limit=8),
             "visible_tools": [compact_hit_for_prompt(hit) for hit in (prior_hits or [])[:5]],
             "filters": filters.model_dump() if hasattr(filters, "model_dump") else (filters or {}),
             "mode": mode,
@@ -2868,7 +2925,9 @@ class RecommendationService:
                 self.metrics.increment("chat_decision_model_used")
                 return data
             self.metrics.increment("chat_decision_invalid")
-        except Exception:
+            logger.warning("Chat planner returned an unusable decision; using rule-based fallback")
+        except Exception as exc:
+            logger.warning("Chat planner model failed (%s): %s", type(exc).__name__, exc)
             self.metrics.increment("chat_decision_fallbacks")
 
         return self._fallback_chat_decision(q, filters, mode, conversation_id, history)
@@ -3245,8 +3304,12 @@ class RecommendationService:
             data = json.loads(resp.choices[0].message.content)
             selected = data.get("selected", [])
             return selected if isinstance(selected, list) else []
-        except Exception:
-            logger.warning("OpenAI chat request failed; returning FAISS fallback recommendations")
+        except Exception as exc:
+            logger.warning(
+                "OpenAI ranking failed (%s): %s; returning FAISS fallback recommendations",
+                type(exc).__name__,
+                exc,
+            )
             self.metrics.increment("openai_rank_errors")
             return []
 
@@ -3312,6 +3375,13 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Failed to load search index or metadata")
         raise
+
+    if not settings.openai_api_key:
+        logger.warning(
+            "OPENAI_API_KEY is not set. The advisor will fall back to keyword search and "
+            "template replies for every request (no LLM planning, conversation, or ranking). "
+            "Set OPENAI_API_KEY in the environment to enable the intelligent chatbot."
+        )
 
     client = OpenAI(
         api_key=settings.openai_api_key or "missing",
