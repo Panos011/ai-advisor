@@ -125,6 +125,11 @@ class DecisionChatCompletions:
         if "conversation brain" in system:
             content = json.dumps(self.decisions.pop(0) if self.decisions else {"action": "chat_only", "message": "Okay."})
             return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+        if "conversational AI assistant inside an AI tool advisor app" in system:
+            content = json.dumps({
+                "message": "I can chat normally here, and when you need tools I can search, compare, filter, or explain the current shortlist."
+            })
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
         if "visible AI tool cards" in system:
             content = json.dumps({
                 "message": (
@@ -152,6 +157,20 @@ class DecisionClient:
     def __init__(self, decisions):
         self.embeddings = FakeEmbeddings()
         self.chat = SimpleNamespace(completions=DecisionChatCompletions(decisions))
+
+
+class FailingChatOnlyCompletions(DecisionChatCompletions):
+    def create(self, **kwargs):
+        system = (kwargs.get("messages") or [{}])[0].get("content", "")
+        if "conversational AI assistant inside an AI tool advisor app" in system:
+            raise RuntimeError("chat only failed")
+        return super().create(**kwargs)
+
+
+class FailingChatOnlyClient:
+    def __init__(self, decisions):
+        self.embeddings = FakeEmbeddings()
+        self.chat = SimpleNamespace(completions=FailingChatOnlyCompletions(decisions))
 
 
 def make_service(client=None):
@@ -618,7 +637,7 @@ class BackendUnitTests(unittest.TestCase):
         service = make_service(client=DecisionClient([
             {
                 "action": "chat_only",
-                "message": "I can help you choose, compare, and filter AI tools.",
+                "message": "Planner fallback should not be used when chat model replies.",
             },
         ]))
         response = service.chat(
@@ -626,6 +645,26 @@ class BackendUnitTests(unittest.TestCase):
             retrieve_k=2,
             final_k=2,
             conversation_id="chat-only",
+        )
+
+        self.assertEqual(response["action"], "chat_only")
+        self.assertEqual(response["hits"], [])
+        self.assertIn("chat normally", response["message"])
+        self.assertIn("search", response["message"])
+        self.assertEqual(service.client.chat.completions.calls, 2)
+
+    def test_chat_only_falls_back_to_planner_message_if_model_reply_fails(self):
+        service = make_service(client=FailingChatOnlyClient([
+            {
+                "action": "chat_only",
+                "message": "I can help you choose, compare, and filter AI tools.",
+            },
+        ]))
+        response = service.chat(
+            "what can you do in this screen?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="chat-only-fallback",
         )
 
         self.assertEqual(response["action"], "chat_only")

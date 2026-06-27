@@ -2113,7 +2113,9 @@ class RecommendationService:
             action = action_from_planner_tool(decision.get("tool")) or "recommend"
 
         if action == "chat_only":
-            message = clean_assistant_message(decision.get("message") or non_search_response(q))
+            message = self._model_chat_only_response(q, conversation_id, history)
+            if not message:
+                message = clean_assistant_message(decision.get("message") or non_search_response(q))
             self.conversations.append(conversation_id, "user", q)
             self.conversations.append(conversation_id, "assistant", message)
             return {"action": "chat_only", "hits": [], "message": message}
@@ -2303,6 +2305,49 @@ class RecommendationService:
                 return message
         except Exception:
             self.metrics.increment("tool_question_model_fallbacks")
+        return ""
+
+    def _model_chat_only_response(
+        self,
+        q: str,
+        conversation_id: str | None,
+        history: Any,
+    ) -> str:
+        stored = self.conversations.get(conversation_id)
+        prior_messages = merge_history_messages(history, stored)
+        prior_hits = self.shortlists.get(conversation_id) if conversation_id else []
+        system = (
+            "You are a conversational AI assistant inside an AI tool advisor app. "
+            "Reply naturally to normal conversation, greetings, thanks, feedback, and questions about what the advisor can do. "
+            "Do not run a tool search, recommend new tools, or claim that the visible shortlist has changed. "
+            "If the user asks for an actual AI tool recommendation, say you can help and ask for the task or constraints in one short sentence. "
+            "If visible tools are provided, you may refer to them only as current visible context; do not invent pricing, features, licenses, or new tool names. "
+            "Keep the answer concise and friendly, usually 1-3 sentences. "
+            "Return ONLY JSON with key: message."
+        )
+        payload = {
+            "latest_user_message": q,
+            "recent_user_messages": prior_messages[-8:],
+            "visible_tools": [compact_hit_for_prompt(hit) for hit in (prior_hits or [])[:3]],
+        }
+        try:
+            with self.metrics.timer("openai.chat_only_ms"):
+                resp = self.client.chat.completions.create(
+                    model=self.settings.chat_model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                    ],
+                    temperature=0.4,
+                    response_format={"type": "json_object"},
+                )
+            data = json.loads(resp.choices[0].message.content or "{}")
+            message = clean_assistant_message(data.get("message", ""))
+            if message:
+                self.metrics.increment("chat_only_model_used")
+                return message
+        except Exception:
+            self.metrics.increment("chat_only_model_fallbacks")
         return ""
 
     def _fresh_distinct_alternative(
