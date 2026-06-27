@@ -31,6 +31,7 @@ from api import (
     off_topic_for_query,
     recommendation_message,
     recent_dialogue_turns,
+    referenced_similar_tool,
     request_goal,
     sanitize_reason,
 )
@@ -729,6 +730,33 @@ class BackendUnitTests(unittest.TestCase):
             any("find, compare, and filter" in m["content"] for m in threaded),
             "assistant's prior reply should be threaded into the chat-only prompt",
         )
+
+    def test_referenced_similar_tool_extraction(self):
+        self.assertEqual(
+            referenced_similar_tool("a coding tool something like Claude"), "Claude"
+        )
+        self.assertEqual(
+            referenced_similar_tool("alternatives to Notion for notes"), "Notion"
+        )
+        self.assertEqual(
+            referenced_similar_tool("a writing tool similar to Writerly"), "Writerly"
+        )
+        # No reference phrase -> nothing extracted.
+        self.assertIsNone(referenced_similar_tool("find me a good writing tool"))
+        # Bare "would like X" must not be treated as "alternatives to X".
+        self.assertIsNone(referenced_similar_tool("I would like a writing tool"))
+
+    def test_similar_to_named_tool_excludes_that_tool(self):
+        service = make_service()
+        response = service.recommend(
+            "a writing tool similar to Writerly",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="similar-exclude",
+        )
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+        self.assertNotIn("Writerly", names)
+        self.assertTrue(names, "should still return at least one alternative tool")
 
     def test_pre_routed_recommend_skips_conversational_gating(self):
         # Default (pre_routed=False): a criterion-style follow-up is diverted to the

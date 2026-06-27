@@ -1087,6 +1087,41 @@ def is_compare_request(text: str) -> bool:
     ))
 
 
+_SIMILAR_REFERENCE_PATTERNS = (
+    r"\b(?:similar\s+to|comparable\s+to|alternatives?\s+to|an?\s+alternative\s+to|"
+    r"something\s+like|stuff\s+like|tools?\s+like|apps?\s+like|just\s+like)\s+"
+    r"([a-z0-9][a-z0-9 .&'+-]{1,30})",
+)
+
+_SIMILAR_REFERENCE_STOP = {
+    "this", "that", "it", "these", "those", "the", "a", "an", "ai", "tool",
+    "tools", "app", "apps", "one", "ones", "something", "anything", "stuff",
+}
+
+
+def referenced_similar_tool(text: str) -> str | None:
+    """Extract the tool a user wants alternatives TO: 'similar to X', 'like X', 'alternatives to X'.
+
+    Returns the candidate name only; the caller should validate it against the catalog
+    before excluding, so bare 'like magic' phrasing never drops real results.
+    """
+    normalized = normalize_query_text(text)
+    for pattern in _SIMILAR_REFERENCE_PATTERNS:
+        match = re.search(pattern, normalized, flags=re.IGNORECASE)
+        if not match:
+            continue
+        name = match.group(1).strip(" .,'-")
+        name = re.split(
+            r"\b(?:for|to|that|which|with|and|or|but|in|on|because|so|if|when)\b",
+            name, 1, flags=re.IGNORECASE,
+        )[0].strip(" .,'-")
+        tokens = [t for t in name.split() if t.lower() not in _SIMILAR_REFERENCE_STOP]
+        candidate = " ".join(tokens).strip()
+        if len(candidate) >= 2:
+            return candidate
+    return None
+
+
 def is_refinement_query(text: str) -> bool:
     normalized = text.lower().strip()
     return bool(re.search(
@@ -2368,6 +2403,17 @@ class RecommendationService:
 
         retrieval_query = build_retrieval_query(q, prior_messages)
 
+        # "a coding tool similar to Claude" wants tools LIKE Claude, not Claude itself.
+        # Exclude the referenced tool from results when it is a real catalog tool.
+        exclude_ref_names: set[str] = set()
+        similar_ref = referenced_similar_tool(retrieval_query) or referenced_similar_tool(q)
+        if similar_ref:
+            ref_meta = self._find_tool_by_name(similar_ref)
+            ref_name = str((ref_meta or {}).get("Name", "")).strip().lower()
+            if ref_name:
+                exclude_ref_names.add(ref_name)
+                self.metrics.increment("recommend_similar_to_exclusions")
+
         if requires_free_only(retrieval_query) and not non_filter_terms(retrieval_query):
             self.metrics.increment("recommend_free_query_missing_task")
             return {
@@ -2490,6 +2536,36 @@ class RecommendationService:
                 if not open_source_only or is_open_source_tool(self.store.meta[int(candidate["id"])])
             ]
             self.metrics.increment("llm_rank_fallbacks")
+
+        if exclude_ref_names:
+            kept = [
+                hit for hit in final_hits
+                if str((hit.get("meta") or {}).get("Name", "")).strip().lower() not in exclude_ref_names
+            ]
+            existing = {
+                str((hit.get("meta") or {}).get("Name", "")).strip().lower() for hit in kept
+            }
+            # Backfill from the candidate pool so the shortlist stays full after dropping
+            # the referenced tool.
+            for candidate in candidates:
+                if len(kept) >= effective_final_k:
+                    break
+                meta = self.store.meta[int(candidate["id"])]
+                name = str(meta.get("Name", "")).strip().lower()
+                if not name or name in exclude_ref_names or name in existing:
+                    continue
+                if free_only and not is_free_tool(meta):
+                    continue
+                if open_source_only and not is_open_source_tool(meta):
+                    continue
+                kept.append(enrich_hit({
+                    "score": float(candidate.get("score", 0.0)),
+                    "meta": compact_meta(meta),
+                    "why": local_reason(q, meta),
+                }, q))
+                existing.add(name)
+            if kept:
+                final_hits = kept
 
         self.recommend_cache.set(cache_key, final_hits)
         if conversation_id:
