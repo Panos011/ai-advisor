@@ -654,7 +654,7 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["hits"], [])
         self.assertIn("chat normally", response["message"])
         self.assertIn("search", response["message"])
-        self.assertEqual(service.client.chat.completions.calls, 2)
+        self.assertEqual(service.client.chat.completions.calls, 1)
 
     def test_chat_only_falls_back_to_planner_message_if_model_reply_fails(self):
         service = make_service(client=FailingChatOnlyClient([
@@ -672,7 +672,7 @@ class BackendUnitTests(unittest.TestCase):
 
         self.assertEqual(response["action"], "chat_only")
         self.assertEqual(response["hits"], [])
-        self.assertIn("choose", response["message"])
+        self.assertIn("recommend AI tools", response["message"])
 
     def test_chat_uses_visible_tools_when_server_memory_is_missing(self):
         service = make_service(client=DecisionClient([
@@ -789,6 +789,42 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["hits"], [])
         self.assertIn("frustrated", response["message"].lower())
         self.assertNotIn("Start with", response["message"])
+
+    def test_chat_why_are_you_stupid_does_not_restart_recommendations(self):
+        service = make_service()
+        conversation_id = "chat-frustrated-why"
+        service.recommend(
+            "find a writing tool for blog posts",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        response = service.chat(
+            "Why are you stupid ?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["action"], "chat_only")
+        self.assertEqual(response["hits"], [])
+        self.assertNotIn("Start with", response["message"])
+        self.assertNotIn("well suited", response["message"])
+
+    def test_chat_how_are_you_does_not_start_recommendations(self):
+        service = make_service()
+        response = service.chat(
+            "Hey how are you",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="chat-small-talk",
+        )
+
+        self.assertEqual(response["action"], "chat_only")
+        self.assertEqual(response["hits"], [])
+        self.assertNotIn("Start with", response["message"])
+        self.assertNotIn("well suited", response["message"])
 
     def test_chat_plural_alternatives_uses_current_shortlist(self):
         service = make_service()

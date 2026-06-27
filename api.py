@@ -385,6 +385,8 @@ FEEDBACK_PATTERNS = (
     r"\bwtf\b",
     r"\bwhat\s+the\s+fuck\b",
     r"\b(?:are\s+you|you\s+are|ur|u\s+r)\s+(?:stupid|dumb|idiot|useless)\b",
+    r"\bwhy\s+(?:are\s+you|r\s+u|u\s+r)\s+(?:so\s+)?(?:stupid|dumb|useless)\b",
+    r"\bfuck(?:ing)?\s+(?:stupid|dumb|bad|useless)\b",
     r"\b(?:stupid|dumb|idiot|moron)\b",
     r"\b(?:this|that|it)\s+(?:doesn'?t|does not|isn'?t|is not)\s+(?:work|working|right|correct)\b",
     r"\b(?:wrong|broken|bad|nonsense|useless)\b",
@@ -393,6 +395,7 @@ FEEDBACK_PATTERNS = (
 
 NON_SEARCH_PATTERNS = (
     r"^(?:hi|hello|hey|yo|sup|good\s+(?:morning|afternoon|evening))[\s!.?]*$",
+    r"^(?:(?:hi|hello|hey|yo)[,\s]+)?(?:how\s+(?:are|r)\s+(?:you|u)|how'?s\s+it\s+going|what'?s\s+up)[\s!.?]*$",
     r"^(?:thanks|thank\s+you|thx|cheers|ok|okay|nice|cool|great|perfect|awesome)[\s!.?]*$",
     r"\bwhat\s+can\s+you\s+do\b",
     r"\bhow\s+do\s+i\s+use\s+this\b",
@@ -645,6 +648,8 @@ def non_search_response(text: str) -> str:
     normalized = normalize_query_text(text).lower().strip()
     if re.search(r"^(?:thanks|thank\s+you|thx|cheers)", normalized):
         return "You are welcome. Tell me the next task, or ask me to explain, compare, filter, or pick from the current tools."
+    if re.search(r"\bhow\s+(?:are|r)\s+(?:you|u)\b|\bhow'?s\s+it\s+going\b|\bwhat'?s\s+up\b", normalized):
+        return "I am here and ready to help. We can talk normally, or you can ask me to find, compare, filter, or explain AI tools."
     if re.search(r"^(?:hi|hello|hey|yo|sup|good\s+)", normalized):
         return "Hi. Tell me what you need a tool for, including budget, privacy needs, or apps it must connect with."
     return "I can recommend AI tools, explain why a tool was chosen, compare the current shortlist, filter by budget or privacy, and pick the best option."
@@ -2459,6 +2464,15 @@ class RecommendationService:
             self.shortlists[conversation_id] = provided_hits
             self.shortlist_pointers.setdefault(conversation_id, 0)
         has_context_hits = bool(provided_hits or (conversation_id and self.shortlists.get(conversation_id)))
+
+        if is_non_search_message(q):
+            message = self._model_chat_only_response(q, conversation_id, history)
+            if not message:
+                message = non_search_response(q)
+            message = clean_assistant_message(message)
+            self.conversations.append(conversation_id, "user", q)
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"action": "chat_only", "hits": [], "message": message}
 
         if is_feedback_only_query(q):
             message = self._model_chat_only_response(q, conversation_id, history)
