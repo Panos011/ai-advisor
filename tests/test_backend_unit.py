@@ -25,7 +25,7 @@ from backend.retrieval import (
     request_goal,
     sanitize_reason,
 )
-from backend.schemas import ChatRequest, RecommendRequest, SearchRequest
+from backend.schemas import ChatRequest, ChatResponse, RecommendRequest, SearchRequest
 from backend.settings import Settings
 
 
@@ -389,6 +389,25 @@ class BackendUnitTests(unittest.TestCase):
         self.assertIn("Another option is", response["message"])
         self.assertNotIn("My top pick", response["message"])
 
+    def test_anything_else_followup_returns_next_option(self):
+        service = make_service()
+        conversation_id = "anything-else-thread"
+        service.recommend(
+            "I need a writing tool",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+        response = service.recommend(
+            "Anything else?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "ImageBox")
+        self.assertIn("Another option is", response["message"])
+
     def test_chat_request_schema_accepts_visible_tools(self):
         request = ChatRequest(
             q="why these?",
@@ -401,6 +420,20 @@ class BackendUnitTests(unittest.TestCase):
             ],
         )
         self.assertEqual(request.visible_tools[0].meta["Name"], "Writerly")
+
+    def test_chat_response_contract_documents_gpt_wrapper_pipeline(self):
+        response = ChatResponse(
+            action="recommend",
+            message="Start with Writerly.",
+            hits=[],
+            contract={},
+        )
+
+        self.assertEqual(response.contract.style, "gpt_wrapper")
+        self.assertIn("FAISS", response.contract.retrieval)
+        self.assertIn("MMR", response.contract.diversification)
+        self.assertIn("RAG", response.contract.generation)
+        self.assertIn("meta.Name", response.contract.tool_card_fields)
 
     def test_chat_model_decision_understands_messy_pick_best(self):
         service = make_service(client=DecisionClient([
@@ -543,6 +576,26 @@ class BackendUnitTests(unittest.TestCase):
         self.assertIn("I would pick", response["message"])
         self.assertNotIn("Start with", response["message"])
 
+    def test_chat_guardrail_prevents_anything_else_from_restarting_search(self):
+        service = make_service()
+        conversation_id = "chat-anything-else"
+        service.chat(
+            "find a writing tool for blog posts",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+        response = service.chat(
+            "Ok anything else that you are recommending?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["action"], "show_alternative")
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "ImageBox")
+        self.assertIn("Another option is", response["message"])
+
     def test_feedback_prompt_is_not_treated_as_search(self):
         service = make_service()
         prompt = "Wtf. Act like a practical software consultant."
@@ -620,6 +673,22 @@ class BackendUnitTests(unittest.TestCase):
         self.assertNotIn("alternatives worth comparing", message)
         self.assertNotIn("current catalogue data", message)
         self.assertEqual(message, "Start with Copyai.")
+
+    def test_clean_assistant_message_removes_screenshot_template_noise(self):
+        message = clean_assistant_message(
+            "Consultant view: I would start with Copyai. It appears to be the best first test "
+            "from the current catalogue data. Best for: Copyai is the best choice for I would "
+            "pick Copyai for writing blog posts. Copyai is well suited for writing blog posts "
+            "because it combines blog or article drafting with SEO-focused writing support. "
+            "It also has a free tier or trial, so you can test it without paying upfront. "
+            "because it matches the task, price, and feature signals best.. Use the provider "
+            "site to verify pricing and limits before committing."
+        )
+
+        self.assertNotIn("Consultant view", message)
+        self.assertNotIn("current catalogue data", message)
+        self.assertNotIn("Best for:", message)
+        self.assertNotIn("because it matches the task", message)
 
     def test_returned_text_is_compact_without_ellipses(self):
         service = make_service()

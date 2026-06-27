@@ -109,9 +109,31 @@ class SearchHit(BaseModel):
     fit_label: Literal["Strong match", "Good match", "Possible match"] | None = None
 
 
+class RecommenderContract(BaseModel):
+    style: Literal["gpt_wrapper"] = "gpt_wrapper"
+    retrieval: str = "FAISS vector search over embedded tool metadata"
+    diversification: str = "MMR reranking for varied, non-duplicate candidates"
+    generation: str = "RAG ranking with the chat model using retrieved tool records only"
+    tool_card_fields: list[str] = Field(default_factory=lambda: [
+        "score",
+        "why",
+        "tradeoff",
+        "best_for",
+        "fit_label",
+        "meta.Name",
+        "meta.Categories",
+        "meta.Price",
+        "meta.Description",
+        "meta.Tool_link",
+        "meta.Logo_URL",
+        "meta.Logo_File",
+    ])
+
+
 class RecommendResponse(BaseModel):
     hits: list[SearchHit]
     message: str | None = None
+    contract: RecommenderContract | None = None
 
 
 class ChatRequest(BaseModel):
@@ -155,6 +177,7 @@ class ChatResponse(BaseModel):
     message: str
     hits: list[SearchHit] = Field(default_factory=list)
     refined_query: str | None = None
+    contract: RecommenderContract | None = None
 
 
 class SearchResponse(BaseModel):

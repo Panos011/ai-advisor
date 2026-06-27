@@ -53,6 +53,28 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="AI Tools Search API", lifespan=lifespan)
 
 
+RECOMMENDER_CONTRACT = {
+    "style": "gpt_wrapper",
+    "retrieval": "FAISS vector search over embedded tool metadata",
+    "diversification": "MMR reranking for varied, non-duplicate candidates",
+    "generation": "RAG ranking with the chat model using retrieved tool records only",
+    "tool_card_fields": [
+        "score",
+        "why",
+        "tradeoff",
+        "best_for",
+        "fit_label",
+        "meta.Name",
+        "meta.Categories",
+        "meta.Price",
+        "meta.Description",
+        "meta.Tool_link",
+        "meta.Logo_URL",
+        "meta.Logo_File",
+    ],
+}
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(_request: Request, exc: RequestValidationError):
     return JSONResponse(status_code=400, content={"detail": exc.errors()})
@@ -86,6 +108,12 @@ def clean_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
+def chat_wrapper_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    cleaned = clean_payload(payload)
+    cleaned.setdefault("contract", RECOMMENDER_CONTRACT)
+    return cleaned
+
+
 @app.get("/health")
 def health(request: Request):
     return service(request).health()
@@ -99,6 +127,8 @@ def root(request: Request):
         "ok": health_payload["ok"],
         "health": "/health",
         "metrics": "/metrics",
+        "chat": "/chat",
+        "style": "gpt_wrapper",
     }
 
 
@@ -118,7 +148,7 @@ def search(body: SearchRequest, request: Request):
 
 @app.post("/recommend", response_model=RecommendResponse)
 def recommend(body: RecommendRequest, request: Request):
-    return clean_payload(service(request).recommend(
+    return chat_wrapper_payload(service(request).recommend(
         body.q,
         body.retrieve_k,
         body.final_k,
@@ -131,7 +161,7 @@ def recommend(body: RecommendRequest, request: Request):
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(body: ChatRequest, request: Request):
-    return clean_payload(service(request).chat(
+    return chat_wrapper_payload(service(request).chat(
         body.q,
         body.retrieve_k,
         body.final_k,

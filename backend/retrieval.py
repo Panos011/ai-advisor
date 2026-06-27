@@ -7,8 +7,12 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-import faiss
 import numpy as np
+
+try:
+    import faiss
+except ModuleNotFoundError:  # pragma: no cover - exercised only in missing-dependency test envs
+    faiss = None
 
 from backend.cache import TTLCache
 from backend.metrics import RuntimeMetrics
@@ -27,6 +31,7 @@ INSTRUCTION_LEAK_PATTERNS = (
     r"\breturn alternatives that[^.?!]*[.?!]?",
     r"\bthese are alternatives worth comparing[^.?!]*[.?!]?",
     r"\bit appears to be the best first test from the current catalogue data[.?!]?",
+    r"\bbecause it matches the task,\s*price,\s*and feature signals best[.?!]?",
     r"\bdecision shortlist with[^.?!]*[.?!]?",
     r"\bfit,\s*tradeoffs,\s*and practical next steps:?",
 )
@@ -107,6 +112,11 @@ class ToolStore:
 
 
 def load_tool_store(settings: Settings) -> ToolStore:
+    if faiss is None:
+        raise RuntimeError(
+            "FAISS is not installed. Install requirements.txt before loading the production index."
+        )
+
     with open(settings.meta_path, "r", encoding="utf-8") as f:
         meta = [json.loads(line) for line in f]
 
@@ -129,7 +139,7 @@ def load_tool_store(settings: Settings) -> ToolStore:
 def _load_vectors(path: str, index: Any, expected_rows: int) -> np.ndarray | None:
     if os.path.exists(path):
         vectors = np.load(path).astype("float32")
-        faiss.normalize_L2(vectors)
+        normalize_l2(vectors)
         return vectors
 
     vectors = _extract_vectors_from_flat_index(index, expected_rows)
@@ -148,8 +158,17 @@ def _extract_vectors_from_flat_index(index: Any, expected_rows: int) -> np.ndarr
     except Exception as exc:
         logger.warning("Unable to reconstruct vectors for MMR: %s", exc)
         return None
-    faiss.normalize_L2(vectors)
+    normalize_l2(vectors)
     return vectors
+
+
+def normalize_l2(vectors: np.ndarray) -> None:
+    if faiss is not None:
+        faiss.normalize_L2(vectors)
+        return
+
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    np.divide(vectors, norms, out=vectors, where=norms != 0)
 
 
 class ConversationStore:
@@ -734,6 +753,8 @@ _ALTERNATIVE_PATTERNS = (
     r"\bbetter\s+than\s+(?:this|that|the\s+one|it)\b",
     r"\b(?:can\s+you\s+)?recommend\s+another\b",
     r"\b(?:another\s+|other\s+)alternative\b",
+    r"\banything\s+else\b",
+    r"\belse\s+(?:that\s+)?(?:you\s+)?(?:recommend|suggest)\b",
 )
 
 
@@ -1196,11 +1217,15 @@ def clean_assistant_message(value: Any) -> str:
     )
     text = re.sub(
         r"\b(?:these are alternatives worth comparing,\s*not identical picks|"
-        r"it appears to be the best first test from the current catalogue data)[.?!]?\s*",
+        r"it appears to be the best first test from the current catalogue data|"
+        r"because it matches the task,\s*price,\s*and feature signals best)[.?!]?\s*",
         "",
         text,
         flags=re.IGNORECASE,
     )
+    text = re.sub(r"\bI would start with\b", "Start with", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bBest for:\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r";\s*", ". ", text)
     text = normalize_display_text(text)
     if text and text[0].islower():
         text = text[0].upper() + text[1:]
@@ -1551,7 +1576,7 @@ class RecommendationService:
         with self.metrics.timer("openai.embeddings_ms"):
             resp = self.client.embeddings.create(model=self.settings.emb_model, input=texts)
         vecs = np.array([d.embedding for d in resp.data], dtype="float32")
-        faiss.normalize_L2(vecs)
+        normalize_l2(vecs)
 
         if len(texts) == 1:
             self.embedding_cache.set(f"{self.settings.emb_model}:{texts[0]}", vecs.copy())
@@ -2036,6 +2061,21 @@ class RecommendationService:
         stored = self.conversations.get(conversation_id)
         prior_messages = merge_history_messages(history, stored)
         prior_hits = self.shortlists.get(conversation_id) if conversation_id else []
+        has_shortlist = bool(prior_hits)
+
+        # High-confidence follow-ups should not be allowed to become fresh searches
+        # just because the model classified them too broadly.
+        if has_shortlist and is_shortlist_explanation_query(q):
+            return {"action": "explain_shortlist"}
+        if has_shortlist and is_explanation_query(q):
+            return {"action": "explain_best"}
+        if has_shortlist and is_pick_best_query(q):
+            return {"action": "pick_best"}
+        if has_shortlist and is_alternative_query(q):
+            return {"action": "show_alternative"}
+        if has_shortlist and (is_specific_tool_query(q) or is_criterion_pick_query(q)):
+            return {"action": "tool_question"}
+
         context = {
             "latest_user_message": q,
             "recent_user_messages": prior_messages[-6:],
@@ -2045,7 +2085,13 @@ class RecommendationService:
         }
         system = (
             "You are the conversation brain for an AI tool advisor app. "
+            "The app should feel like a GPT wrapper: the user sends one natural chat message, "
+            "then the backend decides whether to talk, ask one clarification, search, refine, explain, "
+            "pick the best option, or answer from visible tool cards. "
             "Classify the latest user message using the conversation history and visible tools. "
+            "When tools are needed, the backend will run FAISS vector retrieval, MMR diversification, "
+            "and RAG ranking over the catalog before returning structured tool cards. "
+            "Your job here is routing only; do not invent tool results. "
             "Do not try to predict exact wording with rules; infer the user's intent naturally.\n"
             "Actions:\n"
             "- chat_only: greetings, thanks, app-help, feedback, or normal conversation that should not change tool cards.\n"
