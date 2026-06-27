@@ -3465,6 +3465,42 @@ def health(request: Request):
     return service(request).health()
 
 
+@app.get("/diag")
+def diag(request: Request):
+    """TEMPORARY diagnostic: report SDK versions and the exact OpenAI error, if any.
+
+    Does NOT expose the API key. Remove once the prod OpenAI path is confirmed working.
+    """
+    import openai as _openai
+    import httpx as _httpx
+
+    svc = service(request)
+    result: dict[str, Any] = {
+        "openai_version": getattr(_openai, "__version__", "unknown"),
+        "httpx_version": getattr(_httpx, "__version__", "unknown"),
+        "chat_model": svc.settings.chat_model,
+        "emb_model": svc.settings.emb_model,
+        "openai_key_suffix": (svc.settings.openai_api_key or "")[-6:],
+    }
+    try:
+        svc.client.embeddings.create(model=svc.settings.emb_model, input=["ping"])
+        result["embedding"] = "ok"
+    except Exception as exc:  # noqa: BLE001 - diagnostic surface
+        result["embedding_error"] = f"{type(exc).__name__}: {exc}"[:500]
+    try:
+        resp = svc.client.chat.completions.create(
+            model=svc.settings.chat_model,
+            messages=[{"role": "user", "content": "Return JSON with key ok set to true."}],
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        result["chat"] = "ok"
+        result["chat_content"] = (resp.choices[0].message.content or "")[:200]
+    except Exception as exc:  # noqa: BLE001 - diagnostic surface
+        result["chat_error"] = f"{type(exc).__name__}: {exc}"[:500]
+    return result
+
+
 @app.get("/")
 def root(request: Request):
     health_payload = service(request).health()
