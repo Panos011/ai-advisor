@@ -111,6 +111,8 @@ class SearchHit(BaseModel):
 
 class RecommenderContract(BaseModel):
     style: Literal["gpt_wrapper"] = "gpt_wrapper"
+    planner: str = "OpenAI intent planner decides whether to chat, answer visible-tool questions, refine, or search"
+    conversation: str = "OpenAI chat-only responder uses recent history and visible tool context without replacing cards"
     retrieval: str = "FAISS vector search over embedded tool metadata"
     diversification: str = "MMR reranking for varied, non-duplicate candidates"
     generation: str = "RAG ranking with the chat model using retrieved tool records only"

@@ -55,6 +55,8 @@ app = FastAPI(title="AI Tools Search API", lifespan=lifespan)
 
 RECOMMENDER_CONTRACT = {
     "style": "gpt_wrapper",
+    "planner": "OpenAI intent planner decides whether to chat, answer visible-tool questions, refine, or search",
+    "conversation": "OpenAI chat-only responder uses recent history and visible tool context without replacing cards",
     "retrieval": "FAISS vector search over embedded tool metadata",
     "diversification": "MMR reranking for varied, non-duplicate candidates",
     "generation": "RAG ranking with the chat model using retrieved tool records only",
