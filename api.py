@@ -127,7 +127,9 @@ class Settings:
     vectors_path: str = os.getenv("VECTORS_PATH", "index/tool_vectors.npy")
     emb_model: str = os.getenv("EMB_MODEL", "text-embedding-3-small")
     chat_model: str = os.getenv("CHAT_MODEL", "gpt-5.4-mini")
-    openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
+    # .strip() guards against a trailing newline/space in the env var, which makes the
+    # Authorization header illegal and causes httpx to fail every call with APIConnectionError.
+    openai_api_key: str | None = (os.getenv("OPENAI_API_KEY") or "").strip() or None
     openai_timeout: float = _float_env("OPENAI_TIMEOUT", 20.0)
     openai_max_retries: int = _int_env("OPENAI_MAX_RETRIES", 2)
     cache_ttl_seconds: int = _int_env("CACHE_TTL_SECONDS", 600)
@@ -3463,42 +3465,6 @@ def chat_wrapper_payload(payload: dict[str, Any]) -> dict[str, Any]:
 @app.get("/health")
 def health(request: Request):
     return service(request).health()
-
-
-@app.get("/diag")
-def diag(request: Request):
-    """TEMPORARY diagnostic: report SDK versions and the exact OpenAI error, if any.
-
-    Does NOT expose the API key. Remove once the prod OpenAI path is confirmed working.
-    """
-    import openai as _openai
-    import httpx as _httpx
-
-    svc = service(request)
-    result: dict[str, Any] = {
-        "openai_version": getattr(_openai, "__version__", "unknown"),
-        "httpx_version": getattr(_httpx, "__version__", "unknown"),
-        "chat_model": svc.settings.chat_model,
-        "emb_model": svc.settings.emb_model,
-        "openai_key_suffix": (svc.settings.openai_api_key or "")[-6:],
-    }
-    try:
-        svc.client.embeddings.create(model=svc.settings.emb_model, input=["ping"])
-        result["embedding"] = "ok"
-    except Exception as exc:  # noqa: BLE001 - diagnostic surface
-        result["embedding_error"] = f"{type(exc).__name__}: {exc}"[:500]
-    try:
-        resp = svc.client.chat.completions.create(
-            model=svc.settings.chat_model,
-            messages=[{"role": "user", "content": "Return JSON with key ok set to true."}],
-            temperature=0.0,
-            response_format={"type": "json_object"},
-        )
-        result["chat"] = "ok"
-        result["chat_content"] = (resp.choices[0].message.content or "")[:200]
-    except Exception as exc:  # noqa: BLE001 - diagnostic surface
-        result["chat_error"] = f"{type(exc).__name__}: {exc}"[:500]
-    return result
 
 
 @app.get("/")
