@@ -741,10 +741,15 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(
             referenced_similar_tool("a writing tool similar to Writerly"), "Writerly"
         )
+        # Bare "tool like X" (what the planner rewrites to) is the similar-to sense.
+        self.assertEqual(
+            referenced_similar_tool("coding tool like Claude for programming"), "Claude"
+        )
         # No reference phrase -> nothing extracted.
         self.assertIsNone(referenced_similar_tool("find me a good writing tool"))
-        # Bare "would like X" must not be treated as "alternatives to X".
+        # Bare "would like X" / "I'd like X" must not be treated as "alternatives to X".
         self.assertIsNone(referenced_similar_tool("I would like a writing tool"))
+        self.assertIsNone(referenced_similar_tool("I'd like Writerly"))
 
     def test_similar_to_named_tool_excludes_that_tool(self):
         service = make_service()

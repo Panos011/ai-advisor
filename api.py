@@ -1091,6 +1091,9 @@ _SIMILAR_REFERENCE_PATTERNS = (
     r"\b(?:similar\s+to|comparable\s+to|alternatives?\s+to|an?\s+alternative\s+to|"
     r"something\s+like|stuff\s+like|tools?\s+like|apps?\s+like|just\s+like)\s+"
     r"([a-z0-9][a-z0-9 .&'+-]{1,30})",
+    # Bare "like X" (e.g. the planner's "coding tool like Claude"), but never the
+    # preference sense "I would like X" / "I'd like X".
+    r"(?<!would )(?<!i'd )(?<!we'd )(?<!'d )\blike\s+([a-z0-9][a-z0-9 .&'+-]{1,30})",
 )
 
 _SIMILAR_REFERENCE_STOP = {
