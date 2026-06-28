@@ -1135,6 +1135,24 @@ def is_music_query(q: str) -> bool:
     ))
 
 
+def is_note_or_transcription_query(q: str) -> bool:
+    return bool(re.search(
+        r"\b(meeting|meetings|notetaker|note\s+taker|note[- ]?taking|notes?|transcrib|"
+        r"transcription|dictation|voice\s+typing|speech\s+to\s+text|audio\s+notes?)\b",
+        q.lower(),
+    ))
+
+
+def is_note_or_transcription_tool(meta: dict[str, Any]) -> bool:
+    blob = metadata_blob(meta)
+    return bool(re.search(
+        r"\b(meeting|meetings|notetaker|note\s+taker|note[- ]?taking|transcrib|"
+        r"transcription|dictation|voice\s+typing|speech\s+to\s+text|speech[- ]to[- ]text|"
+        r"audio\s+(?:record|recording|note|notes|transcription)|voice\s+data)\b",
+        blob,
+    ))
+
+
 # Phrases that signal the user is overriding the previous topic, not refining it.
 PIVOT_MARKERS = (
     "actually", "instead", "never mind", "nevermind", "forget that",
@@ -1709,9 +1727,12 @@ def local_only_status_message(hits: list[dict[str, Any]]) -> str:
 
     parts: list[str] = []
     if local_names:
-        parts.append(f"{human_join(local_names)} has clear local-only, offline, on-device, or self-hosted signals in the catalogue.")
+        verb = "has" if len(local_names) == 1 else "have"
+        parts.append(f"{human_join(local_names)} {verb} clear local-only, offline, on-device, or self-hosted signals in the catalogue.")
     if unclear_names:
-        parts.append(f"{human_join(unclear_names)} is not clearly local-only from the catalogue data, so verify its cloud/audio handling before using sensitive data.")
+        verb = "is" if len(unclear_names) == 1 else "are"
+        pronoun = "its" if len(unclear_names) == 1 else "their"
+        parts.append(f"{human_join(unclear_names)} {verb} not clearly local-only from the catalogue data, so verify {pronoun} cloud/audio handling before using sensitive data.")
     return " ".join(parts)
 
 
@@ -2839,6 +2860,11 @@ class RecommendationService:
                             "freemium-with-paid tiers) for that."
                         ),
                     }
+            if is_note_or_transcription_query(retrieval_query):
+                hits = [
+                    hit for hit in hits
+                    if is_note_or_transcription_tool(hit.get("meta") or {})
+                ]
             hits = [enrich_hit(hit, q) for hit in hits]
             self.recommend_cache.set(cache_key, hits)
             if conversation_id:
@@ -2860,6 +2886,7 @@ class RecommendationService:
         )
         if (
             (is_writing_query(retrieval_query) and (open_source_only or local_only_required or self_hosted_required))
+            or is_note_or_transcription_query(retrieval_query)
             or is_coding_query(retrieval_query)
             or is_chatbot_query(retrieval_query)
             or is_music_query(retrieval_query)
@@ -2867,6 +2894,11 @@ class RecommendationService:
             candidates = [
                 candidate for candidate in candidates
                 if not off_topic_for_query(retrieval_query, str(candidate.get("categories", "")))
+            ]
+        if is_note_or_transcription_query(retrieval_query):
+            candidates = [
+                candidate for candidate in candidates
+                if is_note_or_transcription_tool(self.store.meta[int(candidate["id"])])
             ]
         filtered_candidates = apply_decision_filters(candidates, filters, self.store.meta)
         if len(filtered_candidates) >= effective_final_k:

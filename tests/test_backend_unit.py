@@ -399,11 +399,20 @@ def make_local_note_service(client=None):
             "Pros": "Privacy-first local meeting notes.",
             "Use_cases": "Private meeting notes",
         },
+        {
+            "Name": "LocalChat",
+            "Categories": "personal assistant | ai chatbots",
+            "Price": "Open Source: Free to use.",
+            "Description": "Local on-device assistant that keeps data on your computer.",
+            "Features": "Runs locally with offline chat and never sends data to the cloud.",
+            "Pros": "Private local assistant.",
+            "Use_cases": "Private AI chat",
+        },
     ]
     store = ToolStore(
         index=SequenceIndex(len(meta)),
         meta=meta,
-        vectors=np.array([[1.0, 0.0], [0.9, 0.1]], dtype="float32"),
+        vectors=np.array([[1.0, 0.0], [0.9, 0.1], [0.8, 0.2]], dtype="float32"),
     )
     settings = Settings(cache_ttl_seconds=60, cache_max_entries=8)
     return RecommendationService(store, client or FakeClient(embedding_failure=True), settings, RuntimeMetrics())
@@ -998,7 +1007,7 @@ class BackendUnitTests(unittest.TestCase):
 
         response = service.recommend(
             "local-only AI note taker that never sends audio to cloud",
-            retrieve_k=2,
+            retrieve_k=3,
             final_k=2,
             conversation_id="local-note",
         )
@@ -1006,6 +1015,7 @@ class BackendUnitTests(unittest.TestCase):
         names = [hit["meta"]["Name"] for hit in response["hits"]]
         self.assertEqual(names, ["LocalNote"])
         self.assertNotIn("CloudNote", names)
+        self.assertNotIn("LocalChat", names)
 
     def test_visible_local_only_question_is_uncertainty_answer(self):
         service = make_local_note_service()
