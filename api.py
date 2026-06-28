@@ -2748,9 +2748,6 @@ class RecommendationService:
         if action not in CHAT_ACTIONS:
             action = action_from_planner_tool(decision.get("tool")) or "recommend"
 
-        # Guard: a question about the tools already on screen (differences, why, which is
-        # best) must be answered from those tools, never re-run as a fresh search that
-        # repeats the shortlist. Only override when the message introduces no new task.
         # Any question about the tools already on screen must be answered from those tools,
         # never re-run as a fresh search that re-dumps cards. The planner usually gets this
         # right, but this guard makes it deterministic for the common phrasings.
@@ -2805,6 +2802,21 @@ class RecommendationService:
 
         refined_query = normalize_query_text(decision.get("refined_query") or q)
         next_filters = self._merge_chat_filters(filters, decision.get("filters"))
+        # The planner often drops "cheaper"/"more private" from refined_query, so apply
+        # those as real filters from the original message and re-attach them to the query
+        # so recommend()'s own detection also fires.
+        original_lower = q.lower()
+        if re.search(r"\b(?:cheap(?:er|est)?|more\s+affordable|less\s+expensive|budget[- ]friendly)\b", original_lower):
+            if isinstance(next_filters, dict) and next_filters.get("budget", "any") in (None, "any"):
+                next_filters = {**next_filters, "budget": "freemium"}
+            if "cheaper" not in refined_query.lower():
+                refined_query = f"{refined_query} cheaper".strip()
+        if re.search(r"\b(?:more\s+private|privacy|confidential|gdpr|hipaa|self[- ]hosted|local[- ]first)\b", original_lower):
+            base_nf = next_filters if isinstance(next_filters, dict) else {}
+            if base_nf.get("privacy", "standard") in (None, "standard"):
+                next_filters = {**base_nf, "privacy": "privacy-first"}
+            if "privacy" not in refined_query.lower() and "private" not in refined_query.lower():
+                refined_query = f"{refined_query} privacy focused".strip()
         next_mode = normalize_mode(decision.get("mode") or mode)
         if action == "recommend":
             next_mode = next_mode or mode
