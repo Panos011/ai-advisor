@@ -376,6 +376,8 @@ INSTRUCTION_LEAK_PATTERNS = (
     r"\bprioritize tools with[^.?!]*[.?!]?",
     r"\breturn recommendations as[^.?!]*[.?!]?",
     r"\breturn alternatives that[^.?!]*[.?!]?",
+    r"\breturn only json[^.?!]*[.?!]?",
+    r"\bi\s+should\s+(?:have\s+)?(?:reply|replied|responded)\s+in\s+json[^.?!]*[.?!]?",
     r"\bthese are alternatives worth comparing[^.?!]*[.?!]?",
     r"\bit appears to be the best first test from the current catalogue data[.?!]?",
     r"\bbecause it matches the task,\s*price,\s*and feature signals best[.?!]?",
@@ -446,11 +448,62 @@ LOCAL_FIRST_SIGNAL = re.compile(
 # The TOOL ITSELF being open source — "X is open source", "MIT licensed", "open-source
 # <tool noun>" — NOT generic mentions like "for developing open-source software" or
 # "supports open-source models", which appear in closed tools too.
+SELF_HOSTED_SIGNAL = re.compile(
+    r"\bself[- ]host(?:ed|able|ing)?\b|\bon[- ]prem(?:ise|ises)?\b|"
+    r"\bdeploy\s+(?:it\s+)?(?:on\s+)?(?:your\s+own|locally)\b|"
+    r"\brun\s+(?:it\s+)?on\s+your\s+own\s+(?:server|infrastructure|hardware|machine)\b|"
+    r"\bdocker\s+(?:image|compose|container)\b|\bkubernetes\b|\bhelm\s+chart\b",
+    re.IGNORECASE,
+)
+
+
+def requires_self_hosted(text: str) -> bool:
+    normalized = normalize_query_text(text).lower()
+    return bool(re.search(r"\bself[- ]host(?:ed|ing|able)?\b|\bon[- ]prem(?:ise|ises)?\b", normalized))
+
+
+LOCAL_ONLY_REQUEST_SIGNAL = re.compile(
+    r"\b(?:local[- ](?:only|first)|on[- ]device|offline|runs?\s+locally|run\s+locally|"
+    r"without\s+(?:the\s+)?cloud|no\s+cloud|never\s+(?:sends?|uploads?|leaves?)|"
+    r"does\s+not\s+(?:send|upload|leave)|keep(?:s)?\s+(?:audio|data|files|notes)\s+(?:on\s+)?(?:device|local))\b",
+    re.IGNORECASE,
+)
+
+STRICT_LOCAL_TOOL_SIGNAL = re.compile(
+    r"\b(?:on[- ]device|local[- ](?:only|first)|runs?\s+locally|run\s+locally|offline|"
+    r"without\s+(?:the\s+)?cloud|no\s+cloud|never\s+(?:sends?|uploads?|leaves?)|"
+    r"does\s+not\s+(?:send|upload|leave)|data\s+(?:stays|remains)\s+(?:on\s+)?(?:device|local)|"
+    r"self[- ]host(?:ed|able|ing)?|on[- ]prem(?:ise|ises)?|docker\s+(?:image|compose|container))\b",
+    re.IGNORECASE,
+)
+
+
+def requires_local_only(text: str) -> bool:
+    normalized = normalize_query_text(text).lower()
+    return bool(LOCAL_ONLY_REQUEST_SIGNAL.search(normalized)) or requires_self_hosted(normalized)
+
+
+def is_self_hosted_tool(meta: dict[str, Any]) -> bool:
+    return bool(SELF_HOSTED_SIGNAL.search(metadata_blob(meta)))
+
+
+def is_local_only_tool(meta: dict[str, Any]) -> bool:
+    return bool(STRICT_LOCAL_TOOL_SIGNAL.search(metadata_blob(meta)))
+
+
+def local_only_no_match_message() -> str:
+    return (
+        "I could not find a clearly local-only, on-device, offline, or self-hosted match "
+        "for that. The closest catalogue matches do not prove that data stays out of the cloud."
+    )
+
+
 OPEN_SOURCE_SELF_SIGNAL = re.compile(
     r"\bis\s+(?:an?\s+|fully\s+|completely\s+|truly\s+|now\s+|also\s+)?open[- ]source\b|"
+    r"\b(?:open[- ]source|source[- ]available)\s*:\b|"
     r"\b(?:free\s+and\s+open[- ]source|open[- ]source\s+and\s+free)\b|"
     r"\b(?:mit|apache|gpl|agpl|mpl|bsd)\s+licen[sc]e(?:d)?\b|"
-    r"\bsource[- ]available\b|\bself[- ]hostable\b|"
+    r"\bsource[- ]available\b|"
     r"\bopen[- ]source\s+(?:tool|app|application|platform|assistant|editor|ide|alternative|"
     r"framework|library|client|agent|workspace|project|engine|chatbot|runner)\b",
     re.IGNORECASE,
@@ -884,6 +937,10 @@ def matches_open_source_filter(meta: dict[str, Any], required: bool) -> bool:
     return not required or is_open_source_tool(meta)
 
 
+def matches_local_only_filter(meta: dict[str, Any], required: bool) -> bool:
+    return not required or is_local_only_tool(meta)
+
+
 def apply_decision_filters(
     candidates: list[dict[str, Any]],
     filters: Any,
@@ -894,6 +951,8 @@ def apply_decision_filters(
 
     budget = filter_value(filters, "budget", "any") or "any"
     open_source_required = bool(filter_value(filters, "open_source", False) or filter_value(filters, "openSource", False))
+    local_only_required = bool(filter_value(filters, "local_only", False) or filter_value(filters, "localOnly", False))
+    self_hosted_required = bool(filter_value(filters, "self_hosted", False) or filter_value(filters, "selfHosted", False))
     privacy = filter_value(filters, "privacy", "standard") or "standard"
     integrations = [str(item).lower() for item in (filter_value(filters, "integrations", []) or [])]
     categories = [str(item).lower() for item in (filter_value(filters, "categories", []) or [])]
@@ -909,6 +968,10 @@ def apply_decision_filters(
         if not matches_budget_filter(meta, str(budget)):
             continue
         if not matches_open_source_filter(meta, open_source_required):
+            continue
+        if not matches_local_only_filter(meta, local_only_required):
+            continue
+        if self_hosted_required and not is_self_hosted_tool(meta):
             continue
 
         # Strict: require concrete privacy/local EVIDENCE, not bare marketing words like
@@ -1175,6 +1238,24 @@ def wants_different_not_same(text: str) -> bool:
     ))
 
 
+_ORDINAL_WORDS = {
+    "first": 0, "1st": 0, "second": 1, "2nd": 1, "third": 2, "3rd": 2,
+    "fourth": 3, "4th": 3, "fifth": 4, "5th": 4,
+}
+
+
+def ordinal_position(text: str) -> int | None:
+    """The 0-based shortlist index a user points at: 'the third one' -> 2, 'the last one'
+    -> -1. None when there is no ordinal reference."""
+    normalized = normalize_query_text(text).lower()
+    for word, idx in _ORDINAL_WORDS.items():
+        if re.search(rf"\b{word}\s+(?:one|tool|option|app|pick|card|result|choice)\b", normalized):
+            return idx
+    if re.search(r"\blast\s+(?:one|tool|option|app|pick|card|result|choice|suggestion|recommendation)\b", normalized):
+        return -1
+    return None
+
+
 def is_last_one_reference(text: str) -> bool:
     """Detect references to the most recently shown single tool: 'the last one', 'the one
     you just showed', 'that last suggestion'."""
@@ -1391,12 +1472,15 @@ _CRITERION_PATTERNS = (
 _ALTERNATIVE_PATTERNS = (
     r"\b(?:is\s+there\s+|are\s+there\s+)?(?:any\s+)?alternatives?\b",
     r"\b(?:is\s+there\s+)?any\s+other\s+(?:tool|one|option|app)\b",
-    r"\b(?:show\s+me\s+|give\s+me\s+)another\b",
+    r"\b(?:show|give|get|find)\s+(?:me\s+)?another\b",
+    r"\banother\s+(?:one|tool|option|app|pick|suggestion)\b",
     r"\b(?:show\s+me\s+)?something\s+else\b",
     r"\b(?:a\s+|the\s+)?different\s+(?:tool|one|option)\b",
     r"\bnext\s+best\b",
     r"\bwhat\s+else\b",
     r"\bnot\s+that\s+one\b",
+    r"\bnot\s+(?:any\s+of\s+)?(?:those|these|them)\b",
+    r"\bnone\s+of\s+(?:those|these|them)\b",
     r"\b(?:i\s+|you\s+)gave\s+me\s+the\s+same\s+one\b",
     r"\b(?:i\s+)?already\s+(?:have|know|use|got)\s+that\b",
     r"\bbetter\s+than\s+(?:this|that|the\s+one|it)\b",
@@ -1558,7 +1642,7 @@ def specific_tool_message(hit: dict[str, Any], query: str) -> str:
 
 
 def no_more_alternatives_message() -> str:
-    return "I do not have another distinct option in the current shortlist. Try a new search or loosen the filters."
+    return "I do not have another distinct option that matches the current task. Try a new search or loosen the filters."
 
 
 def alternative_message(hit: dict[str, Any], query: str) -> str:
@@ -1609,8 +1693,41 @@ def open_source_status_message(hits: list[dict[str, Any]]) -> str:
     return " ".join(lines)
 
 
+def local_only_status_message(hits: list[dict[str, Any]]) -> str:
+    if not hits:
+        return "I need the current tool cards before I can check whether they are local-only."
+
+    local_names: list[str] = []
+    unclear_names: list[str] = []
+    for hit in hits[:3]:
+        meta = hit.get("meta") or {}
+        name = str(meta.get("Name", "This tool")).strip() or "This tool"
+        if is_local_only_tool(meta):
+            local_names.append(name)
+        else:
+            unclear_names.append(name)
+
+    parts: list[str] = []
+    if local_names:
+        parts.append(f"{human_join(local_names)} has clear local-only, offline, on-device, or self-hosted signals in the catalogue.")
+    if unclear_names:
+        parts.append(f"{human_join(unclear_names)} is not clearly local-only from the catalogue data, so verify its cloud/audio handling before using sensitive data.")
+    return " ".join(parts)
+
+
+def asks_local_only_status(text: str) -> bool:
+    normalized = normalize_query_text(text).lower()
+    return bool(re.search(
+        r"\b(?:which|are|is|do|does|can|have)\b.*\b(?:local[- ]only|on[- ]device|offline|no\s+cloud|without\s+(?:the\s+)?cloud|self[- ]hosted)\b|"
+        r"\b(?:actually|truly|really)\s+(?:local[- ]only|on[- ]device|offline|self[- ]hosted)\b",
+        normalized,
+    ))
+
+
 def fallback_tool_question_message(q: str, hits: list[dict[str, Any]], reason_query: str) -> str:
     question = normalize_query_text(q).lower()
+    if asks_local_only_status(question) or requires_local_only(question):
+        return local_only_status_message(hits)
     if requires_open_source(question):
         return open_source_status_message(hits)
     if re.search(r"\b(completely\s+free|fully\s+free|100%\s+free|free\s+forever)\b", question):
@@ -1967,7 +2084,9 @@ def clean_assistant_message(value: Any) -> str:
     text = re.sub(
         r"\b(?:these are alternatives worth comparing,\s*not identical picks|"
         r"it appears to be the best first test from the current catalogue data|"
-        r"because it matches the task,\s*price,\s*and feature signals best)[.?!]?\s*",
+        r"because it matches the task,\s*price,\s*and feature signals best|"
+        r"i\s+should\s+(?:have\s+)?(?:reply|replied|responded)\s+in\s+json|"
+        r"return only json(?:\s+with\s+key\s*:?\s*message)?)[.?!]?\s*",
         "",
         text,
         flags=re.IGNORECASE,
@@ -2608,6 +2727,8 @@ class RecommendationService:
             }
         free_only = requires_free_only(retrieval_query)
         open_source_only = requires_open_source(retrieval_query)
+        self_hosted_required = requires_self_hosted(retrieval_query)
+        local_only_required = requires_local_only(retrieval_query) and not self_hosted_required
         if free_only and filters is None:
             filters = {"budget": "free"}
         if open_source_only:
@@ -2615,6 +2736,14 @@ class RecommendationService:
             filter_dict["open_source"] = True
             if free_only and "budget" not in filter_dict:
                 filter_dict["budget"] = "free"
+            filters = filter_dict
+        if local_only_required or self_hosted_required:
+            filter_dict = filters.model_dump() if hasattr(filters, "model_dump") else dict(filters or {})
+            filter_dict["local_only"] = True
+            if self_hosted_required:
+                filter_dict["self_hosted"] = True
+            if filter_dict.get("privacy") in (None, "standard", "privacy-first"):
+                filter_dict["privacy"] = "local-first"
             filters = filter_dict
 
         # "show cheaper alternatives" / "more private" / "local-only" must apply real
@@ -2625,11 +2754,7 @@ class RecommendationService:
             r"\b(?:cheap(?:er|est)?|more\s+affordable|lower[- ]cost|less\s+expensive|budget[- ]friendly)\b",
             retrieval_lower,
         ))
-        wants_local = bool(re.search(
-            r"\b(?:local[- ](?:only|first)|on[- ]device|offline|on[- ]prem(?:ise|ises)?|self[- ]hosted|"
-            r"runs?\s+locally|never\s+(?:sends?|uploads?|leaves?)|without\s+(?:the\s+)?cloud|no\s+cloud)\b",
-            retrieval_lower,
-        ))
+        wants_local = local_only_required or self_hosted_required
         wants_private = bool(re.search(
             r"\b(?:more\s+private|privacy[- ]first|privacy|confidential|gdpr|hipaa|data\s+protection|encrypt)\b",
             retrieval_lower,
@@ -2674,7 +2799,46 @@ class RecommendationService:
             logger.info("Embedding unavailable; served keyword recommendation fallback (%s)", type(exc).__name__)
             self.metrics.increment("embedding_fallbacks")
             hits = keyword_search(retrieval_query, min(retrieve_k, len(self.store.meta)), self.store.meta)
-            hits = apply_decision_filters(hits, filters, self.store.meta)[:effective_final_k] or hits[:effective_final_k]
+            filtered_hits = apply_decision_filters(hits, filters, self.store.meta)
+            hard_filter_required = local_only_required or self_hosted_required or open_source_only or strict_free or privacy_required
+            if hard_filter_required and not filtered_hits:
+                if local_only_required:
+                    return {"hits": [], "message": local_only_no_match_message()}
+                if self_hosted_required:
+                    return {
+                        "hits": [],
+                        "message": (
+                            "I could not find a tool with clear self-hosting / on-premise evidence "
+                            "for that - the closest matches look cloud-only."
+                        ),
+                    }
+                if open_source_only:
+                    return {
+                        "hits": [],
+                        "message": (
+                            "I could not find a clearly open-source tool for that in the catalogue - "
+                            "the closest matches did not list an open-source license."
+                        ),
+                    }
+                if strict_free:
+                    return {
+                        "hits": [],
+                        "message": (
+                            "I could not find a tool that looks completely free (no trial or "
+                            "freemium-with-paid tiers) for that."
+                        ),
+                    }
+            hits = (filtered_hits or hits)[:effective_final_k]
+            if strict_free:
+                hits = [hit for hit in hits if is_completely_free_tool(hit.get("meta") or {})]
+                if not hits:
+                    return {
+                        "hits": [],
+                        "message": (
+                            "I could not find a tool that looks completely free (no trial or "
+                            "freemium-with-paid tiers) for that."
+                        ),
+                    }
             hits = [enrich_hit(hit, q) for hit in hits]
             self.recommend_cache.set(cache_key, hits)
             if conversation_id:
@@ -2694,7 +2858,12 @@ class RecommendationService:
             ids[0].tolist(),
             retrieve_k,
         )
-        if is_coding_query(retrieval_query) or is_chatbot_query(retrieval_query) or is_music_query(retrieval_query):
+        if (
+            (is_writing_query(retrieval_query) and (open_source_only or local_only_required or self_hosted_required))
+            or is_coding_query(retrieval_query)
+            or is_chatbot_query(retrieval_query)
+            or is_music_query(retrieval_query)
+        ):
             candidates = [
                 candidate for candidate in candidates
                 if not off_topic_for_query(retrieval_query, str(candidate.get("categories", "")))
@@ -2702,6 +2871,19 @@ class RecommendationService:
         filtered_candidates = apply_decision_filters(candidates, filters, self.store.meta)
         if len(filtered_candidates) >= effective_final_k:
             candidates = filtered_candidates
+        elif local_only_required or self_hosted_required:
+            if filtered_candidates:
+                candidates = filtered_candidates
+            elif local_only_required:
+                return {"hits": [], "message": local_only_no_match_message()}
+            else:
+                return {
+                    "hits": [],
+                    "message": (
+                        "I could not find a tool with clear self-hosting / on-premise evidence "
+                        "for that - the closest matches look cloud-only."
+                    ),
+                }
         elif privacy_required:
             # Never silently fall back to non-private tools; show only those with clear
             # privacy signals, or say none are clear.
@@ -2753,11 +2935,27 @@ class RecommendationService:
                 return {
                     "hits": [],
                     "message": (
-                        "I could not find a clearly open-source tool for that in the catalogue — "
+                        "I could not find a clearly open-source tool for that in the catalogue - "
                         "the closest matches did not list an open-source license."
                     ),
                 }
             candidates = open_candidates
+
+        if requires_self_hosted(retrieval_query):
+            self_hosted = [
+                candidate for candidate in candidates
+                if SELF_HOSTED_SIGNAL.search(metadata_blob(self.store.meta[int(candidate["id"])]))
+            ]
+            if not self_hosted:
+                return {
+                    "hits": [],
+                    "message": (
+                        "I could not find a tool with clear self-hosting / on-premise evidence "
+                        "for that - the closest matches look cloud-only. Verify on the provider "
+                        "page before relying on it."
+                    ),
+                }
+            candidates = self_hosted
 
         if not candidates:
             return {"hits": [], "message": recommendation_message([], q, mode, pick_best=pick_best)}
@@ -2791,7 +2989,10 @@ class RecommendationService:
                 )
                 for candidate in candidates[:effective_final_k]
                 if not free_only or is_free_tool(self.store.meta[int(candidate["id"])])
+                if not strict_free or is_completely_free_tool(self.store.meta[int(candidate["id"])])
                 if not open_source_only or is_open_source_tool(self.store.meta[int(candidate["id"])])
+                if not local_only_required or is_local_only_tool(self.store.meta[int(candidate["id"])])
+                if not self_hosted_required or is_self_hosted_tool(self.store.meta[int(candidate["id"])])
             ]
             self.metrics.increment("llm_rank_fallbacks")
 
@@ -2814,7 +3015,13 @@ class RecommendationService:
                     continue
                 if free_only and not is_free_tool(meta):
                     continue
+                if strict_free and not is_completely_free_tool(meta):
+                    continue
                 if open_source_only and not is_open_source_tool(meta):
+                    continue
+                if local_only_required and not is_local_only_tool(meta):
+                    continue
+                if self_hosted_required and not is_self_hosted_tool(meta):
                     continue
                 kept.append(enrich_hit({
                     "score": float(candidate.get("score", 0.0)),
@@ -2822,8 +3029,7 @@ class RecommendationService:
                     "why": local_reason(q, meta),
                 }, q))
                 existing.add(name)
-            if kept:
-                final_hits = kept
+            final_hits = kept
 
         if wants_cheaper and final_hits:
             final_hits = sorted(final_hits, key=lambda h: _price_sort_key(h.get("meta") or {}))
@@ -2888,10 +3094,9 @@ class RecommendationService:
             return {"action": "chat_only", "hits": [], "message": message}
 
         if is_feedback_only_query(q):
-            message = self._model_chat_only_response(q, conversation_id, history)
-            if not message:
-                message = feedback_chat_response()
-            message = clean_assistant_message(message)
+            # Feedback/complaints should not be sent back through retrieval or a free-form
+            # model reply. That is how a frustrated "wtf" became a new tool search before.
+            message = feedback_chat_response()
             self.conversations.append(conversation_id, "user", q)
             self.conversations.append(conversation_id, "assistant", message)
             return {"action": "chat_only", "hits": [], "message": message}
@@ -2914,6 +3119,14 @@ class RecommendationService:
             self.conversations.append(conversation_id, "assistant", message)
             return {"action": "clarify", "hits": [], "message": message}
 
+        if has_context_hits and not has_explicit_task(q):
+            if is_explanation_query(q) and ordinal_position(q) is not None:
+                response = self._chat_explain_last(q, conversation_id, history)
+                return {"action": "explain", **response}
+            if asks_local_only_status(q):
+                response = self._chat_tool_question(q, conversation_id, history, visible_hits=provided_hits)
+                return {"action": "explain", **response}
+
         decision = self._chat_decision(q, filters, mode, conversation_id, history)
         action = decision.get("action") or action_from_planner_tool(decision.get("tool")) or "recommend"
         if action not in CHAT_ACTIONS:
@@ -2925,7 +3138,7 @@ class RecommendationService:
         if has_context_hits and not has_explicit_task(q) and action not in {"chat_only", "clarify"}:
             if is_criterion_pick_query(q):
                 action = "criterion"
-            elif is_explanation_query(q) and is_last_one_reference(q):
+            elif is_explanation_query(q) and (is_last_one_reference(q) or ordinal_position(q) is not None):
                 action = "explain_last"
             elif is_shortlist_explanation_query(q) or (
                 is_explanation_query(q) and not is_compare_request(q)
@@ -2979,7 +3192,7 @@ class RecommendationService:
             return {"action": "show_alternative", **response}
 
         if action == "tool_question":
-            response = self._chat_tool_question(q, conversation_id, history)
+            response = self._chat_tool_question(q, conversation_id, history, visible_hits=provided_hits)
             return {"action": "explain", **response}
 
         refined_query = normalize_query_text(decision.get("refined_query") or q)
@@ -2995,6 +3208,8 @@ class RecommendationService:
                 refined_query = f"{refined_query} cheaper".strip()
         if requires_open_source(q) and not requires_open_source(refined_query):
             refined_query = f"{refined_query} open source".strip()
+        if requires_self_hosted(q) and not requires_self_hosted(refined_query):
+            refined_query = f"{refined_query} self-hosted".strip()
         if requires_strict_free(q) and not requires_strict_free(refined_query):
             refined_query = f"{refined_query} completely free".strip()
         if re.search(r"\b(?:local[- ](?:only|first)|on[- ]device|offline|never\s+(?:sends?|leaves?)|no\s+cloud|without\s+(?:the\s+)?cloud|self[- ]hosted|on[- ]prem)\b", original_lower):
@@ -3068,12 +3283,16 @@ class RecommendationService:
         conversation_id: str | None,
         history: Any,
     ) -> dict[str, Any]:
-        """Explain the single most recently shown tool (e.g. the last alternative), not the
-        original shortlist."""
-        last = self.last_shown.get(conversation_id) if conversation_id else None
-        if not last:
-            prior = self.shortlists.get(conversation_id) if conversation_id else None
-            last = prior[-1] if prior else None
+        """Explain a specific tool the user points at: 'the third one' -> shortlist[2],
+        'the last one' -> the most recent single tool shown (or the last card)."""
+        prior = self.shortlists.get(conversation_id) if conversation_id else None
+        pos = ordinal_position(q)
+        if pos is not None and pos >= 0 and prior and pos < len(prior):
+            last = prior[pos]
+        else:
+            last = self.last_shown.get(conversation_id) if conversation_id else None
+            if not last and prior:
+                last = prior[-1] if pos == -1 else prior[0]
         self.conversations.append(conversation_id, "user", q)
         if not last:
             message = "I do not have a most-recent tool to explain yet. Run a search or ask for an alternative first."
@@ -3169,8 +3388,11 @@ class RecommendationService:
         q: str,
         conversation_id: str | None,
         history: Any,
+        visible_hits: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         prior_hits = self.shortlists.get(conversation_id) if conversation_id else None
+        if not prior_hits and visible_hits:
+            prior_hits = visible_hits
         self.conversations.append(conversation_id, "user", q)
         if not prior_hits:
             message = "I can answer that after a search, but I need the current tool cards first."
@@ -3182,7 +3404,10 @@ class RecommendationService:
             enrich_hit(dict(hit), reason_query)
             for hit in prior_hits[: min(3, len(prior_hits))]
         ]
-        message = self._model_tool_question_answer(q, reason_query, hits)
+        if asks_local_only_status(q) or requires_local_only(q):
+            message = local_only_status_message(hits)
+        else:
+            message = self._model_tool_question_answer(q, reason_query, hits)
         if not message:
             message = fallback_tool_question_message(q, hits, reason_query)
 
@@ -3206,6 +3431,7 @@ class RecommendationService:
             "Use only the provided visible AI tool cards and catalogue fields; do not invent pricing, licenses, features, or tools. "
             "If the user asks whether tools are completely free, distinguish completely free/open-source from free tier, free trial, freemium, or paid upgrades. "
             "If the user asks for open-source tools, say which visible tools have open-source or source-available evidence and which do not. "
+            "If the user asks for local-only, on-device, offline, no-cloud, or self-hosted tools, only call a visible tool local/private when the catalogue explicitly says so. "
             "If the catalogue data is unclear, say it is unclear and suggest verifying before relying on it. "
             "Answer conversationally in 1-3 short sentences. "
             "Return ONLY JSON with key: message."
@@ -3302,18 +3528,33 @@ class RecommendationService:
             prior_names |= {name.strip().lower() for name in exclude_names if name}
         response = self.recommend(
             reason_query,
-            max(retrieve_k, 50),
-            max(final_k, 5),
+            max(retrieve_k, 150),
+            max(final_k, 10),
             filters=filters,
             mode=MODE_COMPARE if normalize_mode(mode) != MODE_ONE_BEST else MODE_BEST_FIT,
             conversation_id=None,
             history=None,
             pre_routed=True,
+            exclude_tools=list(prior_names) or None,
         )
         for hit in response.get("hits", []):
             name = str((hit.get("meta") or {}).get("Name", "")).strip().lower()
             if name and name not in prior_names:
                 return enrich_hit(dict(hit), reason_query)
+
+        keyword_hits = apply_decision_filters(
+            keyword_search(reason_query, len(self.store.meta), self.store.meta),
+            filters,
+            self.store.meta,
+        )
+        for hit in keyword_hits:
+            meta = hit.get("meta") or {}
+            name = str(meta.get("Name", "")).strip().lower()
+            if not name or name in prior_names:
+                continue
+            if off_topic_for_query(reason_query, str(meta.get("Categories", ""))):
+                continue
+            return enrich_hit(dict(hit), reason_query)
         return None
 
     def _latest_task_query(self, conversation_id: str | None, history: Any) -> str:
@@ -3324,7 +3565,10 @@ class RecommendationService:
     def _merge_chat_filters(self, filters: Any, decision_filters: Any) -> Any:
         base = filters.model_dump() if hasattr(filters, "model_dump") else dict(filters or {})
         if isinstance(decision_filters, dict):
-            for key in ("budget", "privacy", "integrations", "categories", "platforms", "skill_level", "open_source"):
+            for key in (
+                "budget", "privacy", "integrations", "categories", "platforms",
+                "skill_level", "open_source", "local_only", "self_hosted",
+            ):
                 value = decision_filters.get(key)
                 if value not in (None, "", []):
                     base[key] = value
@@ -3806,6 +4050,9 @@ class RecommendationService:
         seen_ids = set()
         free_only = requires_free_only(q)
         open_source_only = requires_open_source(q)
+        self_hosted_required = requires_self_hosted(q)
+        local_only_required = requires_local_only(q) and not self_hosted_required
+        strict_free = requires_strict_free(q)
         for item in selected:
             if len(final_hits) >= limit:
                 break
@@ -3822,7 +4069,13 @@ class RecommendationService:
                 meta = self.store.meta[id_int]
                 if free_only and not is_free_tool(meta):
                     continue
+                if strict_free and not is_completely_free_tool(meta):
+                    continue
                 if open_source_only and not is_open_source_tool(meta):
+                    continue
+                if local_only_required and not is_local_only_tool(meta):
+                    continue
+                if self_hosted_required and not is_self_hosted_tool(meta):
                     continue
                 summary = item.get("summary") or item.get("description") or ""
                 final_hits.append(enrich_hit({

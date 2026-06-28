@@ -67,6 +67,19 @@ class FirstOnlyThreeIndex:
         return scores[:, :k], ids[:, :k]
 
 
+class SequenceIndex:
+    d = 2
+
+    def __init__(self, ntotal):
+        self.ntotal = ntotal
+
+    def search(self, _vec, k):
+        count = min(k, self.ntotal)
+        scores = np.array([[0.95 - (idx * 0.03) for idx in range(count)]], dtype="float32")
+        ids = np.array([list(range(count))], dtype="int64")
+        return scores, ids
+
+
 class FakeEmbeddings:
     def __init__(self, should_fail=False):
         self.should_fail = should_fail
@@ -322,6 +335,75 @@ def make_open_source_service(client=None):
         index=FakeIndex(),
         meta=meta,
         vectors=np.array([[1.0, 0.0], [0.0, 1.0]], dtype="float32"),
+    )
+    settings = Settings(cache_ttl_seconds=60, cache_max_entries=8)
+    return RecommendationService(store, client or FakeClient(embedding_failure=True), settings, RuntimeMetrics())
+
+
+def make_alternative_pool_service(client=None):
+    meta = [
+        {
+            "Name": "Writerly",
+            "Categories": "writing generators | copywriting",
+            "Price": "Free tier",
+            "Description": "Writing assistant for blog posts and marketing copy.",
+            "Features": "Drafts blog posts and rewrites content.",
+            "Pros": "Useful for writing content quickly.",
+            "Use_cases": "Blog writing",
+        },
+        {
+            "Name": "BlogMagic",
+            "Categories": "writing generators | seo",
+            "Price": "Free tier",
+            "Description": "Blog writing assistant for SEO articles and outlines.",
+            "Features": "Creates blog posts and article briefs.",
+            "Pros": "Good for SEO writing.",
+            "Use_cases": "Blog writing",
+        },
+        {
+            "Name": "DraftPilot",
+            "Categories": "writing generators | copywriting",
+            "Price": "Free tier",
+            "Description": "AI content drafting tool for blog posts, rewrites, and marketing copy.",
+            "Features": "Generates drafts and improves written content.",
+            "Pros": "Useful for content teams.",
+            "Use_cases": "Blog writing",
+        },
+    ]
+    store = ToolStore(
+        index=SequenceIndex(len(meta)),
+        meta=meta,
+        vectors=np.array([[1.0, 0.0], [0.9, 0.1], [0.8, 0.2]], dtype="float32"),
+    )
+    settings = Settings(cache_ttl_seconds=60, cache_max_entries=8)
+    return RecommendationService(store, client or FakeClient(), settings, RuntimeMetrics())
+
+
+def make_local_note_service(client=None):
+    meta = [
+        {
+            "Name": "CloudNote",
+            "Categories": "meeting notes | transcription",
+            "Price": "Free tier",
+            "Description": "Cloud meeting note taker with hosted storage and online summaries.",
+            "Features": "Records meetings, uploads audio to cloud storage, and creates summaries.",
+            "Pros": "Easy cloud sync.",
+            "Use_cases": "Meeting notes",
+        },
+        {
+            "Name": "LocalNote",
+            "Categories": "meeting notes | transcription",
+            "Price": "Open Source: Free to use.",
+            "Description": "Local-only AI note taker that runs on-device and works offline.",
+            "Features": "Audio stays on device, never uploads recordings, and transcribes meetings locally.",
+            "Pros": "Privacy-first local meeting notes.",
+            "Use_cases": "Private meeting notes",
+        },
+    ]
+    store = ToolStore(
+        index=SequenceIndex(len(meta)),
+        meta=meta,
+        vectors=np.array([[1.0, 0.0], [0.9, 0.1]], dtype="float32"),
     )
     settings = Settings(cache_ttl_seconds=60, cache_max_entries=8)
     return RecommendationService(store, client or FakeClient(embedding_failure=True), settings, RuntimeMetrics())
@@ -841,6 +923,120 @@ class BackendUnitTests(unittest.TestCase):
         response = service._chat_explain_last("why did you choose the last one?", cid, None)
         self.assertEqual(response["hits"], [])
         self.assertIn("ImageBox", response["message"])
+
+    def test_ordinal_explanation_targets_that_card(self):
+        service = make_service()
+        cid = "ordinal"
+        service.recommend("find a writing tool", retrieve_k=2, final_k=2, conversation_id=cid)
+        response = service._chat_explain_last("why did you choose the second one?", cid, None)
+        self.assertEqual(response["hits"], [])
+        self.assertIn("ImageBox", response["message"])
+
+    def test_self_hosted_only_rejects_cloud_tools(self):
+        service = make_service()
+        response = service.recommend(
+            "self-hosted only writing tool", retrieve_k=2, final_k=2, conversation_id="selfhost"
+        )
+        self.assertEqual(response["hits"], [])
+        self.assertIn("self-hosting", response["message"].lower())
+
+    def test_not_any_of_those_routes_to_alternative(self):
+        service = make_service()
+        cid = "notany"
+        service.recommend("find a writing tool", retrieve_k=2, final_k=2, conversation_id=cid)
+        response = service.chat(
+            "show another one but not any of those", retrieve_k=2, final_k=2, conversation_id=cid
+        )
+        self.assertEqual(response["action"], "show_alternative")
+
+    def test_third_card_explanation_targets_third_card(self):
+        service = make_task_switch_service()
+        cid = "third-card"
+        service.shortlists[cid] = [
+            {"score": 0.9, "meta": service.store.meta[0], "why": "Writerly helps with blog posts."},
+            {"score": 0.8, "meta": service.store.meta[1], "why": "CodeMate helps developers write code."},
+            {"score": 0.7, "meta": service.store.meta[2], "why": "MusicBox helps create music."},
+        ]
+
+        response = service.chat(
+            "why did you choose the third one?", retrieve_k=3, final_k=3, conversation_id=cid
+        )
+
+        self.assertEqual(response["action"], "explain")
+        self.assertIn("MusicBox", response["message"])
+        self.assertNotIn("Writerly is the best first pick", response["message"])
+
+    def test_feedback_chat_never_calls_model_or_restarts_search(self):
+        service = make_service(client=DecisionClient([{"action": "recommend"}]))
+
+        response = service.chat(
+            "that answer makes no sense", retrieve_k=2, final_k=2, conversation_id="feedback-chat"
+        )
+
+        self.assertEqual(response["action"], "chat_only")
+        self.assertEqual(response["hits"], [])
+        self.assertIn("frustrated", response["message"])
+        self.assertNotIn("JSON", response["message"])
+        self.assertNotIn("Start with", response["message"])
+
+    def test_not_any_of_those_returns_fresh_catalog_alternative(self):
+        service = make_alternative_pool_service()
+        cid = "fresh-not-any"
+        service.recommend("find a writing tool for blog posts", retrieve_k=3, final_k=2, conversation_id=cid)
+
+        response = service.chat(
+            "show another one but not any of those", retrieve_k=3, final_k=2, conversation_id=cid
+        )
+
+        self.assertEqual(response["action"], "show_alternative")
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "DraftPilot")
+        self.assertNotIn("Writerly", response["message"])
+        self.assertNotIn("BlogMagic", response["message"])
+
+    def test_local_only_recommendation_excludes_cloud_notes(self):
+        service = make_local_note_service()
+
+        response = service.recommend(
+            "local-only AI note taker that never sends audio to cloud",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="local-note",
+        )
+
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+        self.assertEqual(names, ["LocalNote"])
+        self.assertNotIn("CloudNote", names)
+
+    def test_visible_local_only_question_is_uncertainty_answer(self):
+        service = make_local_note_service()
+        cid = "visible-local"
+        service.shortlists[cid] = [
+            {"score": 0.8, "meta": service.store.meta[0], "why": "CloudNote handles meeting notes."},
+            {"score": 0.9, "meta": service.store.meta[1], "why": "LocalNote runs locally."},
+        ]
+
+        response = service.chat(
+            "which of these are actually local only?", retrieve_k=2, final_k=2, conversation_id=cid
+        )
+
+        self.assertEqual(response["action"], "explain")
+        self.assertIn("LocalNote", response["message"])
+        self.assertIn("CloudNote is not clearly local-only", response["message"])
+        self.assertNotIn("Start with", response["message"])
+
+    def test_strict_open_source_direct_search_excludes_free_tier_only(self):
+        service = make_open_source_service()
+
+        response = service.recommend(
+            "open-source only coding tool, not just free tier",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="oss-direct",
+        )
+
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+        self.assertEqual(names, ["OpenCode"])
+        self.assertNotIn("ClosedCode", names)
 
     def test_pre_routed_recommend_skips_conversational_gating(self):
         # Default (pre_routed=False): a criterion-style follow-up is diverted to the
