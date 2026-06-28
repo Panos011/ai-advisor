@@ -763,15 +763,25 @@ class BackendUnitTests(unittest.TestCase):
         self.assertNotIn("Writerly", names)
         self.assertTrue(names, "should still return at least one alternative tool")
 
-    def test_feedback_stop_recommending_does_not_search(self):
+    def test_feedback_stop_recommending_without_context_is_chat_only(self):
+        # No shortlist yet -> pure feedback stays chat_only, never a search.
         service = make_service()
-        cid = "fb-stop"
-        service.recommend("find a writing tool", retrieve_k=2, final_k=2, conversation_id=cid)
         response = service.chat(
-            "stop recommending the same thing", retrieve_k=2, final_k=2, conversation_id=cid
+            "stop recommending the same thing", retrieve_k=2, final_k=2, conversation_id="fb-nocontext"
         )
         self.assertEqual(response["action"], "chat_only")
         self.assertEqual(response["hits"], [])
+
+    def test_stop_same_ones_with_shortlist_shows_alternative(self):
+        # With a shortlist, "stop recommending the same ones" is an actionable request
+        # for new options, not venting.
+        service = make_service()
+        cid = "fb-stop2"
+        service.recommend("find a writing tool", retrieve_k=2, final_k=2, conversation_id=cid)
+        response = service.chat(
+            "stop recommending the same ones", retrieve_k=2, final_k=2, conversation_id=cid
+        )
+        self.assertEqual(response["action"], "show_alternative")
 
     def test_which_is_cheapest_uses_criterion_style(self):
         service = make_service(client=DecisionClient([{"action": "recommend"}]))
@@ -805,6 +815,32 @@ class BackendUnitTests(unittest.TestCase):
         self.assertTrue(names)
         self.assertEqual(names[0], "Writerly")
         self.assertNotIn("ImageBox", names)
+
+    def test_alternatives_to_named_tool_excludes_it(self):
+        service = make_service()
+        response = service.recommend(
+            "alternatives to Writerly for writing", retrieve_k=2, final_k=2, conversation_id="altx"
+        )
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+        self.assertNotIn("Writerly", names)
+
+    def test_open_source_only_rejects_non_oss_tools(self):
+        service = make_service()
+        response = service.recommend(
+            "open source writing tool", retrieve_k=2, final_k=2, conversation_id="oss"
+        )
+        self.assertEqual(response["hits"], [])
+        self.assertIn("open-source", response["message"].lower())
+
+    def test_explain_last_explains_last_shown_not_shortlist(self):
+        service = make_service()
+        cid = "last-one"
+        service.recommend("find a writing tool", retrieve_k=2, final_k=2, conversation_id=cid)
+        # Simulate a most-recent alternative (ImageBox) distinct from the shortlist top.
+        service.last_shown[cid] = {"score": 0.5, "meta": service.store.meta[1]}
+        response = service._chat_explain_last("why did you choose the last one?", cid, None)
+        self.assertEqual(response["hits"], [])
+        self.assertIn("ImageBox", response["message"])
 
     def test_pre_routed_recommend_skips_conversational_gating(self):
         # Default (pre_routed=False): a criterion-style follow-up is diverted to the

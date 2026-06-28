@@ -442,6 +442,7 @@ CHAT_ACTIONS = {
     "show_alternative",
     "tool_question",
     "criterion",
+    "explain_last",
 }
 
 CHAT_TOOLS = {
@@ -779,7 +780,39 @@ def is_free_tool(meta: dict[str, Any]) -> bool:
 
 def is_open_source_tool(meta: dict[str, Any]) -> bool:
     blob = metadata_blob(meta)
-    return bool(re.search(r"\bopen\s*[- ]?\s*source\b|\boss\b|\bsource\s+available\b|\bgithub\b", blob))
+    # NB: a bare "github" mention is NOT evidence of open source — tons of closed tools
+    # integrate with GitHub. Require an explicit open-source / license signal.
+    return bool(re.search(
+        r"\bopen\s*[- ]?\s*source\b|\boss\b|\bsource[- ]available\b|\bself[- ]hostable\b|"
+        r"\b(?:mit|apache|gpl|agpl|mpl|bsd)\s+licen[sc]e(?:d)?\b|\bself[- ]hosted\s+open\b",
+        blob,
+    ))
+
+
+def is_completely_free_tool(meta: dict[str, Any]) -> bool:
+    """Stricter than is_free_tool: a genuinely free product, not a trial or a freemium
+    plan that sits next to paid tiers (open-source tools still count)."""
+    if not is_free_tool(meta):
+        return False
+    price = normalize_display_text(meta.get("Price", "")).lower()
+    if is_open_source_tool(meta) or "open source" in price:
+        return True
+    # Trial-only, freemium, or any paid tier means it is not "completely free".
+    if re.search(r"\bfree\s+trial\b|\btrial\b|\bfreemium\b", price):
+        return False
+    if re.search(r"[$€£]|\b(?:paid|pro|premium|plus|business|enterprise|subscription|per\s+(?:month|year|seat|user)|monthly|annual)\b", price):
+        return False
+    return True
+
+
+def requires_strict_free(text: str) -> bool:
+    """'completely free', 'free forever', 'totally free' => no trials/freemium."""
+    normalized = normalize_query_text(text).lower()
+    return bool(re.search(
+        r"\b(?:completely|totally|fully|entirely|100%|100\s+percent)\s+free\b|"
+        r"\bfree\s+forever\b|\bfree\s+for\s+life\b|\bforever\s+free\b|\bpermanently\s+free\b",
+        normalized,
+    ))
 
 
 # === Decision Filter and Enrichment Helpers ===
@@ -1107,6 +1140,31 @@ def is_compare_request(text: str) -> bool:
     ))
 
 
+def wants_different_not_same(text: str) -> bool:
+    """'stop recommending the same ones', 'give me different ones', 'not the same tools' —
+    an actionable request for NEW options, not just venting."""
+    normalized = normalize_query_text(text).lower()
+    return bool(re.search(
+        r"\bstop\s+(?:recommending|showing|suggesting|giving|repeating)\s+(?:me\s+)?(?:the\s+)?same\b|"
+        r"\b(?:different|other|new|fresh)\s+(?:ones|tools|options|apps|picks)\b|"
+        r"\bnot\s+the\s+same\s+(?:ones|tools|options|apps)\b|"
+        r"\bsomething\s+(?:different|new|else)\b",
+        normalized,
+    ))
+
+
+def is_last_one_reference(text: str) -> bool:
+    """Detect references to the most recently shown single tool: 'the last one', 'the one
+    you just showed', 'that last suggestion'."""
+    normalized = normalize_query_text(text).lower()
+    return bool(re.search(
+        r"\b(?:the\s+)?last\s+(?:one|tool|option|app|pick|suggestion|recommendation|result)\b|"
+        r"\bthe\s+one\s+you\s+just\s+(?:showed|gave|suggested|recommended|mentioned)\b|"
+        r"\bthat\s+last\s+(?:one|tool|option)\b|\bmost\s+recent\s+(?:one|tool|suggestion)\b",
+        normalized,
+    ))
+
+
 def is_visible_card_question(text: str) -> bool:
     """A question clearly about the tools already on screen — answer in text, do not re-search."""
     if (
@@ -1162,6 +1220,34 @@ def referenced_similar_tool(text: str) -> str | None:
         if len(candidate) >= 2:
             return candidate
     return None
+
+
+_NEGATED_TOOL_PATTERN = (
+    r"\b(?:but\s+not|not|except(?:\s+for)?|excluding|other\s+than|besides|apart\s+from)\s+"
+    r"([a-z0-9][a-z0-9 .&'+/-]{1,60})"
+)
+
+
+def negated_tools(text: str) -> list[str]:
+    """Extract tools the user explicitly excludes: 'not ChatGPT or Claude', 'except Notion'.
+
+    Names are candidates only; callers validate against the catalog before excluding.
+    """
+    normalized = normalize_query_text(text)
+    names: list[str] = []
+    for match in re.finditer(_NEGATED_TOOL_PATTERN, normalized, flags=re.IGNORECASE):
+        chunk = match.group(1)
+        chunk = re.split(
+            r"\b(?:for|to|that|which|with|because|so|if|when|please)\b",
+            chunk, 1, flags=re.IGNORECASE,
+        )[0]
+        for part in re.split(r"\b(?:or|and|nor)\b|,|/", chunk, flags=re.IGNORECASE):
+            cleaned = part.strip(" .,'-")
+            tokens = [t for t in cleaned.split() if t.lower() not in _SIMILAR_REFERENCE_STOP]
+            candidate = " ".join(tokens).strip()
+            if candidate and len(candidate) >= 2 and candidate not in names:
+                names.append(candidate)
+    return names
 
 
 def is_refinement_query(text: str) -> bool:
@@ -1315,6 +1401,10 @@ def alternative_requests_new_search(text: str) -> bool:
     """True when an alternative request also states a concrete new/revised task."""
     if not is_alternative_query(text):
         return False
+    # "alternatives to <named tool>" is a fresh search for that tool's space (excluding
+    # it), not a "next from the current shortlist" request.
+    if referenced_similar_tool(text):
+        return True
     normalized = normalize_query_text(text).lower().strip()
     if is_coding_query(normalized) or is_chatbot_query(normalized):
         return True
@@ -2200,6 +2290,9 @@ class RecommendationService:
         self.shortlist_pointers: dict[str, int] = {}
         # Every tool name we have surfaced in a conversation, so "show another" never repeats.
         self.shown_tools: dict[str, set[str]] = {}
+        # The single most recently surfaced tool (alternative / criterion / pick), for
+        # "why did you choose the last one?" follow-ups.
+        self.last_shown: dict[str, dict[str, Any]] = {}
 
     def _record_shown(self, conversation_id: str | None, hits: list[dict[str, Any]] | None) -> None:
         if not conversation_id or not hits:
@@ -2209,6 +2302,10 @@ class RecommendationService:
             name = str((hit.get("meta") or {}).get("Name", "")).strip().lower()
             if name:
                 shown.add(name)
+
+    def _set_last_shown(self, conversation_id: str | None, hit: dict[str, Any] | None) -> None:
+        if conversation_id and hit:
+            self.last_shown[conversation_id] = hit
 
     def health(self) -> dict[str, Any]:
         return {
@@ -2271,6 +2368,7 @@ class RecommendationService:
         conversation_id: str | None = None,
         history: Any = None,
         pre_routed: bool = False,
+        exclude_tools: list[str] | None = None,
     ) -> dict[str, Any]:
         # pre_routed=True means the chat() planner already classified intent as a
         # fresh/refined search, so we skip recommend()'s own conversational gating
@@ -2456,16 +2554,23 @@ class RecommendationService:
 
         retrieval_query = build_retrieval_query(q, prior_messages)
 
-        # "a coding tool similar to Claude" wants tools LIKE Claude, not Claude itself.
-        # Exclude the referenced tool from results when it is a real catalog tool.
+        # "a coding tool similar to Claude" wants tools LIKE Claude, not Claude itself;
+        # "alternatives to ChatGPT but not Claude" excludes both. Only drop names that
+        # resolve to a real catalog tool.
         exclude_ref_names: set[str] = set()
+        candidate_exclusions: list[str] = list(exclude_tools or [])
         similar_ref = referenced_similar_tool(retrieval_query) or referenced_similar_tool(q)
         if similar_ref:
-            ref_meta = self._find_tool_by_name(similar_ref)
+            candidate_exclusions.append(similar_ref)
+        candidate_exclusions.extend(negated_tools(retrieval_query))
+        candidate_exclusions.extend(negated_tools(q))
+        for name_str in candidate_exclusions:
+            ref_meta = self._find_tool_by_name(name_str)
             ref_name = str((ref_meta or {}).get("Name", "")).strip().lower()
             if ref_name:
                 exclude_ref_names.add(ref_name)
-                self.metrics.increment("recommend_similar_to_exclusions")
+        if exclude_ref_names:
+            self.metrics.increment("recommend_similar_to_exclusions")
 
         if requires_free_only(retrieval_query) and not non_filter_terms(retrieval_query):
             self.metrics.increment("recommend_free_query_missing_task")
@@ -2490,22 +2595,30 @@ class RecommendationService:
                 filter_dict["budget"] = "free"
             filters = filter_dict
 
-        # "show cheaper alternatives" / "make it more private" must apply real budget /
-        # privacy filters, not just reword the search.
+        # "show cheaper alternatives" / "more private" / "local-only" must apply real
+        # budget / privacy filters, not just reword the search.
         retrieval_lower = retrieval_query.lower()
+        strict_free = requires_strict_free(retrieval_query)
         wants_cheaper = bool(re.search(
             r"\b(?:cheap(?:er|est)?|more\s+affordable|lower[- ]cost|less\s+expensive|budget[- ]friendly)\b",
             retrieval_lower,
         ))
-        wants_private = bool(re.search(
-            r"\b(?:more\s+private|privacy|confidential|gdpr|hipaa|self[- ]hosted|on[- ]premise|local[- ]first|data\s+protection)\b",
+        wants_local = bool(re.search(
+            r"\b(?:local[- ](?:only|first)|on[- ]device|offline|on[- ]prem(?:ise|ises)?|self[- ]hosted|"
+            r"runs?\s+locally|never\s+(?:sends?|uploads?|leaves?)|without\s+(?:the\s+)?cloud|no\s+cloud)\b",
             retrieval_lower,
         ))
-        if wants_cheaper or wants_private:
+        wants_private = bool(re.search(
+            r"\b(?:more\s+private|privacy[- ]first|privacy|confidential|gdpr|hipaa|data\s+protection|encrypt)\b",
+            retrieval_lower,
+        ))
+        if wants_cheaper or wants_private or wants_local:
             filter_dict = filters.model_dump() if hasattr(filters, "model_dump") else dict(filters or {})
             if wants_cheaper and filter_dict.get("budget") in (None, "any"):
                 filter_dict["budget"] = "freemium"
-            if wants_private and filter_dict.get("privacy") in (None, "standard"):
+            if wants_local and filter_dict.get("privacy") in (None, "standard", "privacy-first"):
+                filter_dict["privacy"] = "local-first"
+            elif wants_private and filter_dict.get("privacy") in (None, "standard"):
                 filter_dict["privacy"] = "privacy-first"
             filters = filter_dict
         privacy_value = filters.get("privacy") if isinstance(filters, dict) else getattr(filters, "privacy", "standard")
@@ -2592,11 +2705,38 @@ class RecommendationService:
                 if matches_budget_filter(self.store.meta[int(candidate["id"])], "freemium")
             ]
             candidates = cheaper or candidates
+
+        if strict_free:
+            strictly_free = [
+                candidate for candidate in candidates
+                if is_completely_free_tool(self.store.meta[int(candidate["id"])])
+            ]
+            if not strictly_free:
+                return {
+                    "hits": [],
+                    "message": (
+                        "I could not find a tool that looks completely free (no trial or "
+                        "freemium-with-paid tiers) for that. Want me to include freemium tools "
+                        "with a usable free tier instead?"
+                    ),
+                }
+            candidates = strictly_free
+
         if open_source_only:
-            candidates = [
+            open_candidates = [
                 candidate for candidate in candidates
                 if is_open_source_tool(self.store.meta[int(candidate["id"])])
             ]
+            if not open_candidates:
+                return {
+                    "hits": [],
+                    "message": (
+                        "I could not find a clearly open-source tool for that in the catalogue — "
+                        "the closest matches did not list an open-source license."
+                    ),
+                }
+            candidates = open_candidates
+
         if not candidates:
             return {"hits": [], "message": recommendation_message([], q, mode, pick_best=pick_best)}
 
@@ -2707,6 +2847,15 @@ class RecommendationService:
                 self.shortlist_pointers.setdefault("__visible_only__", 0)
         has_context_hits = bool(provided_hits or (conversation_id and self.shortlists.get(conversation_id)))
 
+        # "stop recommending the same ones" / "give me different ones" is an actionable
+        # request for NEW options, not venting — fetch a fresh distinct alternative.
+        if has_context_hits and wants_different_not_same(q):
+            response = self._chat_alternative(
+                q, conversation_id, history, retrieve_k, final_k, filters, mode,
+                visible_hits=provided_hits,
+            )
+            return {"action": "show_alternative", **response}
+
         if is_non_search_message(q):
             message = self._model_chat_only_response(q, conversation_id, history)
             if not message:
@@ -2754,6 +2903,8 @@ class RecommendationService:
         if has_context_hits and not has_explicit_task(q) and action not in {"chat_only", "clarify"}:
             if is_criterion_pick_query(q):
                 action = "criterion"
+            elif is_explanation_query(q) and is_last_one_reference(q):
+                action = "explain_last"
             elif is_shortlist_explanation_query(q) or (
                 is_explanation_query(q) and not is_compare_request(q)
             ):
@@ -2762,6 +2913,11 @@ class RecommendationService:
                 action = "pick_best"
             elif is_compare_request(q) or is_visible_card_question(q):
                 action = "tool_question"
+
+        # "alternatives to <named tool>" is always a fresh search that excludes that tool,
+        # never the next-from-shortlist path — even with no shortlist yet.
+        if action in {"show_alternative", "clarify"} and referenced_similar_tool(q):
+            action = "recommend"
 
         if action == "chat_only":
             message = self._model_chat_only_response(q, conversation_id, history)
@@ -2785,6 +2941,10 @@ class RecommendationService:
             response = self._chat_criterion(q, conversation_id, history)
             return {"action": "explain", **response}
 
+        if action == "explain_last":
+            response = self._chat_explain_last(q, conversation_id, history)
+            return {"action": "explain", **response}
+
         if action in {"explain_shortlist", "explain_best", "pick_best"}:
             response = self._chat_explain(action, q, conversation_id, history)
             return {
@@ -2802,21 +2962,34 @@ class RecommendationService:
 
         refined_query = normalize_query_text(decision.get("refined_query") or q)
         next_filters = self._merge_chat_filters(filters, decision.get("filters"))
-        # The planner often drops "cheaper"/"more private" from refined_query, so apply
-        # those as real filters from the original message and re-attach them to the query
-        # so recommend()'s own detection also fires.
+        # The planner often drops "cheaper"/"more private"/"local-only" and excluded tool
+        # names from refined_query, so apply them from the ORIGINAL message and re-attach
+        # the keyword so recommend()'s own detection also fires.
         original_lower = q.lower()
         if re.search(r"\b(?:cheap(?:er|est)?|more\s+affordable|less\s+expensive|budget[- ]friendly)\b", original_lower):
             if isinstance(next_filters, dict) and next_filters.get("budget", "any") in (None, "any"):
                 next_filters = {**next_filters, "budget": "freemium"}
             if "cheaper" not in refined_query.lower():
                 refined_query = f"{refined_query} cheaper".strip()
-        if re.search(r"\b(?:more\s+private|privacy|confidential|gdpr|hipaa|self[- ]hosted|local[- ]first)\b", original_lower):
+        if re.search(r"\b(?:local[- ](?:only|first)|on[- ]device|offline|never\s+(?:sends?|leaves?)|no\s+cloud|without\s+(?:the\s+)?cloud|self[- ]hosted|on[- ]prem)\b", original_lower):
+            base_nf = next_filters if isinstance(next_filters, dict) else {}
+            next_filters = {**base_nf, "privacy": "local-first"}
+            if "local" not in refined_query.lower():
+                refined_query = f"{refined_query} local on-device".strip()
+        elif re.search(r"\b(?:more\s+private|privacy|confidential|gdpr|hipaa|data\s+protection)\b", original_lower):
             base_nf = next_filters if isinstance(next_filters, dict) else {}
             if base_nf.get("privacy", "standard") in (None, "standard"):
                 next_filters = {**base_nf, "privacy": "privacy-first"}
             if "privacy" not in refined_query.lower() and "private" not in refined_query.lower():
                 refined_query = f"{refined_query} privacy focused".strip()
+
+        # Tools to exclude: "alternatives to ChatGPT but not Claude" -> exclude both.
+        exclude_tools: list[str] = []
+        named_alt = referenced_similar_tool(q)
+        if named_alt:
+            exclude_tools.append(named_alt)
+        exclude_tools.extend(negated_tools(q))
+
         next_mode = normalize_mode(decision.get("mode") or mode)
         if action == "recommend":
             next_mode = next_mode or mode
@@ -2829,6 +3002,7 @@ class RecommendationService:
             conversation_id=conversation_id,
             history=history,
             pre_routed=True,
+            exclude_tools=exclude_tools or None,
         )
         return {
             "action": "refine" if action == "refine" else "recommend",
@@ -2858,8 +3032,35 @@ class RecommendationService:
         single_hit = enrich_hit(dict(best), reason_query)
         message = clean_assistant_message(criterion_pick_message(single_hit, criterion, reason_query))
         self._set_shortlist_pointer(conversation_id, prior_hits.index(best) if best in prior_hits else 0)
+        self._set_last_shown(conversation_id, single_hit)
         self.conversations.append(conversation_id, "assistant", message)
         return {"hits": [single_hit], "message": message}
+
+    def _chat_explain_last(
+        self,
+        q: str,
+        conversation_id: str | None,
+        history: Any,
+    ) -> dict[str, Any]:
+        """Explain the single most recently shown tool (e.g. the last alternative), not the
+        original shortlist."""
+        last = self.last_shown.get(conversation_id) if conversation_id else None
+        if not last:
+            prior = self.shortlists.get(conversation_id) if conversation_id else None
+            last = prior[-1] if prior else None
+        self.conversations.append(conversation_id, "user", q)
+        if not last:
+            message = "I do not have a most-recent tool to explain yet. Run a search or ask for an alternative first."
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"hits": [], "message": message}
+        reason_query = self._latest_task_query(conversation_id, history) or q
+        hit = enrich_hit(dict(last), reason_query)
+        hit["why"] = local_reason(reason_query, hit.get("meta") or {})
+        name = str((hit.get("meta") or {}).get("Name", "This tool")).strip() or "This tool"
+        why = complete_sentences(str(hit.get("why") or ""), 260, max_sentences=2)
+        message = clean_assistant_message(f"I suggested {name} because {why}" if why else f"I suggested {name} as the most recent option.")
+        self.conversations.append(conversation_id, "assistant", message)
+        return {"hits": [], "message": message}
 
     def _chat_explain(
         self,
@@ -2929,6 +3130,7 @@ class RecommendationService:
         if fresh:
             message = alternative_message(fresh, reason_query)
             self._record_shown(conversation_id, [fresh])
+            self._set_last_shown(conversation_id, fresh)
             self.conversations.append(conversation_id, "assistant", message)
             return {"hits": [fresh], "message": message}
 
@@ -3131,6 +3333,9 @@ class RecommendationService:
             "When tools are needed, the backend uses hybrid keyword + FAISS retrieval, MMR diversification, "
             "and RAG ranking over catalog records before returning structured tool cards. "
             "Do not match wording mechanically; infer the user's intent naturally from the message, history, and visible tools.\n"
+            "The user may write in ANY language (e.g. Greek, Spanish, French). Understand it, and "
+            "always write refined_query in ENGLISH so retrieval works — translate the task, budget, "
+            "and constraints. Keep proper tool names as-is.\n"
             "Internal tools:\n"
             "- none: small talk, app help, feedback, or clarification text only.\n"
             "- search_tools: search the full catalog for a new concrete task.\n"
