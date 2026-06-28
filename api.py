@@ -480,6 +480,8 @@ STRICT_LOCAL_TOOL_SIGNAL = re.compile(
 LOCAL_NEGATIVE_SIGNAL = re.compile(
     r"\blimited\s+offline\s+capabilit(?:y|ies)\b|"
     r"\b(?:web[- ]based|cloud[- ]based|hosted)\s+(?:platform|service|tool|app)\b|"
+    r"\b(?:cloud|hosted|online|speech|transcription|audio)\s+api\b|"
+    r"\bapi[- ]first\s+(?:platform|service|tool)\b|"
     r"\brequires?\s+(?:an?\s+)?internet\s+connection\b|"
     r"\bdependency\s+on\s+internet\s+(?:access|connectivity|connection)\b|"
     r"\b(?:uploads?|sends?)\s+(?:audio|recordings?|data|files?)\s+to\s+(?:the\s+)?cloud\b|"
@@ -502,6 +504,37 @@ def requires_local_only(text: str) -> bool:
     return bool(LOCAL_ONLY_REQUEST_SIGNAL.search(normalized)) or requires_self_hosted(normalized)
 
 
+def requires_no_cloud_data(text: str) -> bool:
+    normalized = normalize_query_text(text).lower()
+    return bool(re.search(
+        r"\b(?:never\s+(?:sends?|uploads?|leaves?)|does\s+not\s+(?:send|upload|leave)|"
+        r"no\s+cloud|without\s+(?:the\s+)?cloud|data\s+(?:stays|remains)\s+(?:on\s+)?(?:device|local)|"
+        r"(?:audio|recordings?|notes?|files?)\s+(?:stays|remain)\s+(?:on\s+)?(?:device|local))\b",
+        normalized,
+    ))
+
+
+def has_cloud_local_conflict(text: str) -> bool:
+    normalized = normalize_query_text(text).lower()
+    asks_for_cloud = bool(re.search(
+        r"\b(?:cloud[- ]based|hosted|saas|online\s+service|cloud\s+(?:tool|app|platform|assistant|analytics|api))\b",
+        normalized,
+    ))
+    asks_for_no_cloud = requires_no_cloud_data(normalized) or bool(re.search(
+        r"\b(?:local[- ]only|on[- ]device|offline|runs?\s+locally)\b",
+        normalized,
+    ))
+    return asks_for_cloud and asks_for_no_cloud and "private cloud" not in normalized
+
+
+def cloud_local_conflict_message() -> str:
+    return (
+        "That has a conflict: a cloud tool normally processes data off-device, while "
+        "local-only means the data should not leave your device. Should I prioritize "
+        "a cloud analytics tool with strong privacy controls, or a local/offline tool?"
+    )
+
+
 def is_self_hosted_tool(meta: dict[str, Any]) -> bool:
     return bool(SELF_HOSTED_SIGNAL.search(metadata_blob(meta)))
 
@@ -511,6 +544,15 @@ def is_local_only_tool(meta: dict[str, Any]) -> bool:
     if not STRICT_LOCAL_TOOL_SIGNAL.search(blob):
         return False
     if LOCAL_NEGATIVE_SIGNAL.search(blob) and not LOCAL_STRONG_POSITIVE_SIGNAL.search(blob):
+        return False
+    return True
+
+
+def is_strict_no_cloud_tool(meta: dict[str, Any]) -> bool:
+    blob = metadata_blob(meta)
+    if not LOCAL_STRONG_POSITIVE_SIGNAL.search(blob):
+        return False
+    if LOCAL_NEGATIVE_SIGNAL.search(blob):
         return False
     return True
 
@@ -977,6 +1019,7 @@ def apply_decision_filters(
     open_source_required = bool(filter_value(filters, "open_source", False) or filter_value(filters, "openSource", False))
     local_only_required = bool(filter_value(filters, "local_only", False) or filter_value(filters, "localOnly", False))
     self_hosted_required = bool(filter_value(filters, "self_hosted", False) or filter_value(filters, "selfHosted", False))
+    no_cloud_required = bool(filter_value(filters, "no_cloud_data", False) or filter_value(filters, "noCloudData", False))
     privacy = filter_value(filters, "privacy", "standard") or "standard"
     integrations = [str(item).lower() for item in (filter_value(filters, "integrations", []) or [])]
     categories = [str(item).lower() for item in (filter_value(filters, "categories", []) or [])]
@@ -994,6 +1037,8 @@ def apply_decision_filters(
         if not matches_open_source_filter(meta, open_source_required):
             continue
         if not matches_local_only_filter(meta, local_only_required):
+            continue
+        if no_cloud_required and not is_strict_no_cloud_tool(meta):
             continue
         if self_hosted_required and not is_self_hosted_tool(meta):
             continue
@@ -1222,6 +1267,52 @@ _DEV_ON_TOPIC_CATEGORIES = (
     "developer tools", "developer", "coding", "code", "api", "chatbot", "chatbots",
     "ai chatbots", "automation", "no-code", "low-code", "productivity", "assistants",
 )
+
+_DEDICATED_CODING_SIGNAL = re.compile(
+    r"\b(?:code\s+assistant|coding\s+assistant|developer\s+tools?|software\s+engineering|"
+    r"ide|autocomplete|code\s+completion|debug(?:ging)?|code\s+review|pull\s+request|"
+    r"repository|repositories|git|github|vscode|jetbrains|python|javascript|typescript|"
+    r"programming|developer\s+workflow)\b",
+    re.IGNORECASE,
+)
+
+
+def coding_tool_score(meta: dict[str, Any]) -> int:
+    blob = metadata_blob(meta)
+    categories = str(meta.get("Categories", "")).lower()
+    score = 0
+    if re.search(r"\b(?:code\s+assistant|coding|developer\s+tools?|programming)\b", categories):
+        score += 40
+    if _DEDICATED_CODING_SIGNAL.search(blob):
+        score += 25
+    if re.search(r"\b(?:ai chatbots?|writing generators?|image generators?|low-code|no-code)\b", categories):
+        score -= 8
+    if re.search(r"\b(?:image|video|music|social media|copywriting|marketing)\b", categories) and not _DEDICATED_CODING_SIGNAL.search(blob):
+        score -= 25
+    return score
+
+
+def is_coding_tool(meta: dict[str, Any]) -> bool:
+    return coding_tool_score(meta) >= 25
+
+
+def prioritize_coding_candidates(
+    candidates: list[dict[str, Any]],
+    meta_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    def key(candidate: dict[str, Any]) -> tuple[int, float]:
+        meta = candidate_meta(candidate, meta_rows)
+        return (coding_tool_score(meta), float(candidate.get("score", 0.0)))
+
+    return sorted(candidates, key=key, reverse=True)
+
+
+def prioritize_coding_hits(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        hits,
+        key=lambda hit: (coding_tool_score(hit.get("meta") or {}), float(hit.get("score", 0.0))),
+        reverse=True,
+    )
 
 
 def is_explanation_query(text: str) -> bool:
@@ -1503,6 +1594,7 @@ _CRITERION_PATTERNS = (
     r"\b(?:which\s+(?:one|tool|option)|the)\s+(?:is\s+)?best\s+value\b",
     r"\b(?:which\s+(?:one|tool|option)|the)\s+(?:is\s+)?most\s+private\b",
     r"\b(?:which\s+(?:one|tool|option)|the)\s+(?:is\s+)?most\s+secure\b",
+    r"\b(?:which\s+(?:one|tool|option)|which\s+of\s+(?:these|those|them)|the)\s+(?:is\s+)?best\s+for\s+(?:privacy|security)\b",
     r"\b(?:which\s+(?:one|tool|option)|the)\s+(?:is\s+)?beginner\s*[-]?friendly\b",
     r"\b(?:which\s+(?:one|tool|option)|the)\s+(?:is\s+)?easiest\b",
     r"\b(?:show\s+me\s+the\s+|give\s+me\s+the\s+)free\s+(?:one|tool|option)\b",
@@ -1580,7 +1672,7 @@ def criterion_from_query(text: str) -> str:
         return "free"
     if re.search(r"\b(?:paid\s+(?:one|tool|option)|most\s+expensive)\b|\bis\s+(?:it|this|that)\s+paid\b", normalized):
         return "paid"
-    if re.search(r"\b(?:private|privacy|secure)\b", normalized):
+    if re.search(r"\b(?:private|privacy|secure|security)\b", normalized):
         return "privacy"
     if re.search(r"\b(?:beginner|easiest|simplest)\b", normalized):
         return "beginner"
@@ -1641,8 +1733,34 @@ def _sort_hits_by_criterion(hits: list[dict[str, Any]], criterion: str) -> list[
     if criterion == "paid":
         paid = [h for h in hits if not is_free_tool(h.get("meta") or {})]
         return paid or hits
-    # For privacy / beginner / best, keep original order but move strongest matches first.
+    if criterion == "privacy":
+        return sorted(hits, key=lambda h: _privacy_sort_key(h.get("meta") or {}))
+    # For beginner / best, keep original order.
     return list(hits)
+
+
+def _privacy_sort_key(meta: dict[str, Any]) -> tuple[int, int]:
+    blob = metadata_blob(meta)
+    if is_strict_no_cloud_tool(meta):
+        return (0, 0)
+    if is_local_only_tool(meta) or is_self_hosted_tool(meta):
+        return (1, 0)
+    if PRIVACY_FIRST_SIGNAL.search(blob):
+        return (2, 0)
+    return (3, 0)
+
+
+def privacy_evidence_message(meta: dict[str, Any]) -> str:
+    blob = metadata_blob(meta)
+    if is_strict_no_cloud_tool(meta):
+        return "its catalogue data says data stays local or does not leave the device."
+    if is_local_only_tool(meta):
+        return "it has clear local-only, on-device, offline, or self-hosted signals."
+    if is_self_hosted_tool(meta):
+        return "it has self-hosting or on-premise evidence."
+    if PRIVACY_FIRST_SIGNAL.search(blob):
+        return "it has stronger privacy/compliance evidence than the other visible options."
+    return "none of the visible tools has strong local-only privacy evidence, so verify provider retention and data controls first."
 
 
 def criterion_pick_message(hit: dict[str, Any], criterion: str, query: str) -> str:
@@ -1664,7 +1782,7 @@ def criterion_pick_message(hit: dict[str, Any], criterion: str, query: str) -> s
     if criterion == "most_expensive":
         return f"The most expensive-looking option from the shortlist is {name}. Verify current pricing on the provider page."
     if criterion == "privacy":
-        return f"For privacy or security, I would look first at {name}. Verify its retention, compliance, and data-control details before using sensitive data."
+        return f"For privacy or security, I would look first at {name} because {privacy_evidence_message(meta)}"
     if criterion == "beginner":
         return f"For ease of use, I would start with {name}. It looks like the simplest fit from the current shortlist."
     return recommendation_message([hit], query, MODE_ONE_BEST)
@@ -2316,6 +2434,30 @@ def keyword_search(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[dict
     ]
 
 
+def coding_rescue_scores(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[tuple[float, int]]:
+    """Find dedicated coding tools that keyword search may miss because the query
+    contains generic words like "writing" alongside "Python code"."""
+    query_tokens = set(tokens(q))
+    query_tokens |= {"code"} if "coding" in query_tokens else set()
+    scored: list[tuple[float, int]] = []
+    for idx, meta in enumerate(meta_rows):
+        base = coding_tool_score(meta)
+        if base < 25:
+            continue
+        blob_tokens = set(tokens(metadata_blob(meta)))
+        overlap = query_tokens & blob_tokens
+        coding_overlap = overlap & {
+            "code", "coding", "python", "debug", "debugging", "autocomplete",
+            "developer", "programming", "repository", "repositories", "github",
+            "pull", "request", "review", "ide",
+        }
+        if not coding_overlap:
+            continue
+        scored.append((float(base + len(coding_overlap) * 5), idx))
+    scored.sort(reverse=True, key=lambda item: item[0])
+    return scored[:k]
+
+
 def recommendation_message(
     hits: list[dict[str, Any]],
     query: str = "",
@@ -2615,6 +2757,11 @@ class RecommendationService:
         q = strip_instruction_text(q)
         # If the user pivots ("Actually I only need ..."), follow the latest intent.
         q = focus_latest_intent(q)
+        if has_cloud_local_conflict(q):
+            message = cloud_local_conflict_message()
+            self.conversations.append(conversation_id, "user", q)
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"hits": [], "message": message}
 
         # Pull recent task context so follow-up messages behave like a real conversation,
         # but never drag an old topic into a message that already states its own task.
@@ -2777,6 +2924,7 @@ class RecommendationService:
         open_source_only = requires_open_source(retrieval_query)
         self_hosted_required = requires_self_hosted(retrieval_query)
         local_only_required = requires_local_only(retrieval_query) and not self_hosted_required
+        no_cloud_required = requires_no_cloud_data(retrieval_query)
         if free_only and filters is None:
             filters = {"budget": "free"}
         if open_source_only:
@@ -2790,6 +2938,8 @@ class RecommendationService:
             filter_dict["local_only"] = True
             if self_hosted_required:
                 filter_dict["self_hosted"] = True
+            if no_cloud_required:
+                filter_dict["no_cloud_data"] = True
             if filter_dict.get("privacy") in (None, "standard", "privacy-first"):
                 filter_dict["privacy"] = "local-first"
             filters = filter_dict
@@ -2846,9 +2996,31 @@ class RecommendationService:
         except Exception as exc:
             logger.info("Embedding unavailable; served keyword recommendation fallback (%s)", type(exc).__name__)
             self.metrics.increment("embedding_fallbacks")
-            hits = keyword_search(retrieval_query, min(retrieve_k, len(self.store.meta)), self.store.meta)
+            broad_filter_required = (
+                local_only_required
+                or no_cloud_required
+                or self_hosted_required
+                or open_source_only
+                or strict_free
+                or privacy_required
+                or is_coding_query(retrieval_query)
+            )
+            keyword_limit = len(self.store.meta) if broad_filter_required else min(retrieve_k, len(self.store.meta))
+            hits = keyword_search(retrieval_query, keyword_limit, self.store.meta)
+            if is_coding_query(retrieval_query):
+                seen_names = {str((hit.get("meta") or {}).get("Name", "")).strip().lower() for hit in hits}
+                for score, idx in coding_rescue_scores(retrieval_query, retrieve_k, self.store.meta):
+                    meta = self.store.meta[idx]
+                    name = str(meta.get("Name", "")).strip().lower()
+                    if name and name not in seen_names:
+                        hits.append({
+                            "score": float(score),
+                            "meta": compact_meta(meta),
+                            "why": local_reason(retrieval_query, meta),
+                        })
+                        seen_names.add(name)
             filtered_hits = apply_decision_filters(hits, filters, self.store.meta)
-            hard_filter_required = local_only_required or self_hosted_required or open_source_only or strict_free or privacy_required
+            hard_filter_required = local_only_required or no_cloud_required or self_hosted_required or open_source_only or strict_free or privacy_required
             if hard_filter_required and not filtered_hits:
                 if local_only_required:
                     return {"hits": [], "message": local_only_no_match_message()}
@@ -2876,7 +3048,10 @@ class RecommendationService:
                             "freemium-with-paid tiers) for that."
                         ),
                     }
-            hits = (filtered_hits or hits)[:effective_final_k]
+            hits = filtered_hits or hits
+            if is_coding_query(retrieval_query):
+                hits = prioritize_coding_hits(hits)
+            hits = hits[:effective_final_k]
             if strict_free:
                 hits = [hit for hit in hits if is_completely_free_tool(hit.get("meta") or {})]
                 if not hits:
@@ -2911,6 +3086,18 @@ class RecommendationService:
             ids[0].tolist(),
             retrieve_k,
         )
+        if is_coding_query(retrieval_query):
+            by_id = {int(candidate["id"]): candidate for candidate in candidates}
+            for score, id_ in coding_rescue_scores(retrieval_query, retrieve_k, self.store.meta):
+                candidate = by_id.get(id_)
+                if candidate is None:
+                    candidate = self._candidate_for_id(id_, score)
+                    candidate["retrieval_source"] = "coding_rescue"
+                    by_id[id_] = candidate
+                else:
+                    candidate["score"] = max(float(candidate.get("score", 0.0)), float(score))
+                    candidate["retrieval_source"] = "hybrid_coding_rescue"
+            candidates = list(by_id.values())
         if (
             (is_writing_query(retrieval_query) and (open_source_only or local_only_required or self_hosted_required))
             or is_coding_query(retrieval_query)
@@ -2921,6 +3108,12 @@ class RecommendationService:
                 candidate for candidate in candidates
                 if not off_topic_for_query(retrieval_query, str(candidate.get("categories", "")))
             ]
+        if is_coding_query(retrieval_query):
+            coding_candidates = [
+                candidate for candidate in candidates
+                if is_coding_tool(self.store.meta[int(candidate["id"])])
+            ]
+            candidates = prioritize_coding_candidates(coding_candidates or candidates, self.store.meta)
         if is_note_or_transcription_query(retrieval_query):
             candidates = [
                 candidate for candidate in candidates
@@ -3050,6 +3243,7 @@ class RecommendationService:
                 if not strict_free or is_completely_free_tool(self.store.meta[int(candidate["id"])])
                 if not open_source_only or is_open_source_tool(self.store.meta[int(candidate["id"])])
                 if not local_only_required or is_local_only_tool(self.store.meta[int(candidate["id"])])
+                if not no_cloud_required or is_strict_no_cloud_tool(self.store.meta[int(candidate["id"])])
                 if not self_hosted_required or is_self_hosted_tool(self.store.meta[int(candidate["id"])])
             ]
             self.metrics.increment("llm_rank_fallbacks")
@@ -3079,6 +3273,8 @@ class RecommendationService:
                     continue
                 if local_only_required and not is_local_only_tool(meta):
                     continue
+                if no_cloud_required and not is_strict_no_cloud_tool(meta):
+                    continue
                 if self_hosted_required and not is_self_hosted_tool(meta):
                     continue
                 kept.append(enrich_hit({
@@ -3091,6 +3287,8 @@ class RecommendationService:
 
         if wants_cheaper and final_hits:
             final_hits = sorted(final_hits, key=lambda h: _price_sort_key(h.get("meta") or {}))
+        if is_coding_query(retrieval_query) and final_hits:
+            final_hits = prioritize_coding_hits(final_hits)
 
         self.recommend_cache.set(cache_key, final_hits)
         if conversation_id:
@@ -3158,6 +3356,12 @@ class RecommendationService:
             self.conversations.append(conversation_id, "user", q)
             self.conversations.append(conversation_id, "assistant", message)
             return {"action": "chat_only", "hits": [], "message": message}
+
+        if has_cloud_local_conflict(q):
+            message = cloud_local_conflict_message()
+            self.conversations.append(conversation_id, "user", q)
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"action": "clarify", "hits": [], "message": message}
 
         if is_alternative_query(q) and not alternative_requests_new_search(q):
             if has_context_hits:
@@ -3273,6 +3477,8 @@ class RecommendationService:
         if re.search(r"\b(?:local[- ](?:only|first)|on[- ]device|offline|never\s+(?:sends?|leaves?)|no\s+cloud|without\s+(?:the\s+)?cloud|self[- ]hosted|on[- ]prem)\b", original_lower):
             base_nf = next_filters if isinstance(next_filters, dict) else {}
             next_filters = {**base_nf, "privacy": "local-first"}
+            if requires_no_cloud_data(q):
+                next_filters = {**next_filters, "local_only": True, "no_cloud_data": True}
             if "local" not in refined_query.lower():
                 refined_query = f"{refined_query} local on-device".strip()
         elif re.search(r"\b(?:more\s+private|privacy|confidential|gdpr|hipaa|data\s+protection)\b", original_lower):
@@ -3421,14 +3627,16 @@ class RecommendationService:
         # "show another" requests keep advancing instead of looping back.
         prior_shown_names = set(self.shown_tools.get(conversation_id, set())) if conversation_id else set()
         reason_query = self._latest_task_query(conversation_id, history) or q
+        alt_filters = self._followup_filters(filters, q)
         fresh = self._fresh_distinct_alternative(
             reason_query,
             already_shown,
             retrieve_k,
             final_k,
-            filters,
+            alt_filters,
             mode,
             exclude_names=prior_shown_names,
+            followup_query=q,
         )
         if fresh:
             message = alternative_message(fresh, reason_query)
@@ -3573,6 +3781,7 @@ class RecommendationService:
         filters: Any,
         mode: str,
         exclude_names: set[str] | None = None,
+        followup_query: str = "",
     ) -> dict[str, Any] | None:
         if not reason_query:
             return None
@@ -3584,9 +3793,40 @@ class RecommendationService:
         }
         if exclude_names:
             prior_names |= {name.strip().lower() for name in exclude_names if name}
+
+        # Fast path for visible-card follow-ups such as "another cheaper one, not
+        # these". These should not wait on a full model rerank; keyword retrieval plus
+        # the same hard filters is enough to find a fresh catalogue option.
+        keyword_first = bool(
+            followup_query
+            and (
+                wants_different_not_same(followup_query)
+                or is_criterion_pick_query(followup_query)
+                or re.search(r"\b(?:not\s+(?:these|those|shown|same)|cheap(?:er|est)?|more\s+private)\b", followup_query.lower())
+            )
+        )
+        if keyword_first:
+            keyword_hits = apply_decision_filters(
+                keyword_search(reason_query, len(self.store.meta), self.store.meta),
+                filters,
+                self.store.meta,
+            )
+            if re.search(r"\b(?:cheap(?:er|est)?|more\s+affordable|less\s+expensive|budget[- ]friendly)\b", followup_query.lower()):
+                keyword_hits = sorted(keyword_hits, key=lambda hit: _price_sort_key(hit.get("meta") or {}))
+            if is_coding_query(reason_query):
+                keyword_hits = prioritize_coding_hits(keyword_hits)
+            for hit in keyword_hits:
+                meta = hit.get("meta") or {}
+                name = str(meta.get("Name", "")).strip().lower()
+                if not name or name in prior_names:
+                    continue
+                if off_topic_for_query(reason_query, str(meta.get("Categories", ""))):
+                    continue
+                return enrich_hit(dict(hit), reason_query)
+
         response = self.recommend(
             reason_query,
-            max(retrieve_k, 150),
+            min(max(retrieve_k, 30), 100),
             max(final_k, 10),
             filters=filters,
             mode=MODE_COMPARE if normalize_mode(mode) != MODE_ONE_BEST else MODE_BEST_FIT,
@@ -3615,6 +3855,24 @@ class RecommendationService:
             return enrich_hit(dict(hit), reason_query)
         return None
 
+    def _followup_filters(self, filters: Any, q: str) -> Any:
+        base = filters.model_dump() if hasattr(filters, "model_dump") else dict(filters or {})
+        lower = normalize_query_text(q).lower()
+        if re.search(r"\b(?:cheap(?:er|est)?|more\s+affordable|less\s+expensive|budget[- ]friendly)\b", lower):
+            if base.get("budget", "any") in (None, "any"):
+                base["budget"] = "freemium"
+        if requires_no_cloud_data(lower):
+            base["local_only"] = True
+            base["no_cloud_data"] = True
+            base["privacy"] = "local-first"
+        elif re.search(r"\b(?:local[- ]only|on[- ]device|offline|self[- ]hosted|no\s+cloud)\b", lower):
+            base["local_only"] = True
+            base["privacy"] = "local-first"
+        elif re.search(r"\b(?:more\s+private|privacy|confidential|gdpr|hipaa|data\s+protection)\b", lower):
+            if base.get("privacy", "standard") in (None, "standard"):
+                base["privacy"] = "privacy-first"
+        return base or filters
+
     def _latest_task_query(self, conversation_id: str | None, history: Any) -> str:
         stored = self.conversations.get(conversation_id)
         prior_messages = merge_history_messages(history, stored)
@@ -3625,7 +3883,7 @@ class RecommendationService:
         if isinstance(decision_filters, dict):
             for key in (
                 "budget", "privacy", "integrations", "categories", "platforms",
-                "skill_level", "open_source", "local_only", "self_hosted",
+                "skill_level", "open_source", "local_only", "self_hosted", "no_cloud_data",
             ):
                 value = decision_filters.get(key)
                 if value not in (None, "", []):
@@ -4110,6 +4368,7 @@ class RecommendationService:
         open_source_only = requires_open_source(q)
         self_hosted_required = requires_self_hosted(q)
         local_only_required = requires_local_only(q) and not self_hosted_required
+        no_cloud_required = requires_no_cloud_data(q)
         strict_free = requires_strict_free(q)
         for item in selected:
             if len(final_hits) >= limit:
@@ -4132,6 +4391,8 @@ class RecommendationService:
                 if open_source_only and not is_open_source_tool(meta):
                     continue
                 if local_only_required and not is_local_only_tool(meta):
+                    continue
+                if no_cloud_required and not is_strict_no_cloud_tool(meta):
                     continue
                 if self_hosted_required and not is_self_hosted_tool(meta):
                     continue

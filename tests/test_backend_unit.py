@@ -418,11 +418,50 @@ def make_local_note_service(client=None):
             "Cons": "Limited offline capabilities. As a web-based tool, WebTranscribe requires an internet connection for full functionality.",
             "Use_cases": "Audio transcription",
         },
+        {
+            "Name": "CloudApiSpeech",
+            "Categories": "transcriber | speech to text",
+            "Price": "Free tier",
+            "Description": "Cloud API for speech-to-text transcription with zero data retention controls.",
+            "Features": "Transcription API, hosted speech recognition, and privacy-focused retention settings.",
+            "Pros": "Good for developers integrating cloud audio transcription.",
+            "Use_cases": "Audio transcription API",
+        },
     ]
     store = ToolStore(
         index=SequenceIndex(len(meta)),
         meta=meta,
-        vectors=np.array([[1.0, 0.0], [0.9, 0.1], [0.8, 0.2], [0.7, 0.3]], dtype="float32"),
+        vectors=np.array([[1.0, 0.0], [0.9, 0.1], [0.8, 0.2], [0.7, 0.3], [0.6, 0.4]], dtype="float32"),
+    )
+    settings = Settings(cache_ttl_seconds=60, cache_max_entries=8)
+    return RecommendationService(store, client or FakeClient(embedding_failure=True), settings, RuntimeMetrics())
+
+
+def make_coding_quality_service(client=None):
+    meta = [
+        {
+            "Name": "GeneralChat",
+            "Categories": "ai chatbots | writing generators",
+            "Price": "Free tier",
+            "Description": "General AI assistant for writing, research, and simple questions.",
+            "Features": "Chat, content writing, and brainstorming.",
+            "Pros": "Flexible assistant.",
+            "Use_cases": "General productivity",
+        },
+        {
+            "Name": "CodePro",
+            "Categories": "developer tools | coding | code assistant",
+            "Price": "Free tier",
+            "Description": "AI coding assistant for Python, debugging, code completion, repositories, and pull requests.",
+            "Features": "Code review, autocomplete, IDE workflow, and Python programming support.",
+            "Pros": "Useful for software engineering.",
+            "Use_cases": "Coding and development",
+        },
+    ]
+    store = ToolStore(
+        index=SequenceIndex(len(meta)),
+        meta=meta,
+        vectors=np.array([[1.0, 0.0], [0.9, 0.1]], dtype="float32"),
     )
     settings = Settings(cache_ttl_seconds=60, cache_max_entries=8)
     return RecommendationService(store, client or FakeClient(embedding_failure=True), settings, RuntimeMetrics())
@@ -1012,6 +1051,27 @@ class BackendUnitTests(unittest.TestCase):
         self.assertNotIn("Writerly", response["message"])
         self.assertNotIn("BlogMagic", response["message"])
 
+    def test_visible_cheaper_alternative_uses_fast_keyword_path(self):
+        client = FakeClient()
+        service = make_alternative_pool_service(client=client)
+        cid = "visible-cheaper-alt"
+        service.recommend("find a writing tool for blog posts", retrieve_k=3, final_k=2, conversation_id=cid)
+        calls_after_initial = client.chat.completions.calls
+
+        response = service.chat(
+            "Give me another cheaper one, not the ones shown",
+            retrieve_k=3,
+            final_k=2,
+            conversation_id=cid,
+            visible_tools=service.shortlists[cid],
+        )
+
+        self.assertEqual(response["action"], "show_alternative")
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "DraftPilot")
+        self.assertEqual(client.chat.completions.calls, calls_after_initial)
+        self.assertNotIn("Writerly", response["message"])
+        self.assertNotIn("BlogMagic", response["message"])
+
     def test_local_only_recommendation_excludes_cloud_notes(self):
         service = make_local_note_service()
 
@@ -1027,6 +1087,21 @@ class BackendUnitTests(unittest.TestCase):
         self.assertNotIn("CloudNote", names)
         self.assertNotIn("LocalChat", names)
         self.assertNotIn("WebTranscribe", names)
+        self.assertNotIn("CloudApiSpeech", names)
+
+    def test_no_cloud_note_request_excludes_cloud_api_with_zero_retention(self):
+        service = make_local_note_service()
+
+        response = service.recommend(
+            "local-only AI note taker that never sends audio to cloud",
+            retrieve_k=5,
+            final_k=3,
+            conversation_id="strict-no-cloud-note",
+        )
+
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+        self.assertEqual(names, ["LocalNote"])
+        self.assertNotIn("CloudApiSpeech", names)
 
     def test_visible_local_only_question_is_uncertainty_answer(self):
         service = make_local_note_service()
@@ -1044,6 +1119,27 @@ class BackendUnitTests(unittest.TestCase):
         self.assertIn("LocalNote", response["message"])
         self.assertIn("CloudNote is not clearly local-only", response["message"])
         self.assertNotIn("Start with", response["message"])
+
+    def test_visible_privacy_pick_uses_privacy_evidence_not_generic_task_reason(self):
+        service = make_local_note_service()
+        cid = "visible-privacy"
+        service.shortlists[cid] = [
+            {"score": 0.8, "meta": service.store.meta[0], "why": "CloudNote handles meeting notes."},
+            {"score": 0.9, "meta": service.store.meta[1], "why": "LocalNote runs locally."},
+        ]
+
+        response = service.chat(
+            "Which of these is best for privacy?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=cid,
+        )
+
+        self.assertEqual(response["action"], "explain")
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "LocalNote")
+        self.assertIn("privacy", response["message"].lower())
+        self.assertIn("device", response["message"].lower())
+        self.assertNotIn("well suited for", response["message"])
 
     def test_strict_open_source_direct_search_excludes_free_tier_only(self):
         service = make_open_source_service()
@@ -1283,6 +1379,21 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["action"], "chat_only")
         self.assertEqual(response["hits"], [])
         self.assertIn("AI advisor", response["message"])
+        self.assertNotIn("Start with", response["message"])
+
+    def test_chat_cloud_local_conflict_clarifies_instead_of_recommending(self):
+        service = make_service(client=DecisionClient([{"action": "recommend"}]))
+
+        response = service.chat(
+            "I need a cloud analytics assistant but my data must never leave my device",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="cloud-local-conflict",
+        )
+
+        self.assertEqual(response["action"], "clarify")
+        self.assertEqual(response["hits"], [])
+        self.assertIn("conflict", response["message"].lower())
         self.assertNotIn("Start with", response["message"])
 
     def test_chat_plural_alternatives_excludes_already_shown_tools(self):
@@ -1704,6 +1815,18 @@ class BackendUnitTests(unittest.TestCase):
         names = [hit["meta"]["Name"] for hit in response["hits"]]
         self.assertEqual(names, ["CodeMate"])
         self.assertNotIn("Writerly", names)
+
+    def test_translated_python_coding_query_prefers_dedicated_code_assistant(self):
+        service = make_coding_quality_service()
+        response = service.recommend(
+            "AI tool for writing Python code, debugging, autocomplete, and developer workflow support",
+            retrieve_k=2,
+            final_k=2,
+        )
+
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+        self.assertEqual(names[0], "CodePro")
+        self.assertNotIn("GeneralChat", names[:1])
 
     def test_hybrid_retrieval_adds_keyword_dev_candidate_when_faiss_misses(self):
         service = make_dev_service(client=FakeClient(), index=WriterOnlyIndex())
