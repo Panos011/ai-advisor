@@ -477,6 +477,25 @@ STRICT_LOCAL_TOOL_SIGNAL = re.compile(
     re.IGNORECASE,
 )
 
+LOCAL_NEGATIVE_SIGNAL = re.compile(
+    r"\blimited\s+offline\s+capabilit(?:y|ies)\b|"
+    r"\b(?:web[- ]based|cloud[- ]based|hosted)\s+(?:platform|service|tool|app)\b|"
+    r"\brequires?\s+(?:an?\s+)?internet\s+connection\b|"
+    r"\bdependency\s+on\s+internet\s+(?:access|connectivity|connection)\b|"
+    r"\b(?:uploads?|sends?)\s+(?:audio|recordings?|data|files?)\s+to\s+(?:the\s+)?cloud\b|"
+    r"\bnot\s+(?:a\s+)?local[- ]only\b|\brather\s+than\s+(?:a\s+)?local[- ]only\b",
+    re.IGNORECASE,
+)
+
+LOCAL_STRONG_POSITIVE_SIGNAL = re.compile(
+    r"\b(?:no\s+data\s+leaves|data\s+never\s+leaves|without\s+any\s+data\s+leaving|"
+    r"100%\s+on[- ]device|operates?\s+(?:entirely|fully|only)\s+on\s+(?:your\s+)?device|"
+    r"all\s+data\s+remains?\s+on\s+(?:your\s+)?(?:device|laptop|machine|computer)|"
+    r"audio\s+stays?\s+on\s+(?:your\s+)?device|never\s+uploads?\s+(?:audio|recordings?|data)|"
+    r"without\s+cloud\s+dependence|runs?\s+full(?:y)?\s+offline)\b",
+    re.IGNORECASE,
+)
+
 
 def requires_local_only(text: str) -> bool:
     normalized = normalize_query_text(text).lower()
@@ -488,7 +507,12 @@ def is_self_hosted_tool(meta: dict[str, Any]) -> bool:
 
 
 def is_local_only_tool(meta: dict[str, Any]) -> bool:
-    return bool(STRICT_LOCAL_TOOL_SIGNAL.search(metadata_blob(meta)))
+    blob = metadata_blob(meta)
+    if not STRICT_LOCAL_TOOL_SIGNAL.search(blob):
+        return False
+    if LOCAL_NEGATIVE_SIGNAL.search(blob) and not LOCAL_STRONG_POSITIVE_SIGNAL.search(blob):
+        return False
+    return True
 
 
 def local_only_no_match_message() -> str:

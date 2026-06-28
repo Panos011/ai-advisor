@@ -408,11 +408,21 @@ def make_local_note_service(client=None):
             "Pros": "Private local assistant.",
             "Use_cases": "Private AI chat",
         },
+        {
+            "Name": "WebTranscribe",
+            "Categories": "audio editing | transcriber",
+            "Price": "Free tier",
+            "Description": "Web-based transcription platform for podcasts and voice notes.",
+            "Features": "Speech-to-text transcription and browser editing.",
+            "Pros": "Easy to use for audio creators.",
+            "Cons": "Limited offline capabilities. As a web-based tool, WebTranscribe requires an internet connection for full functionality.",
+            "Use_cases": "Audio transcription",
+        },
     ]
     store = ToolStore(
         index=SequenceIndex(len(meta)),
         meta=meta,
-        vectors=np.array([[1.0, 0.0], [0.9, 0.1], [0.8, 0.2]], dtype="float32"),
+        vectors=np.array([[1.0, 0.0], [0.9, 0.1], [0.8, 0.2], [0.7, 0.3]], dtype="float32"),
     )
     settings = Settings(cache_ttl_seconds=60, cache_max_entries=8)
     return RecommendationService(store, client or FakeClient(embedding_failure=True), settings, RuntimeMetrics())
@@ -1016,6 +1026,7 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(names, ["LocalNote"])
         self.assertNotIn("CloudNote", names)
         self.assertNotIn("LocalChat", names)
+        self.assertNotIn("WebTranscribe", names)
 
     def test_visible_local_only_question_is_uncertainty_answer(self):
         service = make_local_note_service()
