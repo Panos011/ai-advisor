@@ -426,6 +426,23 @@ FREE_FILTER_WORDS = {
     "app", "apps", "said", "tier", "trial", "plan", "plans",
 }
 
+# Concrete privacy / local-only EVIDENCE — deliberately excludes bare "secure", "security",
+# "private", "privacy" because those appear in almost every tool's marketing copy.
+PRIVACY_FIRST_SIGNAL = re.compile(
+    r"\b(?:gdpr|hipaa|soc\s*2|iso\s*27001|end[- ]to[- ]end|encrypt(?:ed|ion)|self[- ]hosted|"
+    r"on[- ]device|on[- ]prem(?:ise|ises)?|private\s+cloud|zero[- ](?:data|knowledge|retention)|"
+    r"no\s+(?:data\s+)?(?:retention|training)|does\s+not\s+(?:store|share|train|retain|sell)|"
+    r"never\s+(?:stores?|shares?|trains?|sends?)|data\s+(?:control|residency|sovereignty|ownership)|"
+    r"privacy[- ](?:first|focused)|local[- ](?:only|first)|offline|open[- ]source)\b",
+    re.IGNORECASE,
+)
+LOCAL_FIRST_SIGNAL = re.compile(
+    r"\b(?:on[- ]device|local[- ](?:only|first)|runs?\s+locally|run\s+locally|self[- ]hosted|"
+    r"offline|on[- ]prem(?:ise|ises)?|no\s+cloud|without\s+(?:the\s+)?cloud|"
+    r"never\s+(?:leaves|uploads?|sends?)|open[- ]source|private\s+cloud)\b",
+    re.IGNORECASE,
+)
+
 # Recommendation modes surfaced in the UI (Best fit / One best / Compare).
 MODE_BEST_FIT = "best_fit"
 MODE_ONE_BEST = "one_best"
@@ -885,16 +902,12 @@ def apply_decision_filters(
         if not matches_open_source_filter(meta, open_source_required):
             continue
 
-        if privacy == "privacy-first" and not re.search(
-            r"\b(privacy|private|secure|security|gdpr|compliance|encryption|data control|soc 2|iso 27001)\b",
-            blob,
-        ):
+        # Strict: require concrete privacy/local EVIDENCE, not bare marketing words like
+        # "secure" or "private" that appear in almost every tool's copy.
+        if privacy == "privacy-first" and not PRIVACY_FIRST_SIGNAL.search(blob):
             continue
 
-        if privacy == "local-first" and not re.search(
-            r"\b(local|on-device|on device|self-hosted|self hosted|private cloud|offline|open source)\b",
-            blob,
-        ):
+        if privacy == "local-first" and not LOCAL_FIRST_SIGNAL.search(blob):
             continue
 
         if integrations and not all(integration in blob for integration in integrations):
@@ -2971,6 +2984,10 @@ class RecommendationService:
                 next_filters = {**next_filters, "budget": "freemium"}
             if "cheaper" not in refined_query.lower():
                 refined_query = f"{refined_query} cheaper".strip()
+        if requires_open_source(q) and not requires_open_source(refined_query):
+            refined_query = f"{refined_query} open source".strip()
+        if requires_strict_free(q) and not requires_strict_free(refined_query):
+            refined_query = f"{refined_query} completely free".strip()
         if re.search(r"\b(?:local[- ](?:only|first)|on[- ]device|offline|never\s+(?:sends?|leaves?)|no\s+cloud|without\s+(?:the\s+)?cloud|self[- ]hosted|on[- ]prem)\b", original_lower):
             base_nf = next_filters if isinstance(next_filters, dict) else {}
             next_filters = {**base_nf, "privacy": "local-first"}
