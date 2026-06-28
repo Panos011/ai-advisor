@@ -392,7 +392,7 @@ def make_local_note_service(client=None):
         },
         {
             "Name": "LocalNote",
-            "Categories": "meeting notes | transcription",
+            "Categories": "personal assistant",
             "Price": "Open Source: Free to use.",
             "Description": "Local-only AI note taker that runs on-device and works offline.",
             "Features": "Audio stays on device, never uploads recordings, and transcribes meetings locally.",

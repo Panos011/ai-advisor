@@ -2262,7 +2262,10 @@ def keyword_scores(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[tupl
         name_items = tokens(name)
         description_items = tokens(description)
 
-        if off_topic_for_query(q, categories):
+        if is_note_or_transcription_query(q):
+            if not is_note_or_transcription_tool(meta):
+                continue
+        elif off_topic_for_query(q, categories):
             continue
 
         score = 0.0
@@ -2910,7 +2913,6 @@ class RecommendationService:
         )
         if (
             (is_writing_query(retrieval_query) and (open_source_only or local_only_required or self_hosted_required))
-            or is_note_or_transcription_query(retrieval_query)
             or is_coding_query(retrieval_query)
             or is_chatbot_query(retrieval_query)
             or is_music_query(retrieval_query)
