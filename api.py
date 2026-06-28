@@ -443,6 +443,19 @@ LOCAL_FIRST_SIGNAL = re.compile(
     re.IGNORECASE,
 )
 
+# The TOOL ITSELF being open source — "X is open source", "MIT licensed", "open-source
+# <tool noun>" — NOT generic mentions like "for developing open-source software" or
+# "supports open-source models", which appear in closed tools too.
+OPEN_SOURCE_SELF_SIGNAL = re.compile(
+    r"\bis\s+(?:an?\s+|fully\s+|completely\s+|truly\s+|now\s+|also\s+)?open[- ]source\b|"
+    r"\b(?:free\s+and\s+open[- ]source|open[- ]source\s+and\s+free)\b|"
+    r"\b(?:mit|apache|gpl|agpl|mpl|bsd)\s+licen[sc]e(?:d)?\b|"
+    r"\bsource[- ]available\b|\bself[- ]hostable\b|"
+    r"\bopen[- ]source\s+(?:tool|app|application|platform|assistant|editor|ide|alternative|"
+    r"framework|library|client|agent|workspace|project|engine|chatbot|runner)\b",
+    re.IGNORECASE,
+)
+
 # Recommendation modes surfaced in the UI (Best fit / One best / Compare).
 MODE_BEST_FIT = "best_fit"
 MODE_ONE_BEST = "one_best"
@@ -796,14 +809,10 @@ def is_free_tool(meta: dict[str, Any]) -> bool:
 
 
 def is_open_source_tool(meta: dict[str, Any]) -> bool:
-    blob = metadata_blob(meta)
-    # NB: a bare "github" mention is NOT evidence of open source — tons of closed tools
-    # integrate with GitHub. Require an explicit open-source / license signal.
-    return bool(re.search(
-        r"\bopen\s*[- ]?\s*source\b|\boss\b|\bsource[- ]available\b|\bself[- ]hostable\b|"
-        r"\b(?:mit|apache|gpl|agpl|mpl|bsd)\s+licen[sc]e(?:d)?\b|\bself[- ]hosted\s+open\b",
-        blob,
-    ))
+    # Require a SELF-referential open-source claim. A bare "open source" / "github" mention
+    # is not evidence — closed tools say "for developing open-source software" or "supports
+    # open-source models" all the time.
+    return bool(OPEN_SOURCE_SELF_SIGNAL.search(metadata_blob(meta)))
 
 
 def is_completely_free_tool(meta: dict[str, Any]) -> bool:
