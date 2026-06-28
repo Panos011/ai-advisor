@@ -763,6 +763,49 @@ class BackendUnitTests(unittest.TestCase):
         self.assertNotIn("Writerly", names)
         self.assertTrue(names, "should still return at least one alternative tool")
 
+    def test_feedback_stop_recommending_does_not_search(self):
+        service = make_service()
+        cid = "fb-stop"
+        service.recommend("find a writing tool", retrieve_k=2, final_k=2, conversation_id=cid)
+        response = service.chat(
+            "stop recommending the same thing", retrieve_k=2, final_k=2, conversation_id=cid
+        )
+        self.assertEqual(response["action"], "chat_only")
+        self.assertEqual(response["hits"], [])
+
+    def test_which_is_cheapest_uses_criterion_style(self):
+        service = make_service(client=DecisionClient([{"action": "recommend"}]))
+        cid = "crit-cheap"
+        service.recommend("I need a writing tool", retrieve_k=2, final_k=2, conversation_id=cid)
+        response = service.chat(
+            "which one is cheapest?", retrieve_k=2, final_k=2, conversation_id=cid
+        )
+        self.assertEqual(response["action"], "explain")
+        self.assertIn("cheapest", response["message"].lower())
+
+    def test_are_these_free_answers_in_text_not_search(self):
+        service = make_service(client=DecisionClient([{"action": "recommend"}]))
+        cid = "free-q"
+        service.recommend("I need a writing tool", retrieve_k=2, final_k=2, conversation_id=cid)
+        response = service.chat(
+            "are these completely free?", retrieve_k=2, final_k=2, conversation_id=cid
+        )
+        # Routed to the visible-card answer path, not a fresh recommend/refine.
+        self.assertEqual(response["action"], "explain")
+
+    def test_cheaper_refinement_prefers_free_tools(self):
+        service = make_service()
+        response = service.recommend(
+            "a writing tool, show cheaper alternatives",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="cheap-refine",
+        )
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+        self.assertTrue(names)
+        self.assertEqual(names[0], "Writerly")
+        self.assertNotIn("ImageBox", names)
+
     def test_pre_routed_recommend_skips_conversational_gating(self):
         # Default (pre_routed=False): a criterion-style follow-up is diverted to the
         # shortlist pick path, recording the criterion-pick metric.

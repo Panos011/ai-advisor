@@ -395,6 +395,18 @@ FEEDBACK_PATTERNS = (
     r"\b(?:you|it)\s+(?:messed|broke)\b",
 )
 
+# Unambiguous complaint phrases that are always feedback, even with extra words, so they
+# bypass the "<=1 leftover term" guard used for single weak feedback words.
+STRONG_FEEDBACK_PATTERNS = (
+    r"\b(?:makes?\s+no\s+sense|does\s*n'?t\s+make\s+(?:any\s+)?sense)\b",
+    r"\bstop\s+(?:recommending|showing|suggesting|giving|repeating)\b",
+    r"\b(?:same|exact)\s+(?:thing|one|tool|tools|answer|result|results)\s+(?:again|over|repeatedly|every\s+time|each\s+time)\b",
+    r"\bkeep\s+(?:recommending|showing|suggesting|giving)\s+(?:me\s+)?the\s+same\b",
+    r"\b(?:you'?re|you\s+are|ur|u\s+r)\s+not\s+listening\b",
+    r"\bnot\s+listening\b",
+    r"\brepeating\s+(?:yourself|the\s+same)\b",
+)
+
 NON_SEARCH_PATTERNS = (
     r"^(?:hi|hello|hey|yo|sup|good\s+(?:morning|afternoon|evening))[\s!.?]*$",
     r"^(?:(?:hi|hello|hey|yo)[,\s]+)?(?:how\s+(?:are|r)\s+(?:you|u)|how'?s\s+it\s+going|what'?s\s+up)[\s!.?]*$",
@@ -403,6 +415,10 @@ NON_SEARCH_PATTERNS = (
     r"\bwhat\s+can\s+you\s+do\b",
     r"\bhow\s+do\s+i\s+use\s+this\b",
     r"\bwho\s+are\s+you\b",
+    r"\b(?:can|do|did|will|could)\s+you\s+remember\b",
+    r"\bremember\s+what\s+i\s+(?:asked|said|wanted|told)\b",
+    r"\bwhat\s+did\s+i\s+(?:ask|say|want|tell)\b",
+    r"\bare\s+you\s+(?:even\s+)?listening\b",
 )
 
 FREE_FILTER_WORDS = {
@@ -425,6 +441,7 @@ CHAT_ACTIONS = {
     "pick_best",
     "show_alternative",
     "tool_question",
+    "criterion",
 }
 
 CHAT_TOOLS = {
@@ -646,6 +663,9 @@ def is_feedback_only_query(text: str) -> bool:
     cleaned = strip_instruction_text(text)
     if not cleaned:
         return False
+    # Strong complaint phrases are always feedback, even with extra words around them.
+    if any(re.search(pattern, cleaned, flags=re.IGNORECASE) for pattern in STRONG_FEEDBACK_PATTERNS):
+        return True
     has_feedback_signal = any(
         re.search(pattern, cleaned, flags=re.IGNORECASE)
         for pattern in FEEDBACK_PATTERNS
@@ -1081,8 +1101,27 @@ def is_compare_request(text: str) -> bool:
     normalized = normalize_query_text(text).lower().strip()
     return bool(re.search(
         r"\b(?:differences?|the\s+difference|how\s+do\s+they\s+(?:differ|compare)|"
-        r"compare\s+(?:them|these|those|the\s+(?:two|three|options|tools))|comparison|"
-        r"pros\s+and\s+cons|side\s+by\s+side|tell\s+me\s+(?:their|the)\s+differences?)\b",
+        r"compare\s+(?:them|these|those|all|first|top|the\s+(?:first|second|top|two|three|four|options|tools|ones))|"
+        r"comparison|pros\s+and\s+cons|side\s+by\s+side|tell\s+me\s+(?:their|the)\s+differences?)\b",
+        normalized,
+    ))
+
+
+def is_visible_card_question(text: str) -> bool:
+    """A question clearly about the tools already on screen — answer in text, do not re-search."""
+    if (
+        is_criterion_pick_query(text)
+        or is_compare_request(text)
+        or is_specific_tool_query(text)
+        or is_shortlist_explanation_query(text)
+        or is_pick_best_query(text)
+    ):
+        return True
+    normalized = normalize_query_text(text).lower()
+    return bool(re.search(
+        r"\b(?:these|those|them)\b|"
+        r"\bthe\s+(?:first|second|third|fourth|fifth|last|two|three|top|cheapest|free|paid|ones?)\b|"
+        r"\b(?:are|is|do|does|can|have)\s+(?:these|those|they|it|this|that)\b",
         normalized,
     ))
 
@@ -2159,6 +2198,17 @@ class RecommendationService:
         )
         self.shortlists: dict[str, list[dict[str, Any]]] = {}
         self.shortlist_pointers: dict[str, int] = {}
+        # Every tool name we have surfaced in a conversation, so "show another" never repeats.
+        self.shown_tools: dict[str, set[str]] = {}
+
+    def _record_shown(self, conversation_id: str | None, hits: list[dict[str, Any]] | None) -> None:
+        if not conversation_id or not hits:
+            return
+        shown = self.shown_tools.setdefault(conversation_id, set())
+        for hit in hits:
+            name = str((hit.get("meta") or {}).get("Name", "")).strip().lower()
+            if name:
+                shown.add(name)
 
     def health(self) -> dict[str, Any]:
         return {
@@ -2440,6 +2490,27 @@ class RecommendationService:
                 filter_dict["budget"] = "free"
             filters = filter_dict
 
+        # "show cheaper alternatives" / "make it more private" must apply real budget /
+        # privacy filters, not just reword the search.
+        retrieval_lower = retrieval_query.lower()
+        wants_cheaper = bool(re.search(
+            r"\b(?:cheap(?:er|est)?|more\s+affordable|lower[- ]cost|less\s+expensive|budget[- ]friendly)\b",
+            retrieval_lower,
+        ))
+        wants_private = bool(re.search(
+            r"\b(?:more\s+private|privacy|confidential|gdpr|hipaa|self[- ]hosted|on[- ]premise|local[- ]first|data\s+protection)\b",
+            retrieval_lower,
+        ))
+        if wants_cheaper or wants_private:
+            filter_dict = filters.model_dump() if hasattr(filters, "model_dump") else dict(filters or {})
+            if wants_cheaper and filter_dict.get("budget") in (None, "any"):
+                filter_dict["budget"] = "freemium"
+            if wants_private and filter_dict.get("privacy") in (None, "standard"):
+                filter_dict["privacy"] = "privacy-first"
+            filters = filter_dict
+        privacy_value = filters.get("privacy") if isinstance(filters, dict) else getattr(filters, "privacy", "standard")
+        privacy_required = str(privacy_value or "standard") in {"privacy-first", "local-first"}
+
         effective_final_k = final_k
         if mode == MODE_ONE_BEST:
             effective_final_k = 1
@@ -2457,6 +2528,7 @@ class RecommendationService:
             if conversation_id:
                 self.shortlists[conversation_id] = cached
                 self.shortlist_pointers[conversation_id] = 0
+                self._record_shown(conversation_id, cached)
             message = recommendation_message(cached, q, mode, pick_best=pick_best)
             self.conversations.append(conversation_id, "assistant", message)
             return {"hits": cached, "message": message}
@@ -2473,6 +2545,7 @@ class RecommendationService:
             if conversation_id:
                 self.shortlists[conversation_id] = hits
                 self.shortlist_pointers[conversation_id] = 0
+                self._record_shown(conversation_id, hits)
             message = recommendation_message(hits, q, mode, pick_best=pick_best)
             self.conversations.append(conversation_id, "assistant", message)
             return {"hits": hits, "message": message}
@@ -2494,11 +2567,31 @@ class RecommendationService:
         filtered_candidates = apply_decision_filters(candidates, filters, self.store.meta)
         if len(filtered_candidates) >= effective_final_k:
             candidates = filtered_candidates
+        elif privacy_required:
+            # Never silently fall back to non-private tools; show only those with clear
+            # privacy signals, or say none are clear.
+            if filtered_candidates:
+                candidates = filtered_candidates
+            else:
+                return {
+                    "hits": [],
+                    "message": (
+                        "None of the current matches list clear privacy, security, or "
+                        "self-hosting signals. Try a different task or check each provider's "
+                        "privacy page before relying on it."
+                    ),
+                }
         elif free_only:
             candidates = [
                 candidate for candidate in candidates
                 if is_free_tool(self.store.meta[int(candidate["id"])])
             ]
+        elif wants_cheaper:
+            cheaper = [
+                candidate for candidate in candidates
+                if matches_budget_filter(self.store.meta[int(candidate["id"])], "freemium")
+            ]
+            candidates = cheaper or candidates
         if open_source_only:
             candidates = [
                 candidate for candidate in candidates
@@ -2570,10 +2663,14 @@ class RecommendationService:
             if kept:
                 final_hits = kept
 
+        if wants_cheaper and final_hits:
+            final_hits = sorted(final_hits, key=lambda h: _price_sort_key(h.get("meta") or {}))
+
         self.recommend_cache.set(cache_key, final_hits)
         if conversation_id:
             self.shortlists[conversation_id] = final_hits
             self.shortlist_pointers[conversation_id] = 0
+            self._record_shown(conversation_id, final_hits)
         message = recommendation_message(final_hits, q, mode, pick_best=pick_best)
         self.conversations.append(conversation_id, "assistant", message)
         return {"hits": final_hits, "message": message}
@@ -2603,6 +2700,7 @@ class RecommendationService:
                 if len(provided_hits) >= len(stored_hits):
                     self.shortlists[conversation_id] = provided_hits
                 self.shortlist_pointers.setdefault(conversation_id, 0)
+                self._record_shown(conversation_id, provided_hits)
             else:
                 # No conversation memory, but we can still answer from the cards
                 # the frontend just passed us.
@@ -2653,17 +2751,20 @@ class RecommendationService:
         # Guard: a question about the tools already on screen (differences, why, which is
         # best) must be answered from those tools, never re-run as a fresh search that
         # repeats the shortlist. Only override when the message introduces no new task.
-        if has_context_hits and not has_explicit_task(q):
-            # A "their differences" / "compare them" question is best answered by the LLM
-            # from the visible cards (rich side-by-side), so route it there even if the
-            # planner picked a plain explanation or a fresh search.
-            if is_compare_request(q) and action not in {"chat_only", "clarify"}:
+        # Any question about the tools already on screen must be answered from those tools,
+        # never re-run as a fresh search that re-dumps cards. The planner usually gets this
+        # right, but this guard makes it deterministic for the common phrasings.
+        if has_context_hits and not has_explicit_task(q) and action not in {"chat_only", "clarify"}:
+            if is_criterion_pick_query(q):
+                action = "criterion"
+            elif is_shortlist_explanation_query(q) or (
+                is_explanation_query(q) and not is_compare_request(q)
+            ):
+                action = "explain_shortlist"
+            elif is_pick_best_query(q) and not is_compare_request(q):
+                action = "pick_best"
+            elif is_compare_request(q) or is_visible_card_question(q):
                 action = "tool_question"
-            elif action in {"recommend", "refine"}:
-                if is_pick_best_query(q):
-                    action = "pick_best"
-                elif is_explanation_query(q):
-                    action = "explain_shortlist"
 
         if action == "chat_only":
             message = self._model_chat_only_response(q, conversation_id, history)
@@ -2682,6 +2783,10 @@ class RecommendationService:
             self.conversations.append(conversation_id, "user", q)
             self.conversations.append(conversation_id, "assistant", message)
             return {"action": "clarify", "hits": [], "message": message}
+
+        if action == "criterion":
+            response = self._chat_criterion(q, conversation_id, history)
+            return {"action": "explain", **response}
 
         if action in {"explain_shortlist", "explain_best", "pick_best"}:
             response = self._chat_explain(action, q, conversation_id, history)
@@ -2718,6 +2823,31 @@ class RecommendationService:
             "refined_query": refined_query,
             **response,
         }
+
+    def _chat_criterion(
+        self,
+        q: str,
+        conversation_id: str | None,
+        history: Any,
+    ) -> dict[str, Any]:
+        """Answer 'which is cheapest / free / most private' from the current shortlist,
+        in the pricing-aware style rather than a generic 'I would pick X'."""
+        prior_hits = self.shortlists.get(conversation_id) if conversation_id else None
+        self.conversations.append(conversation_id, "user", q)
+        if not prior_hits:
+            message = "I can rank the current tools by price or privacy once we have a shortlist. Tell me the task first."
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"hits": [], "message": message}
+
+        criterion = criterion_from_query(q)
+        reason_query = self._latest_task_query(conversation_id, history) or q
+        sorted_hits = _sort_hits_by_criterion(prior_hits, criterion)
+        best = sorted_hits[0] if sorted_hits else prior_hits[0]
+        single_hit = enrich_hit(dict(best), reason_query)
+        message = clean_assistant_message(criterion_pick_message(single_hit, criterion, reason_query))
+        self._set_shortlist_pointer(conversation_id, prior_hits.index(best) if best in prior_hits else 0)
+        self.conversations.append(conversation_id, "assistant", message)
+        return {"hits": [single_hit], "message": message}
 
     def _chat_explain(
         self,
@@ -2771,6 +2901,9 @@ class RecommendationService:
         already_shown = list(visible_hits) + list(
             self.shortlists.get(conversation_id) if conversation_id else []
         )
+        # Also exclude every tool surfaced earlier in this conversation so repeated
+        # "show another" requests keep advancing instead of looping back.
+        prior_shown_names = set(self.shown_tools.get(conversation_id, set())) if conversation_id else set()
         reason_query = self._latest_task_query(conversation_id, history) or q
         fresh = self._fresh_distinct_alternative(
             reason_query,
@@ -2779,9 +2912,11 @@ class RecommendationService:
             final_k,
             filters,
             mode,
+            exclude_names=prior_shown_names,
         )
         if fresh:
             message = alternative_message(fresh, reason_query)
+            self._record_shown(conversation_id, [fresh])
             self.conversations.append(conversation_id, "assistant", message)
             return {"hits": [fresh], "message": message}
 
@@ -2913,6 +3048,7 @@ class RecommendationService:
         final_k: int,
         filters: Any,
         mode: str,
+        exclude_names: set[str] | None = None,
     ) -> dict[str, Any] | None:
         if not reason_query:
             return None
@@ -2922,6 +3058,8 @@ class RecommendationService:
             for hit in (prior_hits or [])
             if (hit.get("meta") or {}).get("Name")
         }
+        if exclude_names:
+            prior_names |= {name.strip().lower() for name in exclude_names if name}
         response = self.recommend(
             reason_query,
             max(retrieve_k, 50),
