@@ -6,6 +6,7 @@ import numpy as np
 from pydantic import ValidationError
 
 from api import (
+    BoundedTTLDict,
     ChatRequest,
     ChatResponse,
     ConversationStore,
@@ -2424,6 +2425,41 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["action"], "clarify")
         self.assertEqual(response["hits"], [])
         self.assertIn("conflict", response["message"].lower())
+
+
+class BoundedTTLDictTests(unittest.TestCase):
+    def test_lru_cap_evicts_oldest_so_memory_stays_bounded(self):
+        d: BoundedTTLDict[int] = BoundedTTLDict(max_entries=3, ttl_seconds=3600)
+        for i in range(5):
+            d[f"conv{i}"] = i
+        # only the cap is retained; oldest untouched entries are dropped
+        self.assertEqual(d.stats()["entries"], 3)
+        self.assertIsNone(d.get("conv0"))
+        self.assertIsNone(d.get("conv1"))
+        self.assertEqual(d.get("conv4"), 4)
+
+    def test_recent_access_protects_entry_from_eviction(self):
+        d: BoundedTTLDict[int] = BoundedTTLDict(max_entries=2, ttl_seconds=3600)
+        d["a"] = 1
+        d["b"] = 2
+        self.assertEqual(d["a"], 1)  # touch "a" so "b" is now the LRU
+        d["c"] = 3
+        self.assertEqual(d.get("a"), 1)
+        self.assertIsNone(d.get("b"))
+
+    def test_expired_entries_are_treated_as_missing(self):
+        d: BoundedTTLDict[int] = BoundedTTLDict(max_entries=10, ttl_seconds=0)
+        d["a"] = 1
+        self.assertIsNone(d.get("a"))
+        with self.assertRaises(KeyError):
+            _ = d["a"]
+
+    def test_setdefault_returns_stored_mutable_for_in_place_mutation(self):
+        # mirrors shown_tools usage: setdefault(cid, set()).add(name)
+        d: BoundedTTLDict[set] = BoundedTTLDict(max_entries=10, ttl_seconds=3600)
+        d.setdefault("conv", set()).add("tool-a")
+        d.setdefault("conv", set()).add("tool-b")
+        self.assertEqual(d["conv"], {"tool-a", "tool-b"})
 
 
 if __name__ == "__main__":

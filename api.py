@@ -51,6 +51,72 @@ class TTLCache(Generic[T]):
             return {"entries": len(self._items), "max_entries": self.max_entries}
 
 
+class BoundedTTLDict(Generic[T]):
+    """Dict-like mapping with the same TTL + LRU eviction as TTLCache.
+
+    A drop-in for the plain dicts that held per-conversation state, which grew
+    without bound (one entry per conversation id, never evicted). Only the dict
+    operations the call sites actually use are exposed: indexing, get, and
+    setdefault. Idle conversations age out at the same TTL as the conversation
+    history and recommendation caches, so memory stays bounded under load.
+    """
+
+    def __init__(self, max_entries: int = 256, ttl_seconds: int = 3600):
+        self.max_entries = max_entries
+        self.ttl_seconds = ttl_seconds
+        self._items: OrderedDict[str, tuple[float, T]] = OrderedDict()
+        self._lock = Lock()
+
+    def _live(self, key: str) -> tuple[bool, T | None]:
+        item = self._items.get(key)
+        if item is None:
+            return False, None
+        expires_at, value = item
+        if expires_at <= time.monotonic():
+            self._items.pop(key, None)
+            return False, None
+        self._items.move_to_end(key)
+        return True, value
+
+    def _store(self, key: str, value: T) -> None:
+        self._items[key] = (time.monotonic() + self.ttl_seconds, value)
+        self._items.move_to_end(key)
+        while len(self._items) > self.max_entries:
+            self._items.popitem(last=False)
+
+    def __getitem__(self, key: str) -> T:
+        with self._lock:
+            found, value = self._live(key)
+            if not found:
+                raise KeyError(key)
+            return value  # type: ignore[return-value]
+
+    def __setitem__(self, key: str, value: T) -> None:
+        with self._lock:
+            self._store(key, value)
+
+    def __contains__(self, key: str) -> bool:
+        with self._lock:
+            return self._live(key)[0]
+
+    def get(self, key: str, default: T | None = None) -> T | None:
+        with self._lock:
+            found, value = self._live(key)
+            return value if found else default
+
+    def setdefault(self, key: str, default: T) -> T:
+        with self._lock:
+            found, value = self._live(key)
+            if found:
+                return value  # type: ignore[return-value]
+            self._store(key, default)
+            return default
+
+    def stats(self) -> dict[str, int]:
+        with self._lock:
+            return {"entries": len(self._items), "max_entries": self.max_entries}
+
+
 # === Metrics ===
 
 import time
@@ -2987,13 +3053,21 @@ class RecommendationService:
             max_conversations=settings.cache_max_entries,
             ttl_seconds=settings.cache_ttl_seconds,
         )
-        self.shortlists: dict[str, list[dict[str, Any]]] = {}
-        self.shortlist_pointers: dict[str, int] = {}
+        # Per-conversation state, TTL+LRU bounded so idle conversations age out
+        # instead of accumulating forever (previously plain dicts that never evicted).
+        def _conv_state() -> BoundedTTLDict[Any]:
+            return BoundedTTLDict(
+                max_entries=settings.cache_max_entries,
+                ttl_seconds=settings.cache_ttl_seconds,
+            )
+
+        self.shortlists: BoundedTTLDict[list[dict[str, Any]]] = _conv_state()
+        self.shortlist_pointers: BoundedTTLDict[int] = _conv_state()
         # Every tool name we have surfaced in a conversation, so "show another" never repeats.
-        self.shown_tools: dict[str, set[str]] = {}
+        self.shown_tools: BoundedTTLDict[set[str]] = _conv_state()
         # The single most recently surfaced tool (alternative / criterion / pick), for
         # "why did you choose the last one?" follow-ups.
-        self.last_shown: dict[str, dict[str, Any]] = {}
+        self.last_shown: BoundedTTLDict[dict[str, Any]] = _conv_state()
 
     def _record_shown(self, conversation_id: str | None, hits: list[dict[str, Any]] | None) -> None:
         if not conversation_id or not hits:
