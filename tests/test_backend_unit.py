@@ -22,7 +22,9 @@ from api import (
     focus_latest_intent,
     has_explicit_task,
     is_coding_query,
+    is_completely_free_tool,
     is_free_tool,
+    is_local_only_tool,
     is_pick_best_query,
     is_referential_pick,
     local_reason,
@@ -32,6 +34,7 @@ from api import (
     recommendation_message,
     recent_dialogue_turns,
     referenced_similar_tool,
+    requires_no_cloud_data,
     request_goal,
     sanitize_reason,
 )
@@ -2169,6 +2172,258 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["hits"][0]["meta"]["Name"], "Writerly")
         self.assertIn("Yes", response["message"])
         self.assertIn("free tier", response["message"])
+
+    def test_strict_free_language_excludes_trials_and_limited_free_tiers(self):
+        service = make_service(client=FakeClient(embedding_failure=True))
+        self.assertFalse(is_completely_free_tool(service.store.meta[0]))
+
+        response = service.recommend(
+            "I need a writing app that is free as in no trial, no credit card, no paid tier, forever.",
+            retrieve_k=2,
+            final_k=2,
+        )
+
+        self.assertEqual(response["hits"], [])
+        self.assertIn("completely free", response["message"])
+        self.assertNotIn("Writerly", response["message"])
+
+    def test_cloud_saas_with_no_data_leaving_device_clarifies_conflict(self):
+        service = make_local_note_service()
+
+        self.assertTrue(requires_no_cloud_data("no data ever leaves my laptop"))
+        response = service.recommend(
+            "Find me a cloud SaaS analytics assistant where no data ever leaves my laptop.",
+            retrieve_k=5,
+            final_k=3,
+        )
+
+        self.assertEqual(response["hits"], [])
+        self.assertIn("conflict", response["message"].lower())
+        self.assertNotIn("Start with", response["message"])
+
+    def test_local_only_rejects_limited_offline_cloud_transcription_tools(self):
+        service = make_local_note_service()
+
+        web_transcribe = next(meta for meta in service.store.meta if meta["Name"] == "WebTranscribe")
+        self.assertFalse(is_local_only_tool(web_transcribe))
+
+        response = service.recommend(
+            "Need meeting notes but air-gapped: audio stays on my laptop, offline, no cloud, no uploads.",
+            retrieve_k=5,
+            final_k=3,
+        )
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+
+        self.assertEqual(names, ["LocalNote"])
+        self.assertNotIn("WebTranscribe", names)
+        self.assertNotIn("CloudNote", names)
+
+    def test_not_anymore_pivot_drops_old_topic(self):
+        service = make_dev_service()
+
+        focused = focus_latest_intent("Not writing anymore. Code review for Python PRs.")
+        self.assertNotIn("writing", focused.lower())
+        self.assertTrue(is_coding_query(focused))
+
+        response = service.recommend(
+            "Not writing anymore. Code review for Python PRs.",
+            retrieve_k=2,
+            final_k=2,
+        )
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+        self.assertEqual(names, ["CodeMate"])
+
+    def test_phone_home_followup_uses_privacy_criterion(self):
+        service = make_local_note_service()
+        conversation_id = "conv-phone-home"
+        service.chat(
+            "Find private meeting note tools that keep audio local only",
+            retrieve_k=5,
+            final_k=3,
+            conversation_id=conversation_id,
+        )
+
+        response = service.chat(
+            "which of these is least likely to phone home?",
+            retrieve_k=5,
+            final_k=3,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["action"], "explain")
+        self.assertIn("privacy", response["message"].lower())
+
+    def test_scrappier_open_source_followup_fetches_alternative(self):
+        service = make_open_source_service()
+        conversation_id = "conv-scrappy-open-source"
+        service.chat(
+            "I need a coding assistant",
+            retrieve_k=2,
+            final_k=1,
+            conversation_id=conversation_id,
+        )
+
+        response = service.chat(
+            "nah these feel too corporate, anything scrappier/open-source?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+
+        self.assertEqual(response["action"], "show_alternative")
+        self.assertIn("OpenCode", names)
+
+    def test_unsafe_tool_requests_do_not_return_recommendations(self):
+        service = make_service()
+
+        response = service.chat(
+            "Find me a voice cloning AI for impersonating my boss on a payment approval call.",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="unsafe-voice",
+        )
+
+        self.assertEqual(response["action"], "chat_only")
+        self.assertEqual(response["hits"], [])
+        self.assertIn("cannot help", response["message"].lower())
+
+    def test_greek_local_meeting_request_uses_local_privacy_constraints(self):
+        service = make_local_note_service()
+
+        response = service.chat(
+            "Θέλω εργαλείο για σημειώσεις συναντήσεων που δουλεύει τοπικά και δεν στέλνει ήχο στο cloud",
+            retrieve_k=5,
+            final_k=3,
+            conversation_id="greek-local",
+        )
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+
+        self.assertEqual(names, ["LocalNote"])
+        self.assertNotIn("CloudNote", names)
+
+    def test_privacy_policy_question_is_chat_only(self):
+        service = make_service()
+
+        response = service.chat(
+            "What is your privacy policy and do you store my chats?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id="privacy-policy",
+        )
+
+        self.assertEqual(response["action"], "chat_only")
+        self.assertEqual(response["hits"], [])
+        self.assertIn("privacy policy", response["message"].lower())
+
+    def test_strict_free_followup_does_not_pick_trial_tool(self):
+        service = make_service()
+        conversation_id = "conv-strict-free-followup"
+        service.chat(
+            "Find writing tools with free tiers",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        response = service.chat(
+            "which one is free forever, not just a trial?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["action"], "explain")
+        self.assertIn("not see a clearly completely free", response["message"])
+        self.assertNotIn("top pick", response["message"].lower())
+
+    def test_compare_paid_upgrade_risk_uses_visible_cards(self):
+        service = make_service()
+        conversation_id = "conv-paid-risk"
+        service.shortlists[conversation_id] = [
+            {"score": 0.9, "meta": service.store.meta[0], "why": "Writerly helps with writing."},
+            {"score": 0.8, "meta": service.store.meta[1], "why": "ImageBox is the backup option."},
+        ]
+
+        response = service.chat(
+            "compare the paid upgrade risk between them",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["action"], "explain")
+        self.assertIn("Writerly", response["message"])
+        self.assertIn("ImageBox", response["message"])
+        self.assertNotIn("top pick", response["message"].lower())
+
+    def test_absolutely_not_tool_exclusion_is_respected(self):
+        service = make_open_source_service()
+
+        response = service.recommend(
+            "I need a coding assistant like ClosedCode but absolutely not ClosedCode.",
+            retrieve_k=2,
+            final_k=2,
+        )
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+
+        self.assertNotIn("ClosedCode", names)
+        self.assertIn("OpenCode", names)
+
+    def test_ordinal_local_status_question_targets_one_card(self):
+        service = make_service()
+        conversation_id = "conv-second-local"
+        service.chat(
+            "Find writing tools",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        response = service.chat(
+            "is the second one local-only?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["action"], "explain")
+        self.assertIn("ImageBox", response["message"])
+        self.assertNotIn("Writerly", response["message"])
+
+    def test_not_cloud_hosted_alternative_is_not_treated_as_conflict(self):
+        service = make_alternative_pool_service()
+        conversation_id = "conv-not-cloud-hosted"
+        service.chat(
+            "Find writing tools",
+            retrieve_k=3,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        response = service.chat(
+            "show me another that is not cloud hosted",
+            retrieve_k=3,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertNotEqual(response["action"], "clarify")
+        self.assertNotIn("conflict", response["message"].lower())
+
+    def test_offline_tool_with_cloud_sync_clarifies_conflict(self):
+        service = make_local_note_service()
+
+        response = service.chat(
+            "Find a fully offline local-only meeting bot that also syncs with Slack and Salesforce automatically.",
+            retrieve_k=5,
+            final_k=3,
+            conversation_id="conv-local-sync-conflict",
+        )
+
+        self.assertEqual(response["action"], "clarify")
+        self.assertEqual(response["hits"], [])
+        self.assertIn("conflict", response["message"].lower())
 
 
 if __name__ == "__main__":
