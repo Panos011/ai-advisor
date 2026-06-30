@@ -209,6 +209,11 @@ class Settings:
     # latency lever: the rank prompt scales linearly with this. Set RANK_K >=
     # retrieve_k to restore the previous "rank everything retrieved" behavior.
     rank_k: int = _int_env("RANK_K", 15)
+    # Reasoning effort for the chat model (e.g. "minimal"/"low"/"medium"/"high").
+    # Lower is faster. For a reasoning model this is the dominant latency lever.
+    # Set REASONING_EFFORT="" to omit the parameter entirely; it is also auto-
+    # disabled at runtime if the model rejects it, so unsupported models are safe.
+    reasoning_effort: str = (os.getenv("REASONING_EFFORT", "low") or "").strip()
 
 
 def get_settings() -> Settings:
@@ -3452,6 +3457,47 @@ class RecommendationService:
         # The single most recently surfaced tool (alternative / criterion / pick), for
         # "why did you choose the last one?" follow-ups.
         self.last_shown: BoundedTTLDict[dict[str, Any]] = _conv_state()
+        # Flipped off permanently for the process the first time the model rejects
+        # reasoning_effort, so an unsupported model degrades to prior behavior.
+        self._reasoning_supported = bool(self.settings.reasoning_effort)
+
+    def _chat_create(self, **kwargs: Any) -> Any:
+        """Single entry point for chat completions.
+
+        Injects reasoning_effort (the main latency lever for reasoning models) and
+        transparently retries without it if the model rejects the parameter, so the
+        call never hard-fails on an unsupported model.
+        """
+        if self._reasoning_supported:
+            try:
+                return self.client.chat.completions.create(
+                    reasoning_effort=self.settings.reasoning_effort, **kwargs
+                )
+            except Exception as exc:  # noqa: BLE001 - classified below
+                message = str(exc).lower()
+                # Treat parameter-incompatibility (the param itself, or a clash with
+                # temperature on a reasoning model) as "model doesn't accept this":
+                # disable it for the process and fall through to the known-good call.
+                # Genuine failures (timeouts, rate limits) re-raise so the caller's
+                # existing fallback path handles them exactly as before.
+                param_error = any(
+                    token in message
+                    for token in (
+                        "reasoning_effort", "reasoning", "temperature",
+                        "unsupported", "unrecognized", "not supported",
+                        "invalid", "unexpected keyword",
+                    )
+                )
+                if not param_error:
+                    raise
+                logger.warning(
+                    "Model rejected reasoning_effort=%s; disabling it for this process (%s)",
+                    self.settings.reasoning_effort,
+                    type(exc).__name__,
+                )
+                self.metrics.increment("reasoning_effort_unsupported")
+                self._reasoning_supported = False
+        return self.client.chat.completions.create(**kwargs)
 
     def _record_shown(self, conversation_id: str | None, hits: list[dict[str, Any]] | None) -> None:
         if not conversation_id or not hits:
@@ -4665,7 +4711,7 @@ class RecommendationService:
         }
         try:
             with self.metrics.timer("openai.tool_question_ms"):
-                resp = self.client.chat.completions.create(
+                resp = self._chat_create(
                     model=self.settings.chat_model,
                     messages=[
                         {"role": "system", "content": system},
@@ -4712,7 +4758,7 @@ class RecommendationService:
         chat_messages.append({"role": "user", "content": json.dumps(payload, ensure_ascii=False)})
         try:
             with self.metrics.timer("openai.chat_only_ms"):
-                resp = self.client.chat.completions.create(
+                resp = self._chat_create(
                     model=self.settings.chat_model,
                     messages=chat_messages,
                     temperature=0.4,
@@ -4917,7 +4963,7 @@ class RecommendationService:
         )
         try:
             with self.metrics.timer("openai.chat_decision_ms"):
-                resp = self.client.chat.completions.create(
+                resp = self._chat_create(
                     model=self.settings.chat_model,
                     messages=[
                         {"role": "system", "content": system},
@@ -5039,7 +5085,7 @@ class RecommendationService:
 
         try:
             with self.metrics.timer("openai.clarify_ms"):
-                resp = self.client.chat.completions.create(
+                resp = self._chat_create(
                     model=self.settings.chat_model,
                     messages=[
                         {"role": "system", "content": system},
@@ -5123,7 +5169,7 @@ class RecommendationService:
         )
         try:
             with self.metrics.timer("openai.detect_intent_ms"):
-                resp = self.client.chat.completions.create(
+                resp = self._chat_create(
                     model=self.settings.chat_model,
                     messages=[
                         {"role": "system", "content": system},
@@ -5275,7 +5321,7 @@ class RecommendationService:
         )
         try:
             with self.metrics.timer("openai.rank_ms"):
-                resp = self.client.chat.completions.create(
+                resp = self._chat_create(
                     model=self.settings.chat_model,
                     messages=[
                         {

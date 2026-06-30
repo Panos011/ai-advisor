@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import unittest
 from types import SimpleNamespace
@@ -213,6 +214,27 @@ class CapturingClient:
     def __init__(self, decisions):
         self.embeddings = FakeEmbeddings()
         self.chat = SimpleNamespace(completions=CapturingChatCompletions(decisions))
+
+
+class RecordingChatCompletions:
+    """Records the kwargs of every chat completion call, optionally failing when
+    reasoning_effort is supplied (to exercise the auto-disable path)."""
+
+    def __init__(self, fail_on_reasoning=False):
+        self.calls = []
+        self.fail_on_reasoning = fail_on_reasoning
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.fail_on_reasoning and "reasoning_effort" in kwargs:
+            raise TypeError("create() got an unexpected keyword argument 'reasoning_effort'")
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))])
+
+
+class RecordingClient:
+    def __init__(self, fail_on_reasoning=False):
+        self.embeddings = FakeEmbeddings()
+        self.chat = SimpleNamespace(completions=RecordingChatCompletions(fail_on_reasoning))
 
 
 def make_service(client=None):
@@ -2877,6 +2899,35 @@ class BoundedTTLDictTests(unittest.TestCase):
         d.setdefault("conv", set()).add("tool-a")
         d.setdefault("conv", set()).add("tool-b")
         self.assertEqual(d["conv"], {"tool-a", "tool-b"})
+
+
+class ChatCreateReasoningTests(unittest.TestCase):
+    def _service(self, reasoning_effort="low", fail_on_reasoning=False):
+        svc = make_service(RecordingClient(fail_on_reasoning=fail_on_reasoning))
+        svc.settings = dataclasses.replace(svc.settings, reasoning_effort=reasoning_effort)
+        svc._reasoning_supported = bool(reasoning_effort)
+        return svc, svc.client.chat.completions
+
+    def test_reasoning_effort_is_passed_through(self):
+        svc, comp = self._service(reasoning_effort="low")
+        svc._chat_create(model="m", messages=[{"role": "user", "content": "hi"}])
+        self.assertEqual(comp.calls[0].get("reasoning_effort"), "low")
+
+    def test_auto_disables_when_model_rejects_param(self):
+        svc, comp = self._service(reasoning_effort="low", fail_on_reasoning=True)
+        svc._chat_create(model="m", messages=[{"role": "user", "content": "hi"}])
+        # first attempt carried the param and failed; the retry omitted it
+        self.assertIn("reasoning_effort", comp.calls[0])
+        self.assertNotIn("reasoning_effort", comp.calls[1])
+        self.assertFalse(svc._reasoning_supported)
+        # and it is never sent again for the life of the process
+        svc._chat_create(model="m", messages=[{"role": "user", "content": "again"}])
+        self.assertNotIn("reasoning_effort", comp.calls[2])
+
+    def test_empty_setting_omits_param(self):
+        svc, comp = self._service(reasoning_effort="")
+        svc._chat_create(model="m", messages=[{"role": "user", "content": "hi"}])
+        self.assertNotIn("reasoning_effort", comp.calls[0])
 
 
 if __name__ == "__main__":
