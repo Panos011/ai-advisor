@@ -196,7 +196,10 @@ class Settings:
     # .strip() guards against a trailing newline/space in the env var, which makes the
     # Authorization header illegal and causes httpx to fail every call with APIConnectionError.
     openai_api_key: str | None = (os.getenv("OPENAI_API_KEY") or "").strip() or None
-    openai_timeout: float = _float_env("OPENAI_TIMEOUT", 12.0)
+    # The rank call legitimately runs ~13-15s, so the timeout must clear it with
+    # headroom; a value below it causes timeout -> retry -> timeout -> hard failure
+    # (slower AND an error). Keep retries low so a genuine failure surfaces fast.
+    openai_timeout: float = _float_env("OPENAI_TIMEOUT", 30.0)
     openai_max_retries: int = _int_env("OPENAI_MAX_RETRIES", 1)
     cache_ttl_seconds: int = _int_env("CACHE_TTL_SECONDS", 600)
     cache_max_entries: int = _int_env("CACHE_MAX_ENTRIES", 256)
