@@ -196,14 +196,19 @@ class Settings:
     # .strip() guards against a trailing newline/space in the env var, which makes the
     # Authorization header illegal and causes httpx to fail every call with APIConnectionError.
     openai_api_key: str | None = (os.getenv("OPENAI_API_KEY") or "").strip() or None
-    openai_timeout: float = _float_env("OPENAI_TIMEOUT", 20.0)
-    openai_max_retries: int = _int_env("OPENAI_MAX_RETRIES", 2)
+    openai_timeout: float = _float_env("OPENAI_TIMEOUT", 12.0)
+    openai_max_retries: int = _int_env("OPENAI_MAX_RETRIES", 1)
     cache_ttl_seconds: int = _int_env("CACHE_TTL_SECONDS", 600)
     cache_max_entries: int = _int_env("CACHE_MAX_ENTRIES", 256)
     max_query_length: int = _int_env("MAX_QUERY_LENGTH", 500)
     max_retrieve_k: int = _int_env("MAX_RETRIEVE_K", 100)
     max_final_k: int = _int_env("MAX_FINAL_K", 10)
     mmr_lambda: float = _float_env("MMR_LAMBDA", 0.7)
+    # How many diversified candidates the LLM ranker actually sees. Trimming the
+    # MMR output here (rather than handing it the full retrieve_k pool) is the main
+    # latency lever: the rank prompt scales linearly with this. Set RANK_K >=
+    # retrieve_k to restore the previous "rank everything retrieved" behavior.
+    rank_k: int = _int_env("RANK_K", 15)
 
 
 def get_settings() -> Settings:
@@ -3847,7 +3852,7 @@ class RecommendationService:
         filter_key = json.dumps(filters.model_dump() if hasattr(filters, "model_dump") else (filters or {}), sort_keys=True)
         cache_key = (
             f"{TEXT_FORMAT_VERSION}:{self.settings.emb_model}:{self.settings.chat_model}:"
-            f"{retrieve_k}:{effective_final_k}:{mode}:{filter_key}:{retrieval_query}"
+            f"{retrieve_k}:{self.settings.rank_k}:{effective_final_k}:{mode}:{filter_key}:{retrieval_query}"
         )
         cached = self.recommend_cache.get(cache_key)
         if cached is not None:
@@ -4112,13 +4117,16 @@ class RecommendationService:
         if not candidates:
             return {"hits": [], "message": recommendation_message([], q, mode, pick_best=pick_best)}
 
+        # Diversify, then hand the LLM ranker only a trimmed shortlist. Never go below
+        # the number of tools we intend to return, and never above what we retrieved.
+        rank_k = max(min(self.settings.rank_k, retrieve_k), effective_final_k)
         candidate_embeddings = self._candidate_embeddings([int(c["id"]) for c in candidates])
         with self.metrics.timer("rerank.mmr_ms"):
             candidates = mmr_rerank(
                 candidates,
                 candidate_embeddings,
                 lambda_=self.settings.mmr_lambda,
-                top_k=retrieve_k,
+                top_k=rank_k,
             )
 
         selected = self._rank_with_llm(retrieval_query, candidates, effective_final_k, mode=mode)
