@@ -3477,36 +3477,49 @@ class RecommendationService:
         transparently retries without it if the model rejects the parameter, so the
         call never hard-fails on an unsupported model.
         """
-        if self._reasoning_supported:
-            try:
-                return self.client.chat.completions.create(
-                    reasoning_effort=self.settings.reasoning_effort, **kwargs
-                )
-            except Exception as exc:  # noqa: BLE001 - classified below
-                message = str(exc).lower()
-                # Treat parameter-incompatibility (the param itself, or a clash with
-                # temperature on a reasoning model) as "model doesn't accept this":
-                # disable it for the process and fall through to the known-good call.
-                # Genuine failures (timeouts, rate limits) re-raise so the caller's
-                # existing fallback path handles them exactly as before.
-                param_error = any(
-                    token in message
-                    for token in (
-                        "reasoning_effort", "reasoning", "temperature",
-                        "unsupported", "unrecognized", "not supported",
-                        "invalid", "unexpected keyword",
+        started = time.perf_counter()
+        messages = kwargs.get("messages") or []
+        label = (
+            str((messages[0] or {}).get("content", ""))[:45].replace("\n", " ")
+            if messages else ""
+        )
+        try:
+            if self._reasoning_supported:
+                try:
+                    return self.client.chat.completions.create(
+                        reasoning_effort=self.settings.reasoning_effort, **kwargs
                     )
-                )
-                if not param_error:
-                    raise
-                logger.warning(
-                    "Model rejected reasoning_effort=%s; disabling it for this process (%s)",
-                    self.settings.reasoning_effort,
-                    type(exc).__name__,
-                )
-                self.metrics.increment("reasoning_effort_unsupported")
-                self._reasoning_supported = False
-        return self.client.chat.completions.create(**kwargs)
+                except Exception as exc:  # noqa: BLE001 - classified below
+                    message = str(exc).lower()
+                    # Treat parameter-incompatibility (the param itself, or a clash with
+                    # temperature on a reasoning model) as "model doesn't accept this":
+                    # disable it for the process and fall through to the known-good call.
+                    # Genuine failures (timeouts, rate limits) re-raise so the caller's
+                    # existing fallback path handles them exactly as before.
+                    param_error = any(
+                        token in message
+                        for token in (
+                            "reasoning_effort", "reasoning", "temperature",
+                            "unsupported", "unrecognized", "not supported",
+                            "invalid", "unexpected keyword",
+                        )
+                    )
+                    if not param_error:
+                        raise
+                    logger.warning(
+                        "Model rejected reasoning_effort=%s; disabling it for this process (%s)",
+                        self.settings.reasoning_effort,
+                        type(exc).__name__,
+                    )
+                    self.metrics.increment("reasoning_effort_unsupported")
+                    self._reasoning_supported = False
+            return self.client.chat.completions.create(**kwargs)
+        finally:
+            logger.info(
+                "TIMING llm call %.0f ms [%s]",
+                (time.perf_counter() - started) * 1000.0,
+                label,
+            )
 
     def _record_shown(self, conversation_id: str | None, hits: list[dict[str, Any]] | None) -> None:
         if not conversation_id or not hits:
@@ -3537,8 +3550,11 @@ class RecommendationService:
                 self.metrics.increment("embedding_cache_hit")
                 return cached.copy()
 
+        _emb_started = time.perf_counter()
         with self.metrics.timer("openai.embeddings_ms"):
             resp = self.client.embeddings.create(model=self.settings.emb_model, input=texts)
+        logger.info("TIMING embedding call %.0f ms (%d input)",
+                    (time.perf_counter() - _emb_started) * 1000.0, len(texts))
         vecs = np.array([d.embedding for d in resp.data], dtype="float32")
         normalize_l2(vecs)
 
