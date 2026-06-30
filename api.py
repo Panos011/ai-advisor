@@ -212,11 +212,11 @@ class Settings:
     # latency lever: the rank prompt scales linearly with this. Set RANK_K >=
     # retrieve_k to restore the previous "rank everything retrieved" behavior.
     rank_k: int = _int_env("RANK_K", 15)
-    # Reasoning effort for the chat model (e.g. "minimal"/"low"/"medium"/"high").
-    # Lower is faster. For a reasoning model this is the dominant latency lever.
-    # Set REASONING_EFFORT="" to omit the parameter entirely; it is also auto-
-    # disabled at runtime if the model rejects it, so unsupported models are safe.
-    reasoning_effort: str = (os.getenv("REASONING_EFFORT", "low") or "").strip()
+    # Reasoning effort for the chat model. Only relevant for reasoning models;
+    # gpt-5.4-mini is a fast non-reasoning model, so this is off by default and the
+    # parameter is omitted entirely. Opt in with REASONING_EFFORT=low/medium/high
+    # only if you switch to a reasoning model (auto-disabled if the model rejects it).
+    reasoning_effort: str = (os.getenv("REASONING_EFFORT", "") or "").strip()
     # Skip the planner LLM round-trip for clean, self-contained task requests
     # ("I need a tool for X"), routing straight to recommend. Saves a full chat
     # round-trip with identical retrieval inputs. Set SKIP_PLANNER=0 to disable.
