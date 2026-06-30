@@ -217,6 +217,12 @@ class Settings:
     # Set REASONING_EFFORT="" to omit the parameter entirely; it is also auto-
     # disabled at runtime if the model rejects it, so unsupported models are safe.
     reasoning_effort: str = (os.getenv("REASONING_EFFORT", "low") or "").strip()
+    # Skip the planner LLM round-trip for clean, self-contained task requests
+    # ("I need a tool for X"), routing straight to recommend. Saves a full chat
+    # round-trip with identical retrieval inputs. Set SKIP_PLANNER=0 to disable.
+    skip_planner_for_tasks: bool = (
+        os.getenv("SKIP_PLANNER", "1").strip().lower() not in ("0", "false", "no", "off", "")
+    )
 
 
 def get_settings() -> Settings:
@@ -4375,7 +4381,14 @@ class RecommendationService:
                 response = self._chat_tool_question(q, conversation_id, history, visible_hits=provided_hits)
                 return {"action": "explain", **response}
 
-        decision = self._chat_decision(q, filters, mode, conversation_id, history)
+        if self.settings.skip_planner_for_tasks and self._can_skip_planner(q):
+            # Clean task request -> unambiguously a recommend. Skip the planner LLM
+            # call; an empty decision routes downstream exactly like an empty planner
+            # result (q is the query, filters/excludes are derived deterministically).
+            self.metrics.increment("planner_skipped")
+            decision = {}
+        else:
+            decision = self._chat_decision(q, filters, mode, conversation_id, history)
         action = decision.get("action") or action_from_planner_tool(decision.get("tool")) or "recommend"
         if action not in CHAT_ACTIONS:
             action = action_from_planner_tool(decision.get("tool")) or "recommend"
@@ -4904,6 +4917,29 @@ class RecommendationService:
                 if value not in (None, "", []):
                     base[key] = value
         return base or filters
+
+    def _can_skip_planner(self, q: str) -> bool:
+        """True when the message is a clean, self-contained task request, so the
+        planner LLM round-trip can be skipped and routing goes straight to recommend
+        with unchanged retrieval inputs (q + deterministic filter/exclude derivation).
+        Anything needing context resolution or a non-recommend action keeps the
+        planner."""
+        if not has_explicit_task(q):
+            return False
+        if referenced_similar_tool(q) or negated_tools(q):
+            return False
+        return not any(
+            detector(q)
+            for detector in (
+                is_compare_request,
+                is_alternative_query,
+                is_criterion_pick_query,
+                is_explanation_query,
+                is_pick_best_query,
+                is_visible_card_question,
+                needs_clarification,
+            )
+        )
 
     def _chat_decision(
         self,

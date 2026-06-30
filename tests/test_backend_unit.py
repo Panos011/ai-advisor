@@ -2901,6 +2901,28 @@ class BoundedTTLDictTests(unittest.TestCase):
         self.assertEqual(d["conv"], {"tool-a", "tool-b"})
 
 
+class PlannerSkipTests(unittest.TestCase):
+    def setUp(self):
+        self.svc = make_service()
+
+    def test_clean_task_request_skips_planner(self):
+        for q in (
+            "I need a coding tool",
+            "Now I need a tool to transcribe audio meetings",
+            "I need a free AI tool to write essays",
+        ):
+            self.assertTrue(self.svc._can_skip_planner(q), q)
+
+    def test_context_dependent_messages_keep_planner(self):
+        for q in (
+            "which one is cheaper?",            # comparison of current shortlist
+            "explain the first one",            # explanation of a prior card
+            "show me alternatives to Notion",   # references a named tool
+            "compare them",                     # needs context
+        ):
+            self.assertFalse(self.svc._can_skip_planner(q), q)
+
+
 class ChatCreateReasoningTests(unittest.TestCase):
     def _service(self, reasoning_effort="low", fail_on_reasoning=False):
         svc = make_service(RecordingClient(fail_on_reasoning=fail_on_reasoning))
