@@ -597,7 +597,7 @@ def has_cloud_local_conflict(text: str) -> bool:
         r"\b(?:cloud[- ]based|hosted|saas|online\s+service|cloud\s+(?:tool|app|platform|assistant|analytics|api))\b",
         normalized,
     ))
-    if re.search(r"\bnot\s+(?:cloud[- ]hosted|hosted|cloud[- ]based|a\s+cloud\s+(?:tool|app|platform))\b", normalized):
+    if re.search(r"\bnot\s+(?:cloud[- ]hosted|hosted|cloud[- ]based|a\s+cloud\s+(?:tool|app|platform)|saas)\b", normalized):
         asks_for_cloud = False
     if requires_self_hosted(normalized) and not re.search(r"\b(?:cloud[- ]based|cloud\s+(?:tool|app|platform|assistant|analytics|api)|saas|online\s+service)\b", normalized):
         asks_for_cloud = False
@@ -618,8 +618,18 @@ def cloud_local_conflict_message() -> str:
 
 def has_local_integration_conflict(text: str) -> bool:
     normalized = normalize_query_text(text).lower()
-    strict_local = bool(re.search(r"\b(?:fully\s+offline|air[- ]gapped|local[- ]only|no\s+cloud|without\s+(?:the\s+)?cloud)\b", normalized))
-    auto_sync = bool(re.search(r"\b(?:syncs?|integrates?|connects?)\b[^.?!]{0,80}\b(?:slack|salesforce|hubspot|zapier|crm|google\s+drive|notion)\b|\b(?:slack|salesforce|hubspot|zapier|crm)\b[^.?!]{0,80}\bautomatically\b", normalized))
+    strict_local = bool(re.search(
+        r"\b(?:fully\s+offline|air[- ]gapped|local[- ]only|no\s+cloud|without\s+(?:the\s+)?cloud|"
+        r"(?:data|audio|calls?)\s+(?:cannot|can't|must\s+not|should\s+not)\s+leave|"
+        r"(?:data|audio|calls?)\s+(?:stays?|remains?)\s+(?:on\s+)?(?:device|laptop|computer))\b",
+        normalized,
+    ))
+    auto_sync = bool(re.search(
+        r"\b(?:syncs?|integrates?|connects?|posts?|sends?|pushes?)\b[^.?!]{0,80}\b(?:slack|salesforce|hubspot|zapier|crm|google\s+drive|drive|notion|quickbooks)\b|"
+        r"\b(?:slack|salesforce|hubspot|zapier|crm|google\s+drive|drive|quickbooks)\b[^.?!]{0,80}\b(?:automatically|sync|post|send|push|integrat)|"
+        r"\b(?:for|with|into|to)\s+(?:slack|salesforce|hubspot|zapier|crm|google\s+drive|drive|quickbooks)\b",
+        normalized,
+    ))
     return strict_local and auto_sync
 
 
@@ -662,7 +672,7 @@ def local_only_no_match_message() -> str:
 
 OPEN_SOURCE_SELF_SIGNAL = re.compile(
     r"\bis\s+(?:an?\s+|fully\s+|completely\s+|truly\s+|now\s+|also\s+)?open[- ]source\b|"
-    r"\b(?:open[- ]source|source[- ]available)\s*:\b|"
+    r"\b(?:open[- ]source|source[- ]available)\s*:|"
     r"\b(?:free\s+and\s+open[- ]source|open[- ]source\s+and\s+free)\b|"
     r"\b(?:mit|apache|gpl|agpl|mpl|bsd)\s+licen[sc]e(?:d)?\b|"
     r"\bsource[- ]available\b|"
@@ -993,14 +1003,31 @@ UNSAFE_REQUEST_PATTERNS = (
     r"\b(?:stealth\s+)?keylog(?:ger|ging)\b|\bhide\s+(?:it\s+)?from\s+antivirus\b|\bav\s+bypass\b",
     r"\b(?:exploit|attack)\b[^.?!]{0,80}\b(?:sql\s+injection|sqli)\b|\bscan\b[^.?!]{0,80}\bexploit\b[^.?!]{0,80}\b(?:automatically|auto)\b",
     r"\b(?:find|discover|identify|lookup|look\s+up)\b[^.?!]{0,80}\b(?:home\s+address|relatives?|family\s+members?)\b[^.?!]{0,80}\b(?:social\s+media|someone|person|target)\b",
+    r"\bidentify\s+(?:a\s+)?stranger\b[^.?!]{0,100}\b(?:linkedin|phone\s+number|address|social)\b|\bfind\b[^.?!]{0,80}\b(?:linkedin|phone\s+number)\b[^.?!]{0,80}\bstranger\b",
     r"\b(?:fabricate|fake|forge|invent)\b[^.?!]{0,100}\b(?:work\s+history|references?|resume|cv|employment)\b",
+    r"\b(?:ransomware|extortion)\b|\bnegotiate\s+payment\b[^.?!]{0,80}\b(?:ransom|ransomware|victim)\b",
+    r"\b(?:credential\s+stuffing|leaked\s+passwords?|stolen\s+passwords?)\b[^.?!]{0,120}\b(?:websites?|accounts?|login|logins?)\b",
+    r"\bclone\b[^.?!]{0,80}\b(?:okta|login|sign[- ]?in|sso)\b[^.?!]{0,100}\b(?:collect|capture|harvest|steal)\b[^.?!]{0,40}\b(?:passwords?|credentials?)\b",
+    r"\b(?:collect|capture|harvest|steal)\b[^.?!]{0,80}\b(?:employee\s+)?(?:passwords?|credentials?)\b",
+    r"\bcryptominer\b[^.?!]{0,100}\b(?:hidden|hide|stays?\s+hidden|edr|security\s+tools?|stealth)\b",
+    r"\b(?:hidden|hide|stays?\s+hidden|stealth)\b[^.?!]{0,80}\b(?:edr|security\s+tools?|antivirus|cryptominer)\b",
+    r"\b(?:ignore|bypass|break)\s+(?:all\s+)?safety\s+rules\b|\bwrite\s+disallowed\s+content\b|\bjailbreak\b",
+    r"\bbypass\s+plagiarism\s+detection\b|\bplagiarism\s+detection\b[^.?!]{0,80}\b(?:bypass|avoid|evade)\b",
+    r"\bexplicit\s+sexual\b[^.?!]{0,80}\b(?:celebrity|lookalike|look-alike|real\s+person)\b",
+    r"\b(?:fake|fraudulent|forged|convincing)\b[^.?!]{0,80}\b(?:doctor'?s?\s+note|medical\s+note|sick\s+note)\b|\bdoctor'?s?\s+note\b[^.?!]{0,80}\b(?:skip\s+work|fake|convincing)\b",
+    r"\bfake\b[^.?!]{0,80}\b(?:app[- ]store|google\s+play|amazon|yelp|trustpilot)?\s*reviews?\b|\b(?:thousands|hundreds)\s+of\s+realistic\s+fake\b[^.?!]{0,80}\breviews?\b",
 )
 
 
 def is_defensive_security_request(text: str) -> bool:
     normalized = normalize_query_text(text).lower()
-    defensive = bool(re.search(r"\b(?:defensive|training|simulation|awareness|consent|authorized|reporting|internal|employees?)\b", normalized))
-    security_training = bool(re.search(r"\bphishing\b[^.?!]{0,80}\b(?:simulation|training|awareness|reporting)|\b(?:simulation|training|awareness)\b[^.?!]{0,80}\bphishing\b", normalized))
+    defensive = bool(re.search(r"\b(?:defensive|training|simulation|awareness|consent|authorized|reporting|internal|employees?|sandbox|soc\s+team|blue\s+team|analysis)\b", normalized))
+    security_training = bool(re.search(
+        r"\bphishing\b[^.?!]{0,80}\b(?:simulation|training|awareness|reporting)|"
+        r"\b(?:simulation|training|awareness)\b[^.?!]{0,80}\bphishing\b|"
+        r"\bmalware\s+analysis\b[^.?!]{0,100}\b(?:sandbox|defensive|soc|blue\s+team|own)\b",
+        normalized,
+    ))
     return defensive and security_training
 
 
@@ -1013,9 +1040,53 @@ def is_unsafe_tool_request(text: str) -> bool:
 
 def unsafe_request_response() -> str:
     return (
-        "I cannot help find tools for phishing, malware, exploitation, doxing, fraud, impersonation, scams, or deceptive deepfakes. "
+        "I cannot help find tools for phishing, malware abuse, exploitation, credential abuse, doxing, fraud, impersonation, scams, sexual deepfakes, or deceptive deepfakes. "
         "I can help with defensive security training, consent-based voice work, or clearly disclosed synthetic media instead."
     )
+
+
+def is_high_stakes_guarantee_request(text: str) -> bool:
+    normalized = normalize_query_text(text).lower()
+    if is_guaranteed_financial_profit_request(normalized):
+        return True
+    if re.search(r"\b(?:contract|legal|lawyer|clause|agreement|lawsuit|filings?|attorney)\b", normalized) and re.search(
+        r"\b(?:guarantee|guarantees|binding|legally\s+enforceable|without\s+(?:an?\s+)?(?:lawyer|attorney)|win\s+my\s+lawsuit|not\s+legal\s+advice)\b",
+        normalized,
+    ) and re.search(r"\b(?:guarantee|guarantees|without\s+(?:an?\s+)?(?:lawyer|attorney)|win\s+my\s+lawsuit)\b", normalized):
+        return True
+    if re.search(r"\b(?:doctor|diagnos(?:e|is)|chest\s+pain|er|emergency\s+room|skip\s+the\s+er|mole|cancer|ignore\s+it)\b", normalized) and re.search(
+        r"\b(?:diagnos(?:e|is)|chest\s+pain|skip\s+the\s+er|emergency|cancer|ignore\s+it)\b",
+        normalized,
+    ):
+        return True
+    if re.search(r"\b(?:tax|audit|irs)\b", normalized) and re.search(
+        r"\b(?:guarantee|guarantees|not\s+be\s+audited|aggressive\s+loopholes?|avoid\s+audit)\b",
+        normalized,
+    ):
+        return True
+    if re.search(r"\b(?:loan|credit|mortgage|financ(?:e|ial))\b", normalized) and re.search(
+        r"\b(?:guarantee|guarantees|guaranteed|approval|no\s+credit\s+checks?)\b",
+        normalized,
+    ):
+        return True
+    if re.search(r"\b(?:suicidal|suicide|self[- ]harm|harm\s+myself|kill\s+myself)\b", normalized):
+        return True
+    return False
+
+
+def high_stakes_guard_response(text: str) -> str:
+    normalized = normalize_query_text(text).lower()
+    if re.search(r"\b(?:suicidal|suicide|self[- ]harm|harm\s+myself|kill\s+myself)\b", normalized):
+        return "I cannot recommend a chatbot for someone having suicidal thoughts tonight. If there is immediate danger, call local emergency services now. In the U.S. or Canada, call or text 988 for crisis support."
+    if re.search(r"\b(?:doctor|diagnos|chest\s+pain|skip\s+the\s+er|emergency|mole|cancer|ignore\s+it)\b", normalized):
+        return "I cannot help choose a tool to diagnose symptoms, rule out cancer, or decide whether to ignore medical care. Contact a clinician or local urgent/emergency services for medical concerns."
+    if re.search(r"\b(?:contract|legal|lawyer|attorney|lawsuit|legally\s+enforceable)\b", normalized):
+        return "I cannot recommend a tool that guarantees legal enforceability or replaces a lawyer. I can help find legal research or contract-review tools for drafting support with attorney review."
+    if re.search(r"\b(?:tax|audit|irs)\b", normalized):
+        return "I cannot recommend tools that guarantee no audit or seek aggressive loopholes. I can help find tax-prep or bookkeeping tools for ordinary compliance workflows."
+    if re.search(r"\b(?:loan|credit|mortgage)\b", normalized):
+        return "I cannot recommend tools that guarantee loan approval or bypass credit checks. I can help find budgeting, credit education, or document-prep tools that do not make guarantees."
+    return financial_profit_guard_message()
 
 
 def is_non_search_message(text: str) -> bool:
@@ -1391,10 +1462,20 @@ def query_terms(text: str) -> list[str]:
         expanded += " legal contract contracts clause clauses indemnity agreement review compliance lawyer"
     if is_healthcare_notes_query(normalized):
         expanded += " healthcare medical clinical patient doctor hipaa visit notes transcription zero retention privacy"
+    if is_security_training_query(normalized):
+        expanded += " cybersecurity security awareness phishing simulation dmarc email security malware analysis sandbox soc training reporting"
     if is_private_document_chat_query(normalized):
         expanded += " local open-source chatbot personal assistant private documents pdf document chat offline rag knowledge base"
+    if is_support_chatbot_query(normalized):
+        expanded += " customer support chatbot website chat helpdesk self-hosted on-premise conversational assistant"
+    if is_local_chatbot_ui_query(normalized):
+        expanded += " open-source local chatbot ui self-hosted web ui not saas not openai wrapper"
     if is_invoice_workflow_query(normalized):
         expanded += " no-code automation workflow invoices email attachments google drive ocr accounting quickbooks"
+    if is_general_workflow_query(normalized):
+        expanded += " no-code low-code workflow automation typeform hubspot slack crm lead enrichment zapier make"
+    if is_privacy_compliance_query(normalized):
+        expanded += " privacy compliance dpa data deletion opt-out training gdpr soc2 iso27001 data retention security controls"
     if is_child_education_query(normalized):
         expanded += " education tutor students children school classroom learning privacy safe no ads"
     words = re.findall(r"[a-z0-9]+", expanded)
@@ -1491,6 +1572,27 @@ def is_healthcare_notes_tool(meta: dict[str, Any]) -> bool:
     return has_healthcare and (has_notes or privacy_ok)
 
 
+def is_security_training_query(q: str) -> bool:
+    normalized = q.lower()
+    return bool(re.search(
+        r"\b(?:phishing\s+simulation|security\s+(?:awareness|training)|defensive\s+phishing|"
+        r"malware\s+analysis|soc\s+team|blue\s+team|security\s+sandbox|dmarc|email\s+security)\b",
+        normalized,
+    ))
+
+
+def is_security_training_tool(meta: dict[str, Any]) -> bool:
+    blob = metadata_blob(meta)
+    categories = str(meta.get("Categories", "")).lower()
+    if re.search(r"\b(?:3d|health|stock|finance|image|video|music|dating)\b", categories):
+        return False
+    return bool(re.search(
+        r"\b(?:security|cybersecurity|phishing|dmarc|spf|dkim|email\s+authentication|"
+        r"awareness|training|sandbox|malware\s+analysis|soc|threat|incident)\b",
+        blob,
+    ))
+
+
 def is_private_document_chat_query(q: str) -> bool:
     normalized = q.lower()
     return bool(
@@ -1502,11 +1604,52 @@ def is_private_document_chat_query(q: str) -> bool:
 def is_private_document_chat_tool(meta: dict[str, Any]) -> bool:
     blob = metadata_blob(meta)
     categories = str(meta.get("Categories", "")).lower()
-    doc_or_chat = bool(re.search(r"\b(?:chatbot|chatbots|assistant|document|documents|pdf|knowledge|rag|local\s+chat)\b", blob))
+    doc_signal = bool(re.search(r"\b(?:document|documents|pdf|files?|knowledge\s+base|rag|retrieval|local\s+files?)\b", blob))
+    chat_signal = bool(re.search(r"\b(?:chatbot|chatbots|assistant|chat|local\s+chat)\b", blob))
     private_signal = bool(PRIVACY_FIRST_SIGNAL.search(blob) or is_local_only_tool(meta) or is_open_source_tool(meta))
-    if re.search(r"\b(?:developer|coding|code\s+assistant|api\s+platform|model\s+hosting)\b", categories):
+    if re.search(r"\b(?:developer|coding|code\s+assistant|api\s+platform|model\s+hosting|workflows?)\b", categories):
         return False
-    return doc_or_chat and private_signal
+    api_only_negative = bool(re.search(r"\b(?:api[- ]only|model\s+hosting|hosted\s+llm)\b", blob))
+    rejects_api_only = bool(re.search(r"\b(?:not|avoid|avoids|without)\b[^.?!]{0,40}\b(?:api[- ]only|model\s+hosting|hosted\s+llm)\b", blob))
+    if api_only_negative and not rejects_api_only:
+        return False
+    return doc_signal and chat_signal and private_signal
+
+
+def is_support_chatbot_query(q: str) -> bool:
+    normalized = q.lower()
+    return bool(re.search(r"\b(?:support|customer\s+support|helpdesk|docs\s+site|website)\b", normalized) and is_chatbot_query(normalized))
+
+
+def is_support_chatbot_tool(meta: dict[str, Any]) -> bool:
+    blob = metadata_blob(meta)
+    categories = str(meta.get("Categories", "")).lower()
+    if re.search(r"\b(?:code\s+assistant|coding|developer|model\s+hosting|api\s+platform|spreadsheets?)\b", categories):
+        return False
+    has_chatbot = bool(re.search(r"\b(?:chatbot|chatbots|conversational|website\s+chat|chat\s+widget)\b", blob))
+    has_support = bool(re.search(r"\b(?:customer\s+support|support|helpdesk|docs\s+site|knowledge\s+base)\b", blob))
+    return has_chatbot and has_support
+
+
+def is_local_chatbot_ui_query(q: str) -> bool:
+    normalized = q.lower()
+    return bool(
+        is_chatbot_query(normalized)
+        and re.search(r"\b(?:open[- ]source|oss|local|locally|self[- ]hosted|chatbot\s+ui|ui)\b", normalized)
+        and re.search(r"\b(?:not\s+just\s+(?:openai\s+)?wrapper|not\s+saas|runs?\s+locally|local|self[- ]hosted|open[- ]source)\b", normalized)
+    )
+
+
+def is_local_chatbot_ui_tool(meta: dict[str, Any]) -> bool:
+    blob = metadata_blob(meta)
+    categories = str(meta.get("Categories", "")).lower()
+    if re.search(r"\b(?:code\s+assistant|coding|developer|api\s+platform|model\s+hosting)\b", categories):
+        return False
+    has_chat_ui = bool(re.search(r"\b(?:chatbot|chatbots|chat\s+ui|ui|web\s+ui|assistant)\b", blob))
+    local_or_open = bool(is_open_source_tool(meta) or is_local_only_tool(meta) or is_self_hosted_tool(meta))
+    wrapper_only = bool(re.search(r"\b(?:openai\s+wrapper|api[- ]only|hosted\s+llm|model\s+hosting)\b", blob))
+    rejects_wrapper = bool(re.search(r"\b(?:not|avoid|avoids|without)\b[^.?!]{0,50}\b(?:openai\s+wrapper|api[- ]only|hosted\s+llm|model\s+hosting|saas)\b", blob))
+    return has_chat_ui and local_or_open and (not wrapper_only or rejects_wrapper)
 
 
 def is_invoice_workflow_query(q: str) -> bool:
@@ -1516,17 +1659,67 @@ def is_invoice_workflow_query(q: str) -> bool:
     ))
 
 
+def is_general_workflow_query(q: str) -> bool:
+    normalized = q.lower()
+    workflow_specific = bool(re.search(r"\b(?:no[- ]code|low[- ]code|typeform|hubspot|slack|zapier|make\.com|leads?\s+to|crm)\b", normalized))
+    if is_invoice_workflow_query(normalized) or (is_coding_query(normalized) and not workflow_specific):
+        return False
+    return bool(re.search(
+        r"\b(?:no[- ]code|low[- ]code|workflow|automation|zapier|make\.com|typeform|hubspot|slack\s+alert|"
+        r"enrich\s+company|leads?\s+to\s+hubspot)\b",
+        normalized,
+    ))
+
+
+def is_general_workflow_tool(meta: dict[str, Any]) -> bool:
+    blob = metadata_blob(meta)
+    categories = str(meta.get("Categories", "")).lower()
+    if re.search(r"\b(?:code\s+assistant|coding|developer|image|video|music|logo)\b", categories):
+        return False
+    return bool(re.search(
+        r"\b(?:workflow|automation|low[- ]code|no[- ]code|zapier|make|hubspot|slack|typeform|crm|lead|enrich)\b",
+        blob,
+    ))
+
+
 def is_invoice_workflow_tool(meta: dict[str, Any]) -> bool:
     blob = metadata_blob(meta)
+    categories = str(meta.get("Categories", "")).lower()
+    concrete_accounting = bool(re.search(r"\b(?:ocr|invoice|invoices|quickbooks|gmail|google\s+drive|accounting|bookkeeping|receipt)\b", blob))
+    if re.search(r"\b(?:code\s+assistant|coding|developer)\b", categories) and not concrete_accounting:
+        return False
     return bool(re.search(
         r"\b(?:automation|workflow|no[- ]code|low[- ]code|zapier|make|ocr|invoice|quickbooks|gmail|google\s+drive|accounting|bookkeeping)\b",
         blob,
     ))
 
 
+def is_privacy_compliance_query(q: str) -> bool:
+    normalized = q.lower()
+    return bool(re.search(
+        r"\b(?:published\s+dpa|dpa|data\s+processing\s+agreement|data\s+deletion|delete\s+all\s+data|"
+        r"opt[- ]out\s+from\s+training|opt\s+out\s+of\s+training|no\s+model\s+training|no\s+training\s+on\s+(?:my|our)?\s*data|"
+        r"data\s+retention|gdpr|soc\s*2|iso\s*27001)\b",
+        normalized,
+    ))
+
+
+def is_privacy_compliance_tool(meta: dict[str, Any]) -> bool:
+    blob = metadata_blob(meta)
+    categories = str(meta.get("Categories", "")).lower()
+    if re.search(r"\b(?:legal)\b", categories) and not re.search(r"\b(?:privacy|gdpr|dpa|data|soc\s*2|iso\s*27001|retention|training)\b", blob):
+        return False
+    return bool(PRIVACY_FIRST_SIGNAL.search(blob) or re.search(
+        r"\b(?:dpa|data\s+processing\s+agreement|data\s+deletion|delete\s+data|opt[- ]out|no\s+model\s+training|"
+        r"no\s+training|data\s+retention|gdpr|soc\s*2|iso\s*27001|privacy|compliance)\b",
+        blob,
+    ))
+
+
 def is_child_education_query(q: str) -> bool:
     return bool(re.search(
-        r"\b(?:tutor|student|students|child|children|kid|kids|school|classroom|10[- ]year[- ]old|ten[- ]year[- ]old)\b",
+        r"\b(?:tutor|student|students|child|children|kid|kids|school|classroom|companion|parental\s+controls?|coppa|"
+        r"\d+[- ]year[- ]old|ten[- ]year[- ]old|fourth\s+graders?|4th\s+graders?)\b",
         q.lower(),
     ))
 
@@ -1534,8 +1727,8 @@ def is_child_education_query(q: str) -> bool:
 def is_child_education_tool(meta: dict[str, Any]) -> bool:
     blob = metadata_blob(meta)
     categories = str(meta.get("Categories", "")).lower()
-    education = bool(re.search(r"\b(?:education|educational|tutor|tutoring|student|students|school|classroom|learning|kids|children)\b", blob))
-    blocked = bool(re.search(r"\b(?:finance|stock|trading|translator|translation|dating|sales|marketing)\b", categories))
+    education = bool(re.search(r"\b(?:education|educational|tutor|tutoring|student|students|school|classroom|learning|kids|children|teacher|teachers|coppa|parental)\b", blob))
+    blocked = bool(re.search(r"\b(?:finance|stock|trading|translator|translation|dating|sales|marketing|customer\s+support)\b", categories))
     return education and not blocked
 
 
@@ -1808,7 +2001,7 @@ def referenced_similar_tool(text: str) -> str | None:
 
 _NEGATED_TOOL_PATTERN = (
     r"\b(?:but\s+not|(?:absolutely|definitely|please|really|just)\s+not|not|except(?:\s+for)?|excluding|other\s+than|besides|apart\s+from)\s+"
-    r"([a-z0-9][a-z0-9 .&'+/-]{1,60})"
+    r"([a-z0-9][a-z0-9 .,&'+/-]{1,140})"
 )
 
 
@@ -1945,6 +2138,13 @@ _CRITERION_PATTERNS = (
     r"\b(?:which\s+(?:one|tool|option)|the)\s+(?:is\s+)?most\s+secure\b",
     r"\b(?:which\s+(?:one|tool|option)|which\s+of\s+(?:these|those|them)|the)\s+(?:is\s+)?best\s+for\s+(?:privacy|security)\b",
     r"\b(?:which\s+(?:one|tool|option)|which\s+of\s+(?:these|those|them)|the)\b[^.?!]{0,80}\b(?:phone\s+home|cloudy|data\s+leav|no\s+cloud|without\s+(?:the\s+)?cloud)\b",
+    r"\b(?:which\s+(?:one|tool|option)|which\s+of\s+(?:these|those|them)|the)\b[^.?!]{0,100}\b(?:baa|business\s+associate|soc\s*2|gdpr|hipaa|coppa)\b",
+    r"\b(?:do|does)\s+(?:any|either|they|these|those)\b[^.?!]{0,100}\b(?:baa|business\s+associate|soc\s*2|gdpr|hipaa|coppa)\b",
+    r"\b(?:which\s+(?:one|tool|option)|which\s+of\s+(?:these|those|them)|the)\b[^.?!]{0,100}\b(?:stores?\s+training\s+data|training\s+data|train(?:s|ing)?\s+on\s+(?:my|our|your)?\s*(?:data|code|content))\b",
+    r"\b(?:which\s+(?:ones?|tools?|options?)|which\s+of\s+(?:these|those|them)|do\s+(?:any|these|they))\b[^.?!]{0,100}\b(?:opt[- ]out|training\s+by\s+default|stores?\s+training\s+data|training\s+data|train(?:s|ing)?\s+on\s+(?:my|our|your)?\s*(?:data|code|content))\b",
+    r"\b(?:which\s+(?:one|tool|option)|which\s+of\s+(?:these|those|them)|the)\b[^.?!]{0,100}\b(?:private\s+repos?|safest|no\s+training\s+on\s+(?:my|our)?\s*code)\b",
+    r"\b(?:only\s+)?permissive\s+licen[sc]e\b|\bnot\s+agpl\b|\bmust\s+run\s+in\s+vs\s*code\b|\bworks?\s+in\s+vs\s*code\b|\bshow\s+only\b[^.?!]{0,50}\bvs\s*code\b",
+    r"\bwhich\s+(?:ones?|tools?|options?|are)\b[^.?!]{0,80}\b(?:not\s+saas|self[- ]hosted|on[- ]prem|local)\b",
     r"\b(?:which\s+(?:one|tool|option)|the)\s+(?:is\s+)?beginner\s*[-]?friendly\b",
     r"\b(?:which\s+(?:one|tool|option)|the)\s+(?:is\s+)?easiest\b",
     r"\b(?:show\s+me\s+the\s+|give\s+me\s+the\s+)free\s+(?:one|tool|option)\b",
@@ -2017,6 +2217,20 @@ def is_criterion_pick_query(text: str) -> bool:
 def criterion_from_query(text: str) -> str:
     """Return the criterion the user is asking for (cheapest, free, paid, etc.)."""
     normalized = normalize_query_text(text).lower().strip()
+    if re.search(r"\b(?:baa|business\s+associate)\b", normalized):
+        return "baa"
+    if re.search(r"\b(?:soc\s*2|gdpr|hipaa|coppa)\b", normalized):
+        return "compliance"
+    if re.search(r"\b(?:opt[- ]out|stores?\s+training\s+data|training\s+data|training\s+by\s+default|train(?:s|ing)?\s+on\s+(?:my|our|your)?\s*(?:data|code|content))\b", normalized):
+        return "data_retention"
+    if re.search(r"\b(?:permissive\s+licen[sc]e|not\s+agpl|mit\s+licen[sc]e|apache\s+licen[sc]e)\b", normalized):
+        return "license"
+    if re.search(r"\b(?:vs\s*code|vscode|visual\s+studio\s+code)\b", normalized):
+        return "platform"
+    if re.search(r"\b(?:not\s+saas|self[- ]hosted|on[- ]prem|local)\b", normalized):
+        return "local_status"
+    if re.search(r"\b(?:private\s+repos?|safest|no\s+training\s+on\s+(?:my|our)?\s*code)\b", normalized):
+        return "repo_privacy"
     if requires_strict_free(normalized) or re.search(r"\b(?:not\s+just\s+a\s+trial|no\s+watermark|no\s+credit\s+card)\b", normalized):
         return "strict_free"
     if re.search(r"\b(?:cheapest|least\s+expensive|best\s+value)\b", normalized):
@@ -2078,6 +2292,15 @@ def _matches_tool_name(meta: dict[str, Any], name: str) -> bool:
     return False
 
 
+def is_excluded_tool(meta: dict[str, Any], excluded_names: set[str]) -> bool:
+    if not excluded_names:
+        return False
+    tool_name = str(meta.get("Name", "")).strip().lower()
+    if tool_name in excluded_names:
+        return True
+    return any(_matches_tool_name(meta, name) for name in excluded_names if name)
+
+
 def _sort_hits_by_criterion(hits: list[dict[str, Any]], criterion: str) -> list[dict[str, Any]]:
     """Return a copy of hits sorted by the requested criterion."""
     if criterion == "cheapest":
@@ -2095,6 +2318,8 @@ def _sort_hits_by_criterion(hits: list[dict[str, Any]], criterion: str) -> list[
         return paid or hits
     if criterion == "privacy":
         return sorted(hits, key=lambda h: _privacy_sort_key(h.get("meta") or {}))
+    if criterion in {"baa", "compliance", "data_retention", "license", "platform", "repo_privacy", "local_status"}:
+        return sorted(hits, key=lambda h: _evidence_sort_key(h.get("meta") or {}, criterion))
     # For beginner / best, keep original order.
     return list(hits)
 
@@ -2110,6 +2335,25 @@ def _privacy_sort_key(meta: dict[str, Any]) -> tuple[int, int]:
     return (3, 0)
 
 
+def _evidence_sort_key(meta: dict[str, Any], criterion: str) -> tuple[int, int]:
+    blob = metadata_blob(meta)
+    patterns = {
+        "baa": r"\b(?:baa|business\s+associate)\b",
+        "compliance": r"\b(?:soc\s*2|gdpr|hipaa|coppa|iso\s*27001)\b",
+        "data_retention": r"\b(?:no\s+(?:data\s+)?(?:retention|training)|zero[- ](?:data|retention)|does\s+not\s+(?:store|train|retain)|opt[- ]out|never\s+(?:stores?|trains?|retains?))\b",
+        "license": r"\b(?:mit|apache|bsd|mpl)\s+licen[sc]e(?:d)?\b|\bpermissive\s+licen[sc]e\b",
+        "platform": r"\b(?:vs\s*code|vscode|visual\s+studio\s+code|ide)\b",
+        "repo_privacy": r"\b(?:private\s+repos?|no\s+training\s+on\s+(?:your|my|our)?\s*code|does\s+not\s+train|self[- ]hosted|on[- ]prem|local|soc\s*2|gdpr)\b",
+        "local_status": r"\b(?:self[- ]hosted|on[- ]prem|local|not\s+saas|no\s+saas|runs?\s+locally|docker|kubernetes)\b",
+    }
+    pattern = patterns.get(criterion, "")
+    if pattern and re.search(pattern, blob):
+        return (0, 0)
+    if criterion in {"repo_privacy", "data_retention"} and PRIVACY_FIRST_SIGNAL.search(blob):
+        return (1, 0)
+    return (2, 0)
+
+
 def privacy_evidence_message(meta: dict[str, Any]) -> str:
     blob = metadata_blob(meta)
     if is_strict_no_cloud_tool(meta):
@@ -2121,6 +2365,55 @@ def privacy_evidence_message(meta: dict[str, Any]) -> str:
     if PRIVACY_FIRST_SIGNAL.search(blob):
         return "it has stronger privacy/compliance evidence than the other visible options."
     return "none of the visible tools has strong local-only privacy evidence, so verify provider retention and data controls first."
+
+
+def criterion_status_message(hits: list[dict[str, Any]], criterion: str, query: str) -> str:
+    if not hits:
+        return "I need the current tool cards before I can check that."
+    labels = {
+        "baa": "BAA",
+        "compliance": "SOC 2/GDPR/HIPAA/COPPA",
+        "data_retention": "training-data or retention controls",
+        "license": "a permissive license",
+        "platform": "VS Code support",
+        "repo_privacy": "private-repository safety",
+        "local_status": "non-SaaS, self-hosted, on-premise, or local deployment",
+    }
+    patterns = {
+        "baa": r"\b(?:baa|business\s+associate)\b",
+        "compliance": r"\b(?:soc\s*2|gdpr|hipaa|coppa|iso\s*27001)\b",
+        "data_retention": r"\b(?:no\s+(?:data\s+)?(?:retention|training)|zero[- ](?:data|retention)|does\s+not\s+(?:store|train|retain)|opt[- ]out|never\s+(?:stores?|trains?|retains?))\b",
+        "license": r"\b(?:mit|apache|bsd|mpl)\s+licen[sc]e(?:d)?\b|\bpermissive\s+licen[sc]e\b",
+        "platform": r"\b(?:vs\s*code|vscode|visual\s+studio\s+code)\b",
+        "repo_privacy": r"\b(?:private\s+repos?|no\s+training\s+on\s+(?:your|my|our)?\s*code|does\s+not\s+train|self[- ]hosted|on[- ]prem|local|soc\s*2|gdpr)\b",
+        "local_status": r"\b(?:self[- ]hosted|on[- ]prem|local|not\s+saas|no\s+saas|runs?\s+locally|docker|kubernetes)\b",
+    }
+    label = labels.get(criterion, "that requirement")
+    pattern = patterns.get(criterion, "")
+    clear: list[str] = []
+    unclear: list[str] = []
+    negative: list[str] = []
+    for hit in hits[:3]:
+        meta = hit.get("meta") or {}
+        name = str(meta.get("Name", "This tool")).strip() or "This tool"
+        blob = metadata_blob(meta)
+        if criterion == "license" and re.search(r"\bagpl\b", blob) and re.search(r"\bnot\s+agpl\b", query.lower()):
+            negative.append(name)
+        elif pattern and re.search(pattern, blob):
+            clear.append(name)
+        elif criterion in {"data_retention", "repo_privacy"} and PRIVACY_FIRST_SIGNAL.search(blob):
+            unclear.append(f"{name} has some privacy evidence, but not this exact claim")
+        else:
+            unclear.append(name)
+    if clear:
+        message = f"{human_join(clear)} has catalogue evidence for {label}."
+    else:
+        message = f"I do not see clear catalogue evidence for {label} in the visible tools."
+    if negative:
+        message += f" {human_join(negative)} appears to conflict with that license constraint."
+    elif unclear:
+        message += f" Verify {human_join(unclear[:3])} on the provider page before relying on it."
+    return message
 
 
 def criterion_pick_message(hit: dict[str, Any], criterion: str, query: str) -> str:
@@ -2147,6 +2440,8 @@ def criterion_pick_message(hit: dict[str, Any], criterion: str, query: str) -> s
         return f"The most expensive-looking option from the shortlist is {name}. Verify current pricing on the provider page."
     if criterion == "privacy":
         return f"For privacy or security, I would look first at {name} because {privacy_evidence_message(meta)}"
+    if criterion in {"baa", "compliance", "data_retention", "license", "platform", "repo_privacy", "local_status"}:
+        return criterion_status_message([hit], criterion, query)
     if criterion == "beginner":
         return f"For ease of use, I would start with {name}. It looks like the simplest fit from the current shortlist."
     return recommendation_message([hit], query, MODE_ONE_BEST)
@@ -2255,13 +2550,16 @@ def fallback_tool_question_message(q: str, hits: list[dict[str, Any]], reason_qu
     question = normalize_query_text(q).lower()
     if is_compare_request(question):
         lines = []
+        privacy_compare = bool(re.search(r"\b(?:privacy|private|security|secure|risk|training\s+data|retention|stores?\s+data)\b", question)) and not re.search(r"\bpaid\s+upgrade\b", question)
         for hit in hits[:3]:
             meta = hit.get("meta") or {}
             name = str(meta.get("Name", "This tool")).strip() or "This tool"
             price = normalize_display_text(meta.get("Price", ""))
             tradeoff = normalize_display_text(hit.get("tradeoff") or build_tradeoff(meta))
             detail = complete_sentences(price, 120, max_sentences=1) if price else tradeoff
-            if re.search(r"\b(?:paid\s+upgrade|pricing|price|risk|trial|free)\b", question):
+            if privacy_compare:
+                detail = privacy_evidence_message(meta)
+            elif re.search(r"\b(?:paid\s+upgrade|pricing|price|trial|free)\b", question) and not re.search(r"\bnot\s+price\b", question):
                 if is_completely_free_tool(meta):
                     detail = "it looks free/open-source, but verify current limits."
                 elif is_free_tool(meta):
@@ -2361,16 +2659,41 @@ def off_topic_for_query(q: str, categories: str) -> bool:
         if category_tokens & blocked and not re.search(r"\b(health|medical|clinical|transcrib|summar|note)\b", text):
             return True
         return not bool(re.search(r"\b(health|medical|clinical|hipaa|patient|doctor|transcrib|summar|notetaker|note)\b", text))
+    if is_security_training_query(q):
+        blocked = {"3d", "health", "stock", "finance", "image", "video", "music", "dating"}
+        if category_tokens & blocked and not re.search(r"\b(security|cyber|email|training|phishing|dmarc|malware|soc)\b", text):
+            return True
+        return False
     if is_private_document_chat_query(q):
         blocked = {"coding", "developer", "code", "image", "video", "music", "marketing", "sales"}
         if category_tokens & blocked and not re.search(r"\b(chatbot|chatbots|assistant|document|pdf|knowledge|rag|private|local)\b", text):
             return True
-        return not is_private_document_chat_tool({"Categories": categories, "Description": categories, "Features": categories, "Price": ""})
+        return not bool(re.search(r"\b(chatbot|chatbots|assistant|document|pdf|knowledge|rag|personal)\b", text))
+    if is_support_chatbot_query(q):
+        blocked = {"coding", "developer", "code", "image", "video", "music", "marketing"}
+        if category_tokens & blocked and not re.search(r"\b(chatbot|chatbots|customer|support|helpdesk|workflow)\b", text):
+            return True
+        return not bool(re.search(r"\b(chatbot|chatbots|customer|support|helpdesk|workflow|assistant)\b", text))
+    if is_local_chatbot_ui_query(q):
+        blocked = {"coding", "developer", "code", "image", "video", "music", "marketing"}
+        if category_tokens & blocked and not re.search(r"\b(chatbot|chatbots|assistant|ui|web)\b", text):
+            return True
+        return not bool(re.search(r"\b(chatbot|chatbots|assistant|ui|web|personal)\b", text))
     if is_invoice_workflow_query(q):
         blocked = {"coding", "developer", "code", "image", "video", "music", "writing", "copywriting"}
         if category_tokens & blocked and not re.search(r"\b(automation|workflow|ocr|invoice|accounting|quickbooks|gmail|drive)\b", text):
             return True
         return not bool(re.search(r"\b(automation|workflow|no[- ]code|low[- ]code|ocr|invoice|accounting|quickbooks|gmail|drive)\b", text))
+    if is_general_workflow_query(q):
+        blocked = {"coding", "developer", "code", "image", "video", "music", "writing", "copywriting", "logo"}
+        if category_tokens & blocked and not re.search(r"\b(automation|workflow|no[- ]code|low[- ]code|hubspot|slack|crm)\b", text):
+            return True
+        return not bool(re.search(r"\b(automation|workflow|no[- ]code|low[- ]code|ai agents?|hubspot|slack|crm)\b", text))
+    if is_privacy_compliance_query(q):
+        blocked = {"image", "video", "music", "dating", "fitness"}
+        if category_tokens & blocked and not re.search(r"\b(privacy|security|compliance|gdpr|data)\b", text):
+            return True
+        return False
     if is_child_education_query(q):
         blocked = {"finance", "stock", "trading", "translator", "translation", "dating", "sales", "marketing", "image", "video", "music"}
         if category_tokens & blocked and not re.search(r"\b(education|tutor|student|school|learning|classroom)\b", text):
@@ -2803,11 +3126,26 @@ def keyword_scores(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[tupl
         elif is_legal_contract_query(q):
             if not is_legal_contract_tool(meta):
                 continue
+        elif is_security_training_query(q):
+            if not is_security_training_tool(meta):
+                continue
         elif is_private_document_chat_query(q):
             if not is_private_document_chat_tool(meta):
                 continue
+        elif is_support_chatbot_query(q):
+            if not is_support_chatbot_tool(meta):
+                continue
+        elif is_local_chatbot_ui_query(q):
+            if not is_local_chatbot_ui_tool(meta):
+                continue
         elif is_invoice_workflow_query(q):
             if not is_invoice_workflow_tool(meta):
+                continue
+        elif is_general_workflow_query(q):
+            if not is_general_workflow_tool(meta):
+                continue
+        elif is_privacy_compliance_query(q):
+            if not is_privacy_compliance_tool(meta):
                 continue
         elif is_child_education_query(q):
             if not is_child_education_tool(meta):
@@ -2865,6 +3203,47 @@ def keyword_search(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[dict
             "why": local_reason(q, meta_rows[idx]),
         }
         for score, idx in keyword_scores(q, k, meta_rows)
+    ]
+
+
+def matches_query_domain(q: str, meta: dict[str, Any]) -> bool:
+    if is_security_training_query(q):
+        return is_security_training_tool(meta)
+    if is_healthcare_notes_query(q):
+        return is_healthcare_notes_tool(meta)
+    if is_legal_contract_query(q):
+        return is_legal_contract_tool(meta)
+    if is_private_document_chat_query(q):
+        return is_private_document_chat_tool(meta)
+    if is_support_chatbot_query(q):
+        return is_support_chatbot_tool(meta)
+    if is_local_chatbot_ui_query(q):
+        return is_local_chatbot_ui_tool(meta)
+    if is_invoice_workflow_query(q):
+        return is_invoice_workflow_tool(meta)
+    if is_general_workflow_query(q):
+        return is_general_workflow_tool(meta)
+    if is_privacy_compliance_query(q):
+        return is_privacy_compliance_tool(meta)
+    if is_child_education_query(q):
+        return is_child_education_tool(meta)
+    if is_note_or_transcription_query(q):
+        return is_note_or_transcription_tool(meta)
+    return True
+
+
+def filter_hits_for_query_domain(hits: list[dict[str, Any]], q: str) -> list[dict[str, Any]]:
+    return [hit for hit in hits if matches_query_domain(q, hit.get("meta") or {})]
+
+
+def filter_candidates_for_query_domain(
+    candidates: list[dict[str, Any]],
+    q: str,
+    meta_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        candidate for candidate in candidates
+        if matches_query_domain(q, meta_rows[int(candidate["id"])])
     ]
 
 
@@ -3113,6 +3492,8 @@ class RecommendationService:
         q = expand_common_language_terms(q)
         if is_unsafe_tool_request(q):
             return {"hits": []}
+        if is_high_stakes_guarantee_request(q):
+            return {"hits": []}
         if is_feedback_only_query(q):
             return {"hits": []}
         free_only = requires_free_only(q)
@@ -3161,6 +3542,9 @@ class RecommendationService:
         if is_unsafe_tool_request(q):
             self.metrics.increment("recommend_unsafe_query_blocked")
             return {"hits": [], "message": unsafe_request_response()}
+        if is_high_stakes_guarantee_request(q):
+            self.metrics.increment("recommend_high_stakes_query_blocked")
+            return {"hits": [], "message": high_stakes_guard_response(q)}
         if not pre_routed and is_feedback_only_query(q):
             self.metrics.increment("recommend_feedback_query_blocked")
             return {
@@ -3208,6 +3592,11 @@ class RecommendationService:
         # If the user pivots ("Actually I only need ..."), follow the latest intent.
         q = focus_latest_intent(q)
         q = expand_common_language_terms(q)
+        if is_high_stakes_guarantee_request(q):
+            message = high_stakes_guard_response(q)
+            self.conversations.append(conversation_id, "user", q)
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"hits": [], "message": message}
         if has_cloud_local_conflict(q):
             message = cloud_local_conflict_message()
             self.conversations.append(conversation_id, "user", q)
@@ -3360,6 +3749,9 @@ class RecommendationService:
         candidate_exclusions.extend(negated_tools(retrieval_query))
         candidate_exclusions.extend(negated_tools(q))
         for name_str in candidate_exclusions:
+            cleaned_name = normalize_query_text(name_str).strip().lower()
+            if cleaned_name:
+                exclude_ref_names.add(cleaned_name)
             ref_meta = self._find_tool_by_name(name_str)
             ref_name = str((ref_meta or {}).get("Name", "")).strip().lower()
             if ref_name:
@@ -3380,6 +3772,7 @@ class RecommendationService:
                 "message": "Tell me the task, budget, or must-have integrations and I will search for better matches.",
             }
         free_only = requires_free_only(retrieval_query)
+        paid_only = requires_paid_only(retrieval_query) or bool(filter_value(filters, "paid_only", False) or filter_value(filters, "paidOnly", False))
         open_source_only = requires_open_source(retrieval_query)
         strict_open_source = requires_strict_open_source(retrieval_query) or bool(filter_value(filters, "strict_open_source", False) or filter_value(filters, "strictOpenSource", False))
         self_hosted_required = requires_self_hosted(retrieval_query)
@@ -3387,6 +3780,11 @@ class RecommendationService:
         no_cloud_required = requires_no_cloud_data(retrieval_query)
         if free_only and filters is None:
             filters = {"budget": "free"}
+        if paid_only:
+            filter_dict = filters.model_dump() if hasattr(filters, "model_dump") else dict(filters or {})
+            filter_dict["budget"] = "paid"
+            filter_dict["paid_only"] = True
+            filters = filter_dict
         if open_source_only:
             filter_dict = filters.model_dump() if hasattr(filters, "model_dump") else dict(filters or {})
             filter_dict["open_source"] = True
@@ -3409,6 +3807,14 @@ class RecommendationService:
         # "show cheaper alternatives" / "more private" / "local-only" must apply real
         # budget / privacy filters, not just reword the search.
         retrieval_lower = retrieval_query.lower()
+        coding_intent = is_coding_query(retrieval_query) and not (
+            is_private_document_chat_query(retrieval_query)
+            or is_local_chatbot_ui_query(retrieval_query)
+            or is_invoice_workflow_query(retrieval_query)
+            or is_support_chatbot_query(retrieval_query)
+            or is_general_workflow_query(retrieval_query)
+            or is_privacy_compliance_query(retrieval_query)
+        )
         strict_free = requires_strict_free(retrieval_query)
         strict_free = strict_free or bool(filter_value(filters, "strict_free", False) or filter_value(filters, "strictFree", False))
         wants_cheaper = bool(re.search(
@@ -3466,12 +3872,21 @@ class RecommendationService:
                 or open_source_only
                 or strict_open_source
                 or strict_free
+                or paid_only
                 or privacy_required
-                or is_coding_query(retrieval_query)
+                or coding_intent
+                or is_security_training_query(retrieval_query)
+                or is_private_document_chat_query(retrieval_query)
+                or is_support_chatbot_query(retrieval_query)
+                or is_local_chatbot_ui_query(retrieval_query)
+                or is_invoice_workflow_query(retrieval_query)
+                or is_general_workflow_query(retrieval_query)
+                or is_privacy_compliance_query(retrieval_query)
+                or is_child_education_query(retrieval_query)
             )
             keyword_limit = len(self.store.meta) if broad_filter_required else min(retrieve_k, len(self.store.meta))
             hits = keyword_search(retrieval_query, keyword_limit, self.store.meta)
-            if is_coding_query(retrieval_query):
+            if coding_intent:
                 seen_names = {str((hit.get("meta") or {}).get("Name", "")).strip().lower() for hit in hits}
                 for score, idx in coding_rescue_scores(retrieval_query, retrieve_k, self.store.meta):
                     meta = self.store.meta[idx]
@@ -3483,8 +3898,9 @@ class RecommendationService:
                             "why": local_reason(retrieval_query, meta),
                         })
                         seen_names.add(name)
+            hits = filter_hits_for_query_domain(hits, retrieval_query)
             filtered_hits = apply_decision_filters(hits, filters, self.store.meta)
-            hard_filter_required = local_only_required or no_cloud_required or self_hosted_required or open_source_only or strict_open_source or strict_free or privacy_required
+            hard_filter_required = local_only_required or no_cloud_required or self_hosted_required or open_source_only or strict_open_source or strict_free or paid_only or privacy_required
             if hard_filter_required and not filtered_hits:
                 if local_only_required:
                     return {"hits": [], "message": local_only_no_match_message()}
@@ -3512,25 +3928,27 @@ class RecommendationService:
                             "freemium-with-paid tiers) for that."
                         ),
                     }
+                if paid_only:
+                    return {
+                        "hits": [],
+                        "message": "I could not find a clearly paid-only match that excludes free trials or freemium tiers for that.",
+                    }
             hits = filtered_hits or hits
             if exclude_ref_names:
                 hits = [
                     hit for hit in hits
-                    if str((hit.get("meta") or {}).get("Name", "")).strip().lower() not in exclude_ref_names
+                    if not is_excluded_tool(hit.get("meta") or {}, exclude_ref_names)
                 ]
-            if is_coding_query(retrieval_query):
+            if coding_intent:
                 hits = prioritize_coding_hits(hits)
-            if is_legal_contract_query(retrieval_query):
-                hits = [
-                    hit for hit in hits
-                    if is_legal_contract_tool(hit.get("meta") or {})
-                ]
-            if is_healthcare_notes_query(retrieval_query):
-                hits = [
-                    hit for hit in hits
-                    if is_healthcare_notes_tool(hit.get("meta") or {})
-                ]
             hits = hits[:effective_final_k]
+            if paid_only:
+                hits = [hit for hit in hits if is_paid_tool(hit.get("meta") or {}) and not is_free_tool(hit.get("meta") or {})]
+                if not hits:
+                    return {
+                        "hits": [],
+                        "message": "I could not find a clearly paid-only match that excludes free trials or freemium tiers for that.",
+                    }
             if strict_free:
                 hits = [hit for hit in hits if is_completely_free_tool(hit.get("meta") or {})]
                 if not hits:
@@ -3541,11 +3959,6 @@ class RecommendationService:
                             "freemium-with-paid tiers) for that."
                         ),
                     }
-            if is_note_or_transcription_query(retrieval_query):
-                hits = [
-                    hit for hit in hits
-                    if is_note_or_transcription_tool(hit.get("meta") or {})
-                ]
             hits = [enrich_hit(hit, q) for hit in hits]
             self.recommend_cache.set(cache_key, hits)
             if conversation_id:
@@ -3565,7 +3978,7 @@ class RecommendationService:
             ids[0].tolist(),
             retrieve_k,
         )
-        if is_coding_query(retrieval_query):
+        if coding_intent:
             by_id = {int(candidate["id"]): candidate for candidate in candidates}
             for score, id_ in coding_rescue_scores(retrieval_query, retrieve_k, self.store.meta):
                 candidate = by_id.get(id_)
@@ -3579,35 +3992,29 @@ class RecommendationService:
             candidates = list(by_id.values())
         if (
             (is_writing_query(retrieval_query) and (open_source_only or local_only_required or self_hosted_required))
-            or is_coding_query(retrieval_query)
+            or coding_intent
             or is_chatbot_query(retrieval_query)
             or is_music_query(retrieval_query)
+            or is_security_training_query(retrieval_query)
+            or is_private_document_chat_query(retrieval_query)
+            or is_support_chatbot_query(retrieval_query)
+            or is_local_chatbot_ui_query(retrieval_query)
+            or is_invoice_workflow_query(retrieval_query)
+            or is_general_workflow_query(retrieval_query)
+            or is_privacy_compliance_query(retrieval_query)
+            or is_child_education_query(retrieval_query)
         ):
             candidates = [
                 candidate for candidate in candidates
                 if not off_topic_for_query(retrieval_query, str(candidate.get("categories", "")))
             ]
-        if is_coding_query(retrieval_query):
+        if coding_intent:
             coding_candidates = [
                 candidate for candidate in candidates
                 if is_coding_tool(self.store.meta[int(candidate["id"])])
             ]
             candidates = prioritize_coding_candidates(coding_candidates or candidates, self.store.meta)
-        if is_note_or_transcription_query(retrieval_query):
-            candidates = [
-                candidate for candidate in candidates
-                if is_note_or_transcription_tool(self.store.meta[int(candidate["id"])])
-            ]
-        if is_legal_contract_query(retrieval_query):
-            candidates = [
-                candidate for candidate in candidates
-                if is_legal_contract_tool(self.store.meta[int(candidate["id"])])
-            ]
-        if is_healthcare_notes_query(retrieval_query):
-            candidates = [
-                candidate for candidate in candidates
-                if is_healthcare_notes_tool(self.store.meta[int(candidate["id"])])
-            ]
+        candidates = filter_candidates_for_query_domain(candidates, retrieval_query, self.store.meta)
         filtered_candidates = apply_decision_filters(candidates, filters, self.store.meta)
         if len(filtered_candidates) >= effective_final_k:
             candidates = filtered_candidates
@@ -3642,6 +4049,11 @@ class RecommendationService:
             candidates = [
                 candidate for candidate in candidates
                 if is_free_tool(self.store.meta[int(candidate["id"])])
+            ]
+        elif paid_only:
+            candidates = [
+                candidate for candidate in candidates
+                if is_paid_tool(self.store.meta[int(candidate["id"])]) and not is_free_tool(self.store.meta[int(candidate["id"])])
             ]
         elif wants_cheaper:
             cheaper = [
@@ -3729,6 +4141,7 @@ class RecommendationService:
                 )
                 for candidate in candidates[:effective_final_k]
                 if not free_only or is_free_tool(self.store.meta[int(candidate["id"])])
+                if not paid_only or (is_paid_tool(self.store.meta[int(candidate["id"])]) and not is_free_tool(self.store.meta[int(candidate["id"])]))
                 if not strict_free or is_completely_free_tool(self.store.meta[int(candidate["id"])])
                 if not open_source_only or (is_strict_open_source_tool(self.store.meta[int(candidate["id"])]) if strict_open_source else is_open_source_tool(self.store.meta[int(candidate["id"])]))
                 if not local_only_required or is_local_only_tool(self.store.meta[int(candidate["id"])])
@@ -3740,7 +4153,7 @@ class RecommendationService:
         if exclude_ref_names:
             kept = [
                 hit for hit in final_hits
-                if str((hit.get("meta") or {}).get("Name", "")).strip().lower() not in exclude_ref_names
+                if not is_excluded_tool(hit.get("meta") or {}, exclude_ref_names)
             ]
             existing = {
                 str((hit.get("meta") or {}).get("Name", "")).strip().lower() for hit in kept
@@ -3752,9 +4165,11 @@ class RecommendationService:
                     break
                 meta = self.store.meta[int(candidate["id"])]
                 name = str(meta.get("Name", "")).strip().lower()
-                if not name or name in exclude_ref_names or name in existing:
+                if not name or is_excluded_tool(meta, exclude_ref_names) or name in existing:
                     continue
                 if free_only and not is_free_tool(meta):
+                    continue
+                if paid_only and (not is_paid_tool(meta) or is_free_tool(meta)):
                     continue
                 if strict_free and not is_completely_free_tool(meta):
                     continue
@@ -3776,7 +4191,10 @@ class RecommendationService:
 
         if wants_cheaper and final_hits:
             final_hits = sorted(final_hits, key=lambda h: _price_sort_key(h.get("meta") or {}))
-        if is_coding_query(retrieval_query) and final_hits:
+        final_hits = filter_hits_for_query_domain(final_hits, retrieval_query)
+        if paid_only:
+            final_hits = [hit for hit in final_hits if is_paid_tool(hit.get("meta") or {}) and not is_free_tool(hit.get("meta") or {})]
+        if coding_intent and final_hits:
             final_hits = prioritize_coding_hits(final_hits)
 
         self.recommend_cache.set(cache_key, final_hits)
@@ -3805,6 +4223,11 @@ class RecommendationService:
 
         if is_unsafe_tool_request(q):
             message = unsafe_request_response()
+            self.conversations.append(conversation_id, "user", q)
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"action": "chat_only", "hits": [], "message": message}
+        if is_high_stakes_guarantee_request(q):
+            message = high_stakes_guard_response(q)
             self.conversations.append(conversation_id, "user", q)
             self.conversations.append(conversation_id, "assistant", message)
             return {"action": "chat_only", "hits": [], "message": message}
@@ -3982,6 +4405,10 @@ class RecommendationService:
             refined_query = f"{refined_query} self-hosted".strip()
         if requires_strict_free(q) and not requires_strict_free(refined_query):
             refined_query = f"{refined_query} completely free".strip()
+        if requires_paid_only(q) and not requires_paid_only(refined_query):
+            refined_query = f"{refined_query} paid-only no free freemium".strip()
+            base_nf = next_filters if isinstance(next_filters, dict) else {}
+            next_filters = {**base_nf, "budget": "paid", "paid_only": True}
         if re.search(r"\b(?:local[- ](?:only|first)|on[- ]device|offline|never\s+(?:sends?|leaves?)|no\s+cloud|without\s+(?:the\s+)?cloud|self[- ]hosted|on[- ]prem)\b", original_lower):
             base_nf = next_filters if isinstance(next_filters, dict) else {}
             next_filters = {**base_nf, "privacy": "local-first"}
@@ -4041,6 +4468,13 @@ class RecommendationService:
         criterion = criterion_from_query(q)
         reason_query = self._latest_task_query(conversation_id, history) or q
         sorted_hits = _sort_hits_by_criterion(prior_hits, criterion)
+        if criterion in {"baa", "compliance", "data_retention", "license", "platform", "repo_privacy", "local_status"}:
+            hits = [enrich_hit(dict(hit), reason_query) for hit in sorted_hits[: min(3, len(sorted_hits))]]
+            message = clean_assistant_message(criterion_status_message(hits, criterion, q))
+            if hits:
+                self._set_last_shown(conversation_id, hits[0])
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"hits": hits, "message": message}
         best = sorted_hits[0] if sorted_hits else prior_hits[0]
         single_hit = enrich_hit(dict(best), reason_query)
         message = clean_assistant_message(criterion_pick_message(single_hit, criterion, reason_query))
@@ -4378,6 +4812,9 @@ class RecommendationService:
         if requires_strict_free(lower):
             base["budget"] = "free"
             base["strict_free"] = True
+        if requires_paid_only(lower):
+            base["budget"] = "paid"
+            base["paid_only"] = True
         if requires_no_cloud_data(lower):
             base["local_only"] = True
             base["no_cloud_data"] = True
@@ -4404,7 +4841,7 @@ class RecommendationService:
         if isinstance(decision_filters, dict):
             for key in (
                 "budget", "privacy", "integrations", "categories", "platforms",
-                "skill_level", "open_source", "strict_open_source", "strict_free", "local_only", "self_hosted", "no_cloud_data",
+                "skill_level", "open_source", "strict_open_source", "strict_free", "paid_only", "local_only", "self_hosted", "no_cloud_data",
             ):
                 value = decision_filters.get(key)
                 if value not in (None, "", []):
@@ -4515,13 +4952,15 @@ class RecommendationService:
             return {"action": "explain_shortlist"}
         if has_shortlist and is_explanation_query(q):
             return {"action": "explain_best"}
+        if has_shortlist and is_criterion_pick_query(q):
+            return {"action": "criterion"}
         if has_shortlist and is_pick_best_query(q):
             return {"action": "pick_best"}
         if has_shortlist and alternative_requests_new_search(q):
             return {"action": "recommend", "refined_query": q}
         if has_shortlist and is_alternative_query(q):
             return {"action": "show_alternative"}
-        if has_shortlist and (is_specific_tool_query(q) or is_criterion_pick_query(q)):
+        if has_shortlist and is_specific_tool_query(q):
             return {"action": "tool_question"}
 
         if has_explicit_task(focused):
