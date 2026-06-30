@@ -5359,6 +5359,7 @@ class RecommendationService:
             else f"Select up to {final_k} tools (fewer is fine if only a few truly fit)."
         )
         try:
+            _rank_started = time.perf_counter()
             with self.metrics.timer("openai.rank_ms"):
                 resp = self._chat_create(
                     model=self.settings.chat_model,
@@ -5401,6 +5402,13 @@ class RecommendationService:
                 )
             data = json.loads(resp.choices[0].message.content)
             selected = data.get("selected", [])
+            logger.info(
+                "TIMING rank LLM call: %.0f ms (%d candidates in, %d selected, model=%s)",
+                (time.perf_counter() - _rank_started) * 1000.0,
+                len(candidates),
+                len(selected) if isinstance(selected, list) else 0,
+                self.settings.chat_model,
+            )
             return selected if isinstance(selected, list) else []
         except Exception as exc:
             logger.warning(
@@ -5506,6 +5514,20 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AI Tools Search API", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def log_request_timing(request: Request, call_next):
+    """Per-request timing so the logs show exactly which endpoint(s) a single user
+    message triggers and how long each takes — the LLM round-trips dominate latency,
+    so this pinpoints whether the cost is one call or several stacked."""
+    start = time.perf_counter()
+    response = await call_next(request)
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+    if request.url.path not in ("/health", "/", "/metrics"):
+        logger.info("TIMING %s %s -> %s in %.0f ms",
+                    request.method, request.url.path, response.status_code, elapsed_ms)
+    return response
 
 
 RECOMMENDER_CONTRACT = {
