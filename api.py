@@ -788,6 +788,9 @@ def load_tool_store(settings: Settings) -> ToolStore:
             f"Vector row count ({len(vectors)}) does not match metadata rows ({len(meta)})"
         )
 
+    # Warm the per-tool token/flag cache once at startup so the first request does
+    # not pay the full 2.2k-tool tokenization cost.
+    _search_index(meta)
     logger.info("Loaded %s tools from %s", len(meta), settings.index_path)
     return ToolStore(index=index, meta=meta, vectors=vectors)
 
@@ -957,6 +960,8 @@ def expand_common_language_terms(value: Any) -> str:
         hints.append("local open-source chatbot personal assistant private documents pdf document chat offline")
     if re.search(r"\b(?:invoice|invoices|quickbooks|gmail\s+attachments?|ocr|drive)\b", lowered):
         hints.append("no-code automation workflow invoices email attachments drive ocr accounting quickbooks")
+    if re.search(r"\b(?:marketing|email\s+marketing|campaigns?|ads?|advertis(?:ing|ements?)|seo|lead\s+gen(?:eration)?|newsletter|social\s+media|outreach)\b", lowered):
+        hints.append("marketing campaign email marketing social media seo advertising lead generation outreach newsletter")
     if re.search(r"\b(?:tutor|student|child|school|10[- ]year[- ]old|kids?)\b", lowered):
         hints.append("education tutor students children school classroom privacy safe no ads")
     if re.search(r"\bthelo\b|\bergaleio\b|\bkano\b", lowered):
@@ -1467,6 +1472,8 @@ def query_terms(text: str) -> list[str]:
     expanded = f"{normalized} {intent_aliases.get(normalized, '')}"
     if re.search(r"\b(writ|blog|article|post|copy|content)\w*\b", normalized):
         expanded += " writing writers blog article posts copywriting content seo marketing"
+    if is_marketing_query(normalized):
+        expanded += " marketing campaign email marketing social media seo advertising lead generation crm outreach newsletter copywriting content marketing"
     if re.search(r"\b(meeting|meetings|notetaker|note\s+taker|notes|transcrib|summar)\w*\b", normalized):
         expanded += " meeting notes notetaker transcriber transcription summarizer summary recording"
     if re.search(r"\b(presentation|presentations|slides?|deck)\b", normalized):
@@ -1527,6 +1534,34 @@ def token_count(items: list[str], term: str) -> int:
 
 def is_writing_query(q: str) -> bool:
     return bool(re.search(r"\b(writ|blog|article|post|copy|content)\w*\b", q.lower()))
+
+
+def is_marketing_query(q: str) -> bool:
+    return bool(re.search(
+        r"\b(?:marketing|email\s+marketing|campaigns?|ads?|advertis(?:ing|ements?)|"
+        r"seo|growth\s+marketing|lead\s+gen(?:eration)?|lead\s+capture|newsletter|"
+        r"social\s+media|outreach|brand\s+(?:awareness|campaign)|customer\s+acquisition)\b",
+        q.lower(),
+    ))
+
+
+def is_marketing_tool(meta: dict[str, Any]) -> bool:
+    blob = metadata_blob(meta)
+    categories = str(meta.get("Categories", "")).lower()
+    signal = bool(re.search(
+        r"\b(?:marketing|email\s+marketing|campaigns?|advertis(?:ing|ements?)|ads?|"
+        r"seo|growth\s+marketing|lead\s+gen(?:eration)?|lead\s+capture|leads?|crm|"
+        r"newsletter|social\s+media|outreach|copywriting|content\s+marketing|brand\s+awareness|"
+        r"customer\s+acquisition|sales\s+enablement)\b",
+        blob,
+    ))
+    if not signal:
+        return False
+    dev_only = bool(re.search(r"\b(?:developer|coding|code\s+assistant|software\s+engineering|ide)\b", categories))
+    security_only = bool(re.search(r"\b(?:security|cybersecurity|phishing|dmarc|malware)\b", categories))
+    if (dev_only or security_only) and not re.search(r"\b(?:marketing|sales|lead|crm|seo|advertis|campaign|social\s+media)\b", blob):
+        return False
+    return True
 
 
 def is_coding_query(q: str) -> bool:
@@ -1980,6 +2015,18 @@ def is_visible_card_question(text: str) -> bool:
     ))
 
 
+def is_tool_card_request(text: str) -> bool:
+    """Detect requests where the user wants actual recommendation cards, not prose."""
+    normalized = normalize_query_text(text).lower().strip()
+    return bool(re.search(
+        r"\b(?:show|give|display|send)\s+(?:me\s+)?(?:the\s+)?(?:tool\s*)?cards?\b|"
+        r"\bwhere\s+are\s+(?:the\s+)?(?:tool\s*)?cards?\b|"
+        r"\bwhere\s+are\s+(?:the\s+)?tools\b[^.?!]{0,60}\bcards?\b|"
+        r"\bgive\s+(?:me\s+)?(?:tool\s*s|tools)\s+(?:then|now)?\b",
+        normalized,
+    ))
+
+
 _SIMILAR_REFERENCE_PATTERNS = (
     r"\b(?:similar\s+to|comparable\s+to|alternatives?\s+to|an?\s+alternative\s+to|"
     r"something\s+like|stuff\s+like|tools?\s+like|apps?\s+like|just\s+like)\s+"
@@ -2128,6 +2175,8 @@ def _specific_tool_name(text: str) -> str | None:
         match = re.search(pattern, normalized)
         if match:
             name = match.group(1).strip()
+            if re.search(r"\b(?:tools?|apps?|software|assistants?|options?|cards?)\b", name):
+                continue
             if name and name not in _NON_TOOL_WORDS:
                 return name
     return None
@@ -2218,7 +2267,7 @@ def alternative_requests_new_search(text: str) -> bool:
     if referenced_similar_tool(text):
         return True
     normalized = normalize_query_text(text).lower().strip()
-    if is_coding_query(normalized) or is_chatbot_query(normalized):
+    if is_coding_query(normalized) or is_chatbot_query(normalized) or is_marketing_query(normalized):
         return True
     meaningful_terms = [
         term for term in query_terms(normalized)
@@ -2643,6 +2692,11 @@ def default_clarifying_question(q: str) -> str:
 def off_topic_for_query(q: str, categories: str) -> bool:
     category_tokens = set(tokens(categories))
     text = categories.lower()
+    if is_marketing_query(q):
+        blocked = {"coding", "developer", "code", "security", "cybersecurity", "health", "fitness", "travel", "dating", "music", "video", "image"}
+        if category_tokens & blocked and not re.search(r"\b(marketing|sales|lead|crm|seo|advertis|campaign|social|copywriting)\b", text):
+            return True
+        return not bool(re.search(r"\b(marketing|sales|lead|crm|seo|advertis|campaign|social|copywriting|newsletter|outreach|brand)\b", text))
     if is_writing_query(q):
         allowed = {"writing", "generators", "copywriting", "seo", "marketing", "social", "media"}
         blocked = {"fitness", "health", "travel", "dating", "music", "finance", "stock", "trading"}
@@ -2759,6 +2813,14 @@ def request_goal(q: str) -> str:
         if any(term in text for term in ("privacy", "private", "local", "self-hosted", "secure", "security")):
             return "private meeting notes"
         return "meeting notes and summaries"
+    if is_marketing_query(q):
+        if "social" in text:
+            return "social media marketing"
+        if "email" in text or "newsletter" in text:
+            return "email marketing"
+        if "seo" in text:
+            return "SEO and marketing"
+        return "marketing campaigns"
     if is_writing_query(q):
         if "essay" in text or "academic" in text:
             return "essay writing"
@@ -2799,7 +2861,8 @@ KNOWN_SPECIFIC_GOALS = frozenset({
     "writing content", "transcribing audio", "generating images", "creating videos",
     "creating presentations", "coding and development", "automating workflows",
     "researching information", "creating music and audio", "private document chat",
-    "automating invoice workflows", "student tutoring",
+    "automating invoice workflows", "student tutoring", "marketing campaigns",
+    "social media marketing", "email marketing", "SEO and marketing",
 })
 
 
@@ -2888,6 +2951,14 @@ def practical_fit_detail(goal: str, meta: dict[str, Any]) -> str:
         if any(term in text for term in ("schedule", "publish", "calendar")):
             return "it helps create, schedule, and manage social posts"
         return "it supports social media content creation"
+    if "marketing" in goal:
+        if any(term in text for term in ("campaign", "ads", "advertising", "outreach", "lead", "crm")):
+            return "it supports campaign work, outreach, leads, or advertising workflows"
+        if any(term in text for term in ("social", "schedule", "publish", "calendar")):
+            return "it helps create, schedule, or manage social marketing content"
+        if any(term in text for term in ("seo", "copywriting", "content", "newsletter", "email")):
+            return "it supports marketing copy, SEO, email, or content workflows"
+        return "its listed features match marketing workflows"
     if "writing content" in goal:
         if "seo" in text:
             return "it combines content generation with SEO writing support"
@@ -3109,6 +3180,50 @@ def complete_sentences(value: Any, max_chars: int, max_sentences: int = 2) -> st
     return ""
 
 
+_SEARCH_INDEX_CACHE: dict[int, tuple[list[dict[str, Any]], list[dict[str, Any]]]] = {}
+
+
+def _compute_search_tokens(meta: dict[str, Any]) -> dict[str, Any]:
+    name = str(meta.get("Name", "")).lower()
+    categories = str(meta.get("Categories", "")).lower()
+    description = str(meta.get("Description", "")).lower()
+    text_items = tokens(meta_text(meta))
+    text_counts: dict[str, int] = {}
+    for item in text_items:
+        text_counts[item] = text_counts.get(item, 0) + 1
+    return {
+        "categories": categories,
+        "name_items": set(tokens(name)),
+        "category_items": set(tokens(categories)),
+        "description_items": set(tokens(description)),
+        "text_set": set(text_items),
+        "text_counts": text_counts,
+        "blob_tokens": set(tokens(metadata_blob(meta))),
+        "coding_score": coding_tool_score(meta),
+        "is_free": is_free_tool(meta),
+        "is_paid": is_paid_tool(meta),
+        "is_open_source": is_open_source_tool(meta),
+        "is_strict_open_source": is_strict_open_source_tool(meta),
+    }
+
+
+def _search_index(meta_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Per-tool tokens/flags computed once and cached by row-list identity, so the
+    keyword and coding-rescue scans stop re-running regex over every tool on every
+    request (the dominant per-request CPU cost on a throttled instance)."""
+    key = id(meta_rows)
+    entry = _SEARCH_INDEX_CACHE.get(key)
+    # Hold a reference to meta_rows and verify identity with `is`: this keeps the list
+    # alive (so its id can't be reused) and guards against id() collisions after GC.
+    if entry is not None and entry[0] is meta_rows:
+        return entry[1]
+    index = [_compute_search_tokens(meta) for meta in meta_rows]
+    if len(_SEARCH_INDEX_CACHE) > 8:
+        _SEARCH_INDEX_CACHE.clear()
+    _SEARCH_INDEX_CACHE[key] = (meta_rows, index)
+    return index
+
+
 def keyword_scores(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[tuple[float, int]]:
     terms = query_terms(q)
     if not terms:
@@ -3121,56 +3236,52 @@ def keyword_scores(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[tupl
     if free_only and not ranking_terms:
         return []
 
+    # Query-only classifications: evaluate these regex predicates ONCE here instead of
+    # re-running ~17 of them on every one of the ~2.2k tools inside the loop below
+    # (the dominant per-request CPU cost on a throttled instance). Order preserved.
+    domain_filters = (
+        (is_healthcare_notes_query, is_healthcare_notes_tool),
+        (is_legal_contract_query, is_legal_contract_tool),
+        (is_security_training_query, is_security_training_tool),
+        (is_private_document_chat_query, is_private_document_chat_tool),
+        (is_support_chatbot_query, is_support_chatbot_tool),
+        (is_local_chatbot_ui_query, is_local_chatbot_ui_tool),
+        (is_invoice_workflow_query, is_invoice_workflow_tool),
+        (is_general_workflow_query, is_general_workflow_tool),
+        (is_privacy_compliance_query, is_privacy_compliance_tool),
+        (is_child_education_query, is_child_education_tool),
+        (is_marketing_query, is_marketing_tool),
+        (is_note_or_transcription_query, is_note_or_transcription_tool),
+    )
+    active_domain_tool = None
+    for q_pred, tool_pred in domain_filters:
+        if q_pred(q):
+            active_domain_tool = tool_pred
+            break
+    writing_q = is_writing_query(q)
+    marketing_q = is_marketing_query(q)
+    coding_or_chatbot_q = is_coding_query(q) or is_chatbot_query(q)
+    business_terms_q = any(t in terms for t in ("business", "marketing", "competitor", "social", "seo"))
+
+    index = _search_index(meta_rows)
     scored = []
     for idx, meta in enumerate(meta_rows):
-        if free_only and not is_free_tool(meta):
+        tok = index[idx]
+        if free_only and not tok["is_free"]:
             continue
-        if paid_only and (is_free_tool(meta) or not is_paid_tool(meta)):
+        if paid_only and (tok["is_free"] or not tok["is_paid"]):
             continue
-        if open_source_only and not (is_strict_open_source_tool(meta) if strict_open_source else is_open_source_tool(meta)):
+        if open_source_only and not (tok["is_strict_open_source"] if strict_open_source else tok["is_open_source"]):
             continue
 
-        text_items = tokens(meta_text(meta))
-        text_set = set(text_items)
-        name = str(meta.get("Name", "")).lower()
-        categories = str(meta.get("Categories", "")).lower()
-        description = str(meta.get("Description", "")).lower()
-        category_items = tokens(categories)
-        name_items = tokens(name)
-        description_items = tokens(description)
+        text_set = tok["text_set"]
+        categories = tok["categories"]
+        category_items = tok["category_items"]
+        name_items = tok["name_items"]
+        description_items = tok["description_items"]
 
-        if is_healthcare_notes_query(q):
-            if not is_healthcare_notes_tool(meta):
-                continue
-        elif is_legal_contract_query(q):
-            if not is_legal_contract_tool(meta):
-                continue
-        elif is_security_training_query(q):
-            if not is_security_training_tool(meta):
-                continue
-        elif is_private_document_chat_query(q):
-            if not is_private_document_chat_tool(meta):
-                continue
-        elif is_support_chatbot_query(q):
-            if not is_support_chatbot_tool(meta):
-                continue
-        elif is_local_chatbot_ui_query(q):
-            if not is_local_chatbot_ui_tool(meta):
-                continue
-        elif is_invoice_workflow_query(q):
-            if not is_invoice_workflow_tool(meta):
-                continue
-        elif is_general_workflow_query(q):
-            if not is_general_workflow_tool(meta):
-                continue
-        elif is_privacy_compliance_query(q):
-            if not is_privacy_compliance_tool(meta):
-                continue
-        elif is_child_education_query(q):
-            if not is_child_education_tool(meta):
-                continue
-        elif is_note_or_transcription_query(q):
-            if not is_note_or_transcription_tool(meta):
+        if active_domain_tool is not None:
+            if not active_domain_tool(meta):
                 continue
         elif off_topic_for_query(q, categories):
             continue
@@ -3184,26 +3295,29 @@ def keyword_scores(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[tupl
             if term in description_items:
                 score += 2.0
             if term in text_set:
-                score += min(token_count(text_items, term), 4) * 0.5
+                score += min(tok["text_counts"].get(term, 0), 4) * 0.5
 
         task_score = score
         if free_only and task_score <= 0:
             continue
-        if "free" in terms and is_free_tool(meta):
+        if "free" in terms and tok["is_free"]:
             score += 4.0
-        if paid_only and is_paid_tool(meta) and not is_free_tool(meta):
+        if paid_only and tok["is_paid"] and not tok["is_free"]:
             score += 8.0
-        if open_source_only and (is_strict_open_source_tool(meta) if strict_open_source else is_open_source_tool(meta)):
+        if open_source_only and (tok["is_strict_open_source"] if strict_open_source else tok["is_open_source"]):
             score += 12.0
-        if is_writing_query(q):
+        if writing_q:
             if any(term in category_items for term in ("writing", "copywriting", "seo", "marketing")):
                 score += 10.0
-        elif is_coding_query(q) or is_chatbot_query(q):
+        elif marketing_q:
+            if is_marketing_tool(meta):
+                score += 12.0
+        elif coding_or_chatbot_q:
             if any(cat in categories for cat in _DEV_ON_TOPIC_CATEGORIES):
                 score += 10.0
             if any(cat in categories for cat in _DEV_OFF_TOPIC_CATEGORIES):
                 score -= 10.0
-        elif any(term in terms for term in ("business", "marketing", "competitor", "social", "seo")):
+        elif business_terms_q:
             if any(term in categories for term in ("fitness", "health", "fun tools", "dating")):
                 score -= 8.0
 
@@ -3246,6 +3360,8 @@ def matches_query_domain(q: str, meta: dict[str, Any]) -> bool:
         return is_privacy_compliance_tool(meta)
     if is_child_education_query(q):
         return is_child_education_tool(meta)
+    if is_marketing_query(q):
+        return is_marketing_tool(meta)
     if is_note_or_transcription_query(q):
         return is_note_or_transcription_tool(meta)
     return True
@@ -3271,13 +3387,14 @@ def coding_rescue_scores(q: str, k: int, meta_rows: list[dict[str, Any]]) -> lis
     contains generic words like "writing" alongside "Python code"."""
     query_tokens = set(tokens(q))
     query_tokens |= {"code"} if "coding" in query_tokens else set()
+    index = _search_index(meta_rows)
     scored: list[tuple[float, int]] = []
     for idx, meta in enumerate(meta_rows):
-        base = coding_tool_score(meta)
+        tok = index[idx]
+        base = tok["coding_score"]
         if base < 25:
             continue
-        blob_tokens = set(tokens(metadata_blob(meta)))
-        overlap = query_tokens & blob_tokens
+        overlap = query_tokens & tok["blob_tokens"]
         coding_overlap = overlap & {
             "code", "coding", "python", "debug", "debugging", "autocomplete",
             "developer", "programming", "repository", "repositories", "github",
@@ -3959,6 +4076,7 @@ class RecommendationService:
                 or is_general_workflow_query(retrieval_query)
                 or is_privacy_compliance_query(retrieval_query)
                 or is_child_education_query(retrieval_query)
+                or is_marketing_query(retrieval_query)
             )
             keyword_limit = len(self.store.meta) if broad_filter_required else min(retrieve_k, len(self.store.meta))
             hits = keyword_search(retrieval_query, keyword_limit, self.store.meta)
@@ -4079,6 +4197,7 @@ class RecommendationService:
             or is_general_workflow_query(retrieval_query)
             or is_privacy_compliance_query(retrieval_query)
             or is_child_education_query(retrieval_query)
+            or is_marketing_query(retrieval_query)
         ):
             candidates = [
                 candidate for candidate in candidates
@@ -4364,6 +4483,38 @@ class RecommendationService:
             self.conversations.append(conversation_id, "user", q)
             self.conversations.append(conversation_id, "assistant", message)
             return {"action": "clarify", "hits": [], "message": message}
+
+        if is_tool_card_request(q) and not has_explicit_task(q):
+            prior_task = self._latest_task_query(conversation_id, history)
+            if prior_task:
+                response = self.recommend(
+                    prior_task,
+                    retrieve_k,
+                    final_k,
+                    filters=filters,
+                    mode=mode,
+                    conversation_id=conversation_id,
+                    history=history,
+                    pre_routed=True,
+                )
+                return {"action": "recommend", "refined_query": prior_task, **response}
+            message = "Tell me what kind of tool cards you want, and I will search the catalog."
+            self.conversations.append(conversation_id, "user", q)
+            self.conversations.append(conversation_id, "assistant", message)
+            return {"action": "clarify", "hits": [], "message": message}
+
+        if has_context_hits and has_explicit_task(q) and is_marketing_query(q):
+            response = self.recommend(
+                q,
+                retrieve_k,
+                final_k,
+                filters=filters,
+                mode=mode,
+                conversation_id=conversation_id,
+                history=history,
+                pre_routed=True,
+            )
+            return {"action": "recommend", "refined_query": q, **response}
 
         if is_alternative_query(q) and not alternative_requests_new_search(q):
             if has_context_hits:
@@ -4942,6 +5093,8 @@ class RecommendationService:
         planner."""
         if not has_explicit_task(q):
             return False
+        if re.search(r"^\s*(?:what|how)\s+about\b", q.lower()):
+            return False
         if referenced_similar_tool(q) or negated_tools(q):
             return False
         return not any(
@@ -5003,6 +5156,7 @@ class RecommendationService:
             "after coding tools, 'best tools for music' is a new music/audio search. "
             "If the user asks for another or better tool AND names a concrete task like coding, software engineering, chatbot, notes, images, music, or video, use search_tools/refine_search instead of get_more_tools. "
             "Only use visible/current tools when the user clearly refers to them, e.g. 'why these', 'which one', 'is it free', or 'show another from these'.\n"
+            "If the user asks for tool cards after a recent concrete task, return a search/refine action for that task so the frontend can render cards rather than a prose list.\n"
             "Actions:\n"
             "- chat_only: greetings, thanks, app-help, feedback, or normal conversation that should not change tool cards.\n"
             "- clarify: the user wants tools but the task is missing.\n"
@@ -5055,6 +5209,11 @@ class RecommendationService:
         if is_feedback_only_query(q):
             return {"action": "clarify", "message": feedback_clarifying_question()}
         focused = expand_common_language_terms(focus_latest_intent(q))
+        if is_tool_card_request(q) and not has_explicit_task(focused):
+            prior_task = self._latest_task_query(conversation_id, history)
+            if prior_task:
+                return {"action": "recommend", "tool": "search_tools", "refined_query": prior_task}
+            return {"action": "clarify", "message": "Tell me what kind of tool cards you want, and I will search the catalog."}
         if has_shortlist and has_explicit_task(focused):
             return {"action": "recommend", "tool": "search_tools", "refined_query": focused}
         if has_shortlist and is_shortlist_explanation_query(q):
