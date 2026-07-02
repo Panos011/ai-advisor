@@ -906,6 +906,13 @@ def recent_dialogue_turns(
     return turns[-limit:]
 
 
+def latest_assistant_message(history: Any, stored: list[dict[str, str]] | None = None) -> str:
+    for turn in reversed(recent_dialogue_turns(history, stored, limit=10)):
+        if turn.get("role") == "assistant":
+            return turn.get("content", "")
+    return ""
+
+
 def build_retrieval_query(current: str, prior_user_messages: list[str]) -> str:
     """Combine the latest message with recent task context for retrieval/ranking."""
     current_clean = normalize_query_text(current)
@@ -1019,6 +1026,7 @@ def feedback_chat_response() -> str:
 
 
 UNSAFE_REQUEST_PATTERNS = (
+    r"\billegal\s+(?:tools?|activities|apps?|software|services?)\b",
     r"\bphishing\b|\bbypass\s+spam\s+filters?\b|\bspam\s+filters?\b",
     r"\bimpersonat(?:e|ing|ion)\b[^.?!]{0,100}\b(?:boss|ceo|cfo|payment|approval|invoice|wire|bank)\b",
     r"\bvoice\s+clon(?:e|ing)\b[^.?!]{0,100}\b(?:impersonat|payment|approval|boss|ceo|cfo|scam)\b",
@@ -1064,8 +1072,48 @@ def is_unsafe_tool_request(text: str) -> bool:
 
 def unsafe_request_response() -> str:
     return (
-        "I cannot help find tools for phishing, malware abuse, exploitation, credential abuse, doxing, fraud, impersonation, scams, sexual deepfakes, or deceptive deepfakes. "
+        "I cannot help find tools for illegal activity, phishing, malware abuse, exploitation, credential abuse, doxing, fraud, impersonation, scams, sexual deepfakes, or deceptive deepfakes. "
         "I can help with defensive security training, consent-based voice work, or clearly disclosed synthetic media instead."
+    )
+
+
+def is_refusal_followup_query(text: str) -> bool:
+    normalized = normalize_query_text(text).lower().strip()
+    return bool(re.fullmatch(
+        r"(?:why|why\s+is\s+that|why\s+not|why\s+cant\s+you|why\s+can't\s+you|"
+        r"why\s+can\s+you\s+not|what\s+do\s+you\s+mean|explain\s+that)\??",
+        normalized,
+    ))
+
+
+def is_safety_refusal_message(text: str) -> bool:
+    normalized = normalize_query_text(text).lower()
+    if not normalized:
+        return False
+    refusal = bool(re.search(r"\b(?:cannot|can[’']?t)\s+help\b|\bi\s+cannot\s+recommend\b", normalized))
+    safety_topic = bool(re.search(
+        r"\b(?:illegal|phishing|malware|exploit|credential|doxing|fraud|impersonation|scams?|deepfakes?|"
+        r"diagnos|medical|legal|lawyer|guarantee|suicidal|self[- ]harm|loan|credit|tax|audit)\b",
+        normalized,
+    ))
+    return refusal and safety_topic
+
+
+def safety_refusal_followup_response(last_message: str) -> str:
+    normalized = normalize_query_text(last_message).lower()
+    if "illegal" in normalized:
+        return (
+            "Because I can only help find tools for legal, legitimate tasks. "
+            "If you describe the legal goal, I can recommend safe tools for that instead."
+        )
+    if re.search(r"\b(?:phishing|malware|exploit|credential|doxing|fraud|impersonation|scams?|deepfakes?)\b", normalized):
+        return (
+            "Because that kind of request could enable harm or abuse. "
+            "I can help with defensive, consent-based, or clearly disclosed safety workflows instead."
+        )
+    return (
+        "Because that request crosses a safety boundary for this advisor. "
+        "I can still help find legitimate tools for a safer version of the task."
     )
 
 
@@ -4483,6 +4531,14 @@ class RecommendationService:
             self.conversations.append(conversation_id, "user", q)
             self.conversations.append(conversation_id, "assistant", message)
             return {"action": "clarify", "hits": [], "message": message}
+
+        if is_refusal_followup_query(q):
+            last_reply = latest_assistant_message(history, self.conversations.get(conversation_id))
+            if is_safety_refusal_message(last_reply):
+                message = safety_refusal_followup_response(last_reply)
+                self.conversations.append(conversation_id, "user", q)
+                self.conversations.append(conversation_id, "assistant", message)
+                return {"action": "chat_only", "hits": [], "message": message}
 
         if is_tool_card_request(q) and not has_explicit_task(q):
             prior_task = self._latest_task_query(conversation_id, history)

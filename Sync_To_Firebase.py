@@ -230,6 +230,10 @@ def export_blocklist(args):
             synced += 1
 
     save_blocklist(entries, args.blocklist)
+    db.collection("advisorDatasetStatus").document("current").set({
+        "blocklistExportedAt": firestore.SERVER_TIMESTAMP,
+        "blocklistSize": len(entries),
+    }, merge=True)
     print(
         f"Exported {len(entries)} active deletion(s) to {args.blocklist} "
         f"({synced} marked as synced)."
@@ -324,9 +328,21 @@ def sync(args):
     if batch_size:
         batch.commit()
 
+    summary = (
+        f"{created} new pending submission(s), {flagged_created} flagged "
+        f"previously deleted, {skipped} skipped"
+    )
+    # Surfaced in the admin dashboard's advisor dataset panel.
+    db.collection("advisorDatasetStatus").document("current").set({
+        "lastSyncAt": firestore.SERVER_TIMESTAMP,
+        "lastSyncSummary": summary,
+        "lastSyncCreated": created,
+        "lastSyncFlagged": flagged_created,
+        "lastSyncSkipped": skipped,
+    }, merge=True)
+
     print(
-        f"Sync complete: {created} new pending submission(s), "
-        f"{flagged_created} flagged previously deleted, {skipped} skipped "
+        f"Sync complete: {summary} "
         "(already on the platform, already suggested, or incomplete)."
     )
 

@@ -297,6 +297,54 @@ def make_dev_service(client=None, index=None):
     return RecommendationService(store, client or FakeClient(embedding_failure=True), settings, RuntimeMetrics())
 
 
+def make_marketing_switch_service(client=None):
+    meta = [
+        {
+            "Name": "Traycer",
+            "Categories": "developer tools | coding | code assistant",
+            "Price": "Free tier",
+            "Description": "AI coding assistant for large codebases, debugging, repositories, and pull requests.",
+            "Features": "Plans code changes, reviews diffs, and helps software engineers ship code.",
+            "Pros": "Useful for development workflows.",
+            "Use_cases": "Software engineering",
+        },
+        {
+            "Name": "Factory",
+            "Categories": "developer tools | coding | code assistant",
+            "Price": "Free trial",
+            "Description": "Autonomous software development platform for coding, testing, and documentation.",
+            "Features": "Droids handle coding tasks across the development lifecycle.",
+            "Pros": "Good for developer automation.",
+            "Use_cases": "Software engineering",
+        },
+        {
+            "Name": "Hostinger Reach",
+            "Categories": "marketing | email marketing | email assistant",
+            "Price": "Free tier",
+            "Description": "AI marketing tool for email campaigns, newsletters, outreach, and lead generation.",
+            "Features": "Creates email marketing campaigns and helps reach leads.",
+            "Pros": "Useful for marketing teams.",
+            "Use_cases": "Email marketing",
+        },
+        {
+            "Name": "Ocoya",
+            "Categories": "marketing | social media | copywriting",
+            "Price": "Paid",
+            "Description": "Social media marketing platform for content, captions, scheduling, and campaigns.",
+            "Features": "Creates and schedules marketing posts across social channels.",
+            "Pros": "Good for campaign content.",
+            "Use_cases": "Social media marketing",
+        },
+    ]
+    store = ToolStore(
+        index=SequenceIndex(len(meta)),
+        meta=meta,
+        vectors=np.array([[1.0, 0.0], [0.9, 0.1], [0.8, 0.2], [0.7, 0.3]], dtype="float32"),
+    )
+    settings = Settings(cache_ttl_seconds=60, cache_max_entries=16)
+    return RecommendationService(store, client or FakeClient(embedding_failure=True), settings, RuntimeMetrics())
+
+
 def make_task_switch_service(client=None):
     meta = [
         {
@@ -1465,6 +1513,59 @@ class BackendUnitTests(unittest.TestCase):
         self.assertIn("meeting", refined)
         self.assertNotIn("blog", refined)
 
+    def test_marketing_request_after_coding_shortlist_starts_new_card_search(self):
+        client = FakeClient(embedding_failure=True)
+        service = make_marketing_switch_service(client=client)
+        conversation_id = "marketing-after-coding"
+        first = service.chat(
+            "Find coding assistants",
+            retrieve_k=4,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+        self.assertIn(first["hits"][0]["meta"]["Name"], {"Traycer", "Factory"})
+
+        response = service.chat(
+            "What about marketing tools",
+            retrieve_k=4,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+        self.assertEqual(response["action"], "recommend")
+        self.assertTrue(names)
+        self.assertTrue(set(names).issubset({"Hostinger Reach", "Ocoya"}))
+        self.assertNotIn("Traycer", names)
+        self.assertNotIn("Factory", names)
+        self.assertEqual(client.chat.completions.calls, 0)
+
+    def test_tool_card_request_replays_latest_marketing_task_not_visible_coding_cards(self):
+        service = make_marketing_switch_service()
+        conversation_id = "marketing-cards-after-text"
+        service.chat(
+            "Find coding assistants",
+            retrieve_k=4,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+        # Simulate the old bad turn already in memory: the user did ask for marketing,
+        # but the prior app version answered in prose while coding cards stayed visible.
+        service.conversations.append(conversation_id, "user", "What about marketing tools")
+
+        response = service.chat(
+            "Where are the tools give me the cards",
+            retrieve_k=4,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+        self.assertEqual(response["action"], "recommend")
+        self.assertEqual(response["refined_query"], "What about marketing tools")
+        self.assertTrue(set(names).issubset({"Hostinger Reach", "Ocoya"}))
+        self.assertNotIn("Traycer", names)
+
     def test_chat_fallback_understands_why_tho(self):
         service = make_service(client=FakeClient(embedding_failure=True))
         conversation_id = "fallback-why-tho"
@@ -2493,6 +2594,35 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["action"], "chat_only")
         self.assertEqual(response["hits"], [])
         self.assertIn("cannot help", response["message"].lower())
+
+    def test_why_after_illegal_refusal_explains_refusal_not_visible_cards(self):
+        service = make_service()
+        conversation_id = "illegal-why"
+        service.shortlists[conversation_id] = [
+            {"score": 0.9, "meta": service.store.meta[0], "why": "Writerly helps with writing."},
+            {"score": 0.8, "meta": service.store.meta[1], "why": "ImageBox helps with images."},
+        ]
+
+        refusal = service.chat(
+            "Can you recommend me any illegal tools?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+        response = service.chat(
+            "Why is that?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(refusal["action"], "chat_only")
+        self.assertEqual(response["action"], "chat_only")
+        self.assertEqual(response["hits"], [])
+        self.assertIn("legal", response["message"].lower())
+        self.assertNotIn("Writerly", response["message"])
+        self.assertNotIn("ImageBox", response["message"])
+        self.assertNotIn("$", response["message"])
 
     def test_greek_local_meeting_request_uses_local_privacy_constraints(self):
         service = make_local_note_service()
