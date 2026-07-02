@@ -41,6 +41,21 @@ Each response includes a 'contract' object that names this pipeline and the expe
 'Data_Cleaning.py'
 'Index.py'
 
+## Platform sync (CommAI)
+Deleted-tool lifecycle scripts keep the dataset aligned with the CommAI platform:
+- 'Apply_Deletions.py' — consumes 'advisor-tool-deleted' / 'advisor-tool-restored'
+  repository_dispatch payloads from Firebase: strips the tool from all CSVs and
+  maintains the persistent 'deleted_tools.json' blocklist
+  ('.github/workflows/tool_deletion.yml' runs it and rebuilds the index).
+- 'Filter_Blocklist.py' — runs after the scraper in the biweekly refresh; removes
+  previously deleted tools from the fresh scrape and records them in
+  'flagged_tools.csv' for inspection.
+- 'Sync_To_Firebase.py' — 'export-blocklist' reconciles the blocklist from the
+  'advisorDatasetDeletions' Firestore collection; 'sync' pushes newly collected
+  tools to the platform as pending 'toolSubmissions' (re-collected deleted tools
+  are flagged 'flaggedPreviouslyDeleted'). Requires the 'FIREBASE_SERVICE_ACCOUNT'
+  GitHub Actions secret (service-account JSON); needs 'pip install firebase-admin'.
+
 ## Tests
 Local unit tests do not require an OpenAI key:
 'python -m unittest discover tests'

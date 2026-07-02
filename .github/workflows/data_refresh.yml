@@ -2,11 +2,15 @@ name: Biweekly data refresh
 
 on:
   schedule:
-    - cron: "0 5 1-7,15-21 * MON" 
+    - cron: "0 5 1-7,15-21 * MON"
   workflow_dispatch: # allow manual run
 
-permissions: 
+permissions:
   contents: write # needed so the action can commit back
+
+# Serialise with the deletion-sync workflow so the two never clobber each other.
+concurrency:
+  group: advisor-dataset-writes
 
 jobs:
   refresh:
@@ -14,6 +18,7 @@ jobs:
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       SCRAPERAPI_KEY: ${{ secrets.SCRAPERAPI_KEY }}
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
     steps:
       - name: Checkout
@@ -29,7 +34,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Cache pip 
+      - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
@@ -38,38 +43,57 @@ jobs:
            ${{ runner.os }}-pip-
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          pip install firebase-admin
+
+      # Pull the latest admin deletions from Firestore so the refresh honours
+      # them even if a repository_dispatch was missed.
+      - name: Reconcile deletion blocklist from Firebase
+        if: env.FIREBASE_SERVICE_ACCOUNT != ''
+        run: python Sync_To_Firebase.py export-blocklist
 
       - name: Run scraper -> AI_tools.csv
         run: python Data_Collection.py
 
+      # Remove previously deleted tools from the fresh scrape and record them
+      # in flagged_tools.csv for inspection.
+      - name: Filter previously deleted tools
+        run: python Filter_Blocklist.py
+
       - name: Clean and build embeddings CSV
-        run: python Data_Cleaning.py 
+        run: python Data_Cleaning.py
 
       - name: Build FAISS index (OpenAI embeddings)
         run: python Index.py
+
+      # Newly collected tools become pending submissions on the platform;
+      # re-collected deleted tools are flagged for admin inspection.
+      - name: Sync new tools to platform as pending submissions
+        if: env.FIREBASE_SERVICE_ACCOUNT != ''
+        run: python Sync_To_Firebase.py sync
 
       # ---------------- Safe commit & push step ----------------
       - name: Commit and push updated data
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
+
           # Stage updated files
-          git add AI_tools.csv Clean_AI_tools.csv Embeddings_AI_tools.csv index/ logos/
-          
+          git add AI_tools.csv Clean_AI_tools.csv Embeddings_AI_tools.csv index/ logos/ deleted_tools.json flagged_tools.csv
+
           # Commit only if there are changes
           if ! git diff --cached --quiet; then
             git commit -m "Weekly data refresh"
           else
             echo "No changes to commit"
           fi
-          
+
           # Fetch the latest remote commits
           git fetch origin main
-          
+
           # Rebase local commit on top of remote
           git rebase origin/main || git rebase --abort
-          
+
           # Push changes to remote
           git push origin main
