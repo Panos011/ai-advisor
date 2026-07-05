@@ -1633,6 +1633,24 @@ def is_music_query(q: str) -> bool:
     ))
 
 
+def is_video_query(q: str) -> bool:
+    return bool(re.search(
+        r"\b(?:videos?|video\s+(?:content|editing|editor|generator|generation|maker|clips?|creation)|"
+        r"text[- ]to[- ]video|short[- ]form\s+video|reels?|shorts?|tiktok|youtube\s+shorts|"
+        r"explainer\s+video|promo(?:tional)?\s+video)\b",
+        q.lower(),
+    ))
+
+
+def is_video_tool(meta: dict[str, Any]) -> bool:
+    blob = metadata_blob(meta)
+    return bool(re.search(
+        r"\b(?:video\s+(?:editing|editor|generat\w*|enhanc\w*|maker|clips?|creation)|"
+        r"text[- ]to[- ]video|video\s+content)\b",
+        blob,
+    ))
+
+
 def is_note_or_transcription_query(q: str) -> bool:
     return bool(re.search(
         r"\b(meeting|meetings|notetaker|note\s+taker|note[- ]?taking|notes?|transcrib|"
@@ -1837,8 +1855,24 @@ def is_child_education_tool(meta: dict[str, Any]) -> bool:
 def is_guaranteed_financial_profit_request(text: str) -> bool:
     normalized = normalize_query_text(text).lower()
     financial = bool(re.search(r"\b(?:stock|stocks|trading|invest|investment|crypto|portfolio|ticker|buy\s+today)\b", normalized))
-    guarantee = bool(re.search(r"\b(?:guaranteed\s+profit|exactly\s+what\s+to\s+buy|what\s+to\s+buy\s+today|sure\s+profit|risk[- ]free\s+profit)\b", normalized))
-    return financial and guarantee
+    if not financial:
+        return False
+    # A standalone "guarantee(s/d)" plus any profit/earnings word covers natural
+    # rephrasings ("guarantee me I will make $X in profit", "guarantee a return")
+    # that the original literal-phrase list ("guaranteed profit", "sure profit")
+    # missed entirely — those exact phrases are rare in how people actually type.
+    guarantee_word = bool(re.search(r"\bguarantee[ds]?\b", normalized))
+    profit_word = bool(re.search(r"\b(?:profit|profits|return|returns|income|earn|earns|earning|earnings|money)\b", normalized))
+    if guarantee_word and profit_word:
+        return True
+    # Keep the original literal phrases for guarantee-adjacent language that
+    # doesn't use the word "guarantee" at all.
+    guarantee_phrase = bool(re.search(
+        r"\b(?:exactly\s+what\s+to\s+buy|what\s+to\s+buy\s+today|sure\s+profit|risk[- ]free\s+profit|"
+        r"sure[- ]?fire\s+profit|can'?t\s+lose|100%\s+(?:profit|return|guaranteed))\b",
+        normalized,
+    ))
+    return guarantee_phrase
 
 
 def financial_profit_guard_message() -> str:
@@ -3408,6 +3442,8 @@ def matches_query_domain(q: str, meta: dict[str, Any]) -> bool:
         return is_privacy_compliance_tool(meta)
     if is_child_education_query(q):
         return is_child_education_tool(meta)
+    if is_video_query(q):
+        return is_video_tool(meta)
     if is_marketing_query(q):
         return is_marketing_tool(meta)
     if is_note_or_transcription_query(q):
