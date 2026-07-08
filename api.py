@@ -4526,6 +4526,7 @@ class RecommendationService:
             self.conversations.append(conversation_id, "assistant", message)
             return {"hits": cached, "message": message}
 
+        emit_progress("retrieving")
         try:
             vec = self.embed([retrieval_query])
         except Exception as exc:
@@ -4813,6 +4814,7 @@ class RecommendationService:
                 top_k=rank_k,
             )
 
+        emit_progress("ranking")
         selected = self._rank_with_llm(retrieval_query, candidates, effective_final_k, mode=mode)
         final_hits = self._selected_hits(
             selected,
@@ -4916,6 +4918,7 @@ class RecommendationService:
         visible_tools: Any = None,
     ) -> dict[str, Any]:
         self.metrics.increment("chat_requests")
+        emit_progress("routing")
         q = normalize_query_text(q)
         mode = normalize_mode(mode)
 
@@ -5084,6 +5087,7 @@ class RecommendationService:
             self.metrics.increment("planner_skipped")
             decision = {}
         else:
+            emit_progress("planning")
             decision = self._chat_decision(q, filters, mode, conversation_id, history)
         action = decision.get("action") or action_from_planner_tool(decision.get("tool")) or "recommend"
         if action not in CHAT_ACTIONS:
@@ -5423,6 +5427,7 @@ class RecommendationService:
             "Answer conversationally in 1-3 short sentences. "
             "Return ONLY JSON with key: message."
         )
+        emit_progress("replying")
         payload = {
             "latest_question": q,
             "current_task": reason_query,
@@ -5456,6 +5461,7 @@ class RecommendationService:
         conversation_id: str | None,
         history: Any,
     ) -> str:
+        emit_progress("replying")
         stored = self.conversations.get(conversation_id)
         turns = recent_dialogue_turns(history, stored)
         prior_hits = self.shortlists.get(conversation_id) if conversation_id else []
@@ -6206,10 +6212,12 @@ class RecommendationService:
         return final_hits
 
 # === FastAPI App ===
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from openai import OpenAI
 
 logging.basicConfig(level=logging.INFO)
@@ -6402,6 +6410,70 @@ def chat(body: ChatRequest, request: Request):
         history=getattr(body, "history", None),
         visible_tools=getattr(body, "visible_tools", None),
     )))
+
+
+@app.post("/chat/stream")
+async def chat_stream(body: ChatRequest, request: Request):
+    """Server-sent-events variant of /chat for perceived-latency wins.
+
+    Emits `status` events as the pipeline crosses real stage boundaries
+    (routing, planning, retrieving, ranking, replying), then a single `result`
+    event whose `data` is exactly the /chat response payload, then `done`.
+    /chat itself is unchanged; clients adopt this at their own pace.
+    """
+    svc = service(request)
+    queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def enqueue(event: dict[str, Any] | None) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, event)
+
+    def run_chat() -> dict[str, Any]:
+        # Runs on the threadpool; contextvars set here stay scoped to this request.
+        begin_degradation_tracking()
+        _progress_callback.set(lambda stage: enqueue({"type": "status", "stage": stage}))
+        payload = chat_wrapper_payload(svc.chat(
+            body.q,
+            body.retrieve_k,
+            body.final_k,
+            filters=body.filters,
+            mode=body.mode,
+            conversation_id=body.conversation_id,
+            history=body.history,
+            visible_tools=body.visible_tools,
+        ))
+        return with_degradation(request, payload)
+
+    async def produce() -> None:
+        try:
+            payload = await run_in_threadpool(run_chat)
+            # Validate through the same response model as /chat so both
+            # endpoints keep an identical wire contract.
+            data = ChatResponse.model_validate(payload).model_dump()
+            enqueue({"type": "result", "data": data})
+        except Exception:
+            logger.exception("chat_stream request failed")
+            enqueue({"type": "error", "message": "Something went wrong while answering. Please retry."})
+        finally:
+            enqueue(None)
+
+    async def event_source():
+        producer = asyncio.create_task(produce())
+        try:
+            while True:
+                event = await queue.get()
+                if event is None:
+                    break
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            yield 'data: {"type": "done"}\n\n'
+        finally:
+            await producer
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/clarify", response_model=ClarifyResponse)

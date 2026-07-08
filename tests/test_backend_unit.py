@@ -3583,6 +3583,73 @@ class CompactRankCandidateTests(unittest.TestCase):
         self.assertIn("score", candidates[0])
 
 
+class ChatStreamEndpointTests(unittest.TestCase):
+    """Drive the SSE endpoint through the real ASGI app with an injected service,
+    so the app wiring is exercised without loading the production index."""
+
+    def _client(self, svc):
+        from fastapi.testclient import TestClient
+
+        import api as mod
+
+        # Set state directly and skip lifespan (which would load the real index).
+        mod.app.state.recommender = svc
+        mod.app.state.metrics = svc.metrics
+        mod.app.state.settings = svc.settings
+        return TestClient(mod.app)
+
+    def _parse_sse(self, text):
+        events = []
+        for block in text.strip().split("\n\n"):
+            line = block.strip()
+            if line.startswith("data:"):
+                events.append(json.loads(line[len("data:"):].strip()))
+        return events
+
+    def test_stream_emits_status_then_result_then_done(self):
+        svc = make_service()
+        client = self._client(svc)
+        resp = client.post("/chat/stream", json={"q": "best tool for writing blog posts"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("text/event-stream", resp.headers["content-type"])
+        events = self._parse_sse(resp.text)
+        types = [e["type"] for e in events]
+        # At least one status, exactly one result, terminal done.
+        self.assertIn("status", types)
+        self.assertEqual(types.count("result"), 1)
+        self.assertEqual(types[-1], "done")
+        # status events precede the result.
+        self.assertLess(types.index("status"), types.index("result"))
+
+    def test_stream_result_matches_chat_contract(self):
+        svc = make_service()
+        client = self._client(svc)
+        result = next(
+            e for e in self._parse_sse(
+                client.post("/chat/stream", json={"q": "best tool for writing blog posts"}).text
+            )
+            if e["type"] == "result"
+        )
+        data = result["data"]
+        # Same shape as POST /chat: action + message + hits + contract present.
+        self.assertIn("action", data)
+        self.assertIn("message", data)
+        self.assertIn("hits", data)
+        self.assertIn("contract", data)
+
+    def test_stream_reports_stage_names(self):
+        svc = make_service()
+        client = self._client(svc)
+        events = self._parse_sse(
+            client.post("/chat/stream", json={"q": "best tool for writing blog posts"}).text
+        )
+        stages = [e["stage"] for e in events if e["type"] == "status"]
+        # routing always fires; a fresh search reaches retrieving + ranking.
+        self.assertIn("routing", stages)
+        self.assertIn("retrieving", stages)
+        self.assertIn("ranking", stages)
+
+
 class IndexManifestTests(unittest.TestCase):
     def _settings(self, tmp_path, **overrides):
         return dataclasses.replace(
