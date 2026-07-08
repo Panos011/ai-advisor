@@ -3801,6 +3801,85 @@ def mmr_rerank(
     return [candidates[i] for i in selected_indices]
 
 
+# === Structured output schemas ===
+# Strict json_schema definitions for every JSON-returning LLM call. Strict mode
+# eliminates the "model returned unusable JSON" failure class; _chat_create
+# downgrades to json_object automatically if the model rejects json_schema.
+
+PLANNER_DECISION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "action": {"type": ["string", "null"]},
+        "tool": {"type": ["string", "null"]},
+        "message": {"type": ["string", "null"]},
+        "refined_query": {"type": ["string", "null"]},
+        "filters": {
+            "type": ["object", "null"],
+            "properties": {
+                "budget": {"type": ["string", "null"]},
+                "privacy": {"type": ["string", "null"]},
+                "integrations": {"type": ["array", "null"], "items": {"type": "string"}},
+                "categories": {"type": ["array", "null"], "items": {"type": "string"}},
+                "platforms": {"type": ["array", "null"], "items": {"type": "string"}},
+                "skill_level": {"type": ["string", "null"]},
+            },
+            "required": ["budget", "privacy", "integrations", "categories", "platforms", "skill_level"],
+            "additionalProperties": False,
+        },
+        "mode": {"type": ["string", "null"]},
+    },
+    "required": ["action", "tool", "message", "refined_query", "filters", "mode"],
+    "additionalProperties": False,
+}
+
+RANK_SELECTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "selected": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer"},
+                    "reason": {"type": "string"},
+                    "tradeoff": {"type": "string"},
+                    "best_for": {"type": "string"},
+                },
+                "required": ["id", "reason", "tradeoff", "best_for"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["selected"],
+    "additionalProperties": False,
+}
+
+CLARIFY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "action": {"type": "string", "enum": ["clarify", "search"]},
+        "question": {"type": ["string", "null"]},
+        "refined_query": {"type": ["string", "null"]},
+    },
+    "required": ["action", "question", "refined_query"],
+    "additionalProperties": False,
+}
+
+INTENT_SCHEMA = {
+    "type": "object",
+    "properties": {"intent": {"type": "string", "enum": ["explain", "refine", "new"]}},
+    "required": ["intent"],
+    "additionalProperties": False,
+}
+
+MESSAGE_ONLY_SCHEMA = {
+    "type": "object",
+    "properties": {"message": {"type": "string"}},
+    "required": ["message"],
+    "additionalProperties": False,
+}
+
+
 class RecommendationService:
     def __init__(
         self,
@@ -3843,6 +3922,45 @@ class RecommendationService:
         # Flipped off permanently for the process the first time the model rejects
         # reasoning_effort, so an unsupported model degrades to prior behavior.
         self._reasoning_supported = bool(self.settings.reasoning_effort)
+        # Same pattern for strict structured outputs: assume json_schema works and
+        # downgrade to json_object for the process if the model rejects it.
+        self._json_schema_supported = True
+
+    def _structured_format(self, name: str, schema: dict[str, Any]) -> dict[str, Any]:
+        if not self._json_schema_supported:
+            return {"type": "json_object"}
+        return {
+            "type": "json_schema",
+            "json_schema": {"name": name, "strict": True, "schema": schema},
+        }
+
+    def _create_with_format_fallback(self, **kwargs: Any) -> Any:
+        """Run the completion, downgrading json_schema -> json_object once per
+        process if the model rejects structured outputs, so a strict schema can
+        never hard-fail a request that json_object used to serve."""
+        response_format = kwargs.get("response_format") or {}
+        if response_format.get("type") == "json_schema":
+            if not self._json_schema_supported:
+                kwargs = {**kwargs, "response_format": {"type": "json_object"}}
+            else:
+                try:
+                    return self.client.chat.completions.create(**kwargs)
+                except Exception as exc:  # noqa: BLE001 - classified below
+                    message = str(exc).lower()
+                    schema_error = any(
+                        token in message
+                        for token in ("json_schema", "response_format", "structured output", "schema")
+                    )
+                    if not schema_error:
+                        raise
+                    logger.warning(
+                        "Model rejected json_schema response_format; using json_object for this process (%s)",
+                        type(exc).__name__,
+                    )
+                    self.metrics.increment("json_schema_unsupported")
+                    self._json_schema_supported = False
+                    kwargs = {**kwargs, "response_format": {"type": "json_object"}}
+        return self.client.chat.completions.create(**kwargs)
 
     def _chat_create(self, **kwargs: Any) -> Any:
         """Single entry point for chat completions.
@@ -3860,7 +3978,7 @@ class RecommendationService:
         try:
             if self._reasoning_supported:
                 try:
-                    return self.client.chat.completions.create(
+                    return self._create_with_format_fallback(
                         reasoning_effort=self.settings.reasoning_effort, **kwargs
                     )
                 except Exception as exc:  # noqa: BLE001 - classified below
@@ -3887,7 +4005,7 @@ class RecommendationService:
                     )
                     self.metrics.increment("reasoning_effort_unsupported")
                     self._reasoning_supported = False
-            return self.client.chat.completions.create(**kwargs)
+            return self._create_with_format_fallback(**kwargs)
         finally:
             logger.info(
                 "TIMING llm call %.0f ms [%s]",
@@ -5232,7 +5350,7 @@ class RecommendationService:
                         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                     ],
                     temperature=0.0,
-                    response_format={"type": "json_object"},
+                    response_format=self._structured_format("tool_question_reply", MESSAGE_ONLY_SCHEMA),
                 )
             data = json.loads(resp.choices[0].message.content or "{}")
             message = clean_assistant_message(data.get("message", ""))
@@ -5277,7 +5395,7 @@ class RecommendationService:
                     model=self.settings.chat_model,
                     messages=chat_messages,
                     temperature=0.4,
-                    response_format={"type": "json_object"},
+                    response_format=self._structured_format("chat_reply", MESSAGE_ONLY_SCHEMA),
                 )
             data = json.loads(resp.choices[0].message.content or "{}")
             message = clean_assistant_message(data.get("message", ""))
@@ -5527,7 +5645,7 @@ class RecommendationService:
                         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
                     ],
                     temperature=0.0,
-                    response_format={"type": "json_object"},
+                    response_format=self._structured_format("planner_decision", PLANNER_DECISION_SCHEMA),
                 )
             data = json.loads(resp.choices[0].message.content or "{}")
             action = data.get("action")
@@ -5655,7 +5773,7 @@ class RecommendationService:
                         {"role": "user", "content": user_content},
                     ],
                     temperature=0.2,
-                    response_format={"type": "json_object"},
+                    response_format=self._structured_format("clarify_decision", CLARIFY_SCHEMA),
                 )
             raw = resp.choices[0].message.content or ""
             data = json.loads(raw)
@@ -5743,7 +5861,7 @@ class RecommendationService:
                         },
                     ],
                     temperature=0.0,
-                    response_format={"type": "json_object"},
+                    response_format=self._structured_format("intent_classification", INTENT_SCHEMA),
                 )
             data = json.loads(resp.choices[0].message.content)
             intent = data.get("intent", "new")
@@ -5925,7 +6043,7 @@ class RecommendationService:
                         },
                     ],
                     temperature=0.2,
-                    response_format={"type": "json_object"},
+                    response_format=self._structured_format("rank_selection", RANK_SELECTION_SCHEMA),
                 )
             data = json.loads(resp.choices[0].message.content)
             selected = data.get("selected", [])

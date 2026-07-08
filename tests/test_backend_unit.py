@@ -225,23 +225,29 @@ class CapturingClient:
 
 class RecordingChatCompletions:
     """Records the kwargs of every chat completion call, optionally failing when
-    reasoning_effort is supplied (to exercise the auto-disable path)."""
+    reasoning_effort is supplied (to exercise the auto-disable path) or when a
+    json_schema response_format is supplied (to exercise the schema downgrade)."""
 
-    def __init__(self, fail_on_reasoning=False):
+    def __init__(self, fail_on_reasoning=False, fail_on_json_schema=False):
         self.calls = []
         self.fail_on_reasoning = fail_on_reasoning
+        self.fail_on_json_schema = fail_on_json_schema
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
         if self.fail_on_reasoning and "reasoning_effort" in kwargs:
             raise TypeError("create() got an unexpected keyword argument 'reasoning_effort'")
+        if self.fail_on_json_schema and (kwargs.get("response_format") or {}).get("type") == "json_schema":
+            raise ValueError("Invalid parameter: response_format of type json_schema is not supported")
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))])
 
 
 class RecordingClient:
-    def __init__(self, fail_on_reasoning=False):
+    def __init__(self, fail_on_reasoning=False, fail_on_json_schema=False):
         self.embeddings = FakeEmbeddings()
-        self.chat = SimpleNamespace(completions=RecordingChatCompletions(fail_on_reasoning))
+        self.chat = SimpleNamespace(
+            completions=RecordingChatCompletions(fail_on_reasoning, fail_on_json_schema)
+        )
 
 
 def make_service(client=None):
@@ -3448,6 +3454,69 @@ class ChatCreateReasoningTests(unittest.TestCase):
         svc, comp = self._service(reasoning_effort="")
         svc._chat_create(model="m", messages=[{"role": "user", "content": "hi"}])
         self.assertNotIn("reasoning_effort", comp.calls[0])
+
+
+class StructuredOutputTests(unittest.TestCase):
+    def test_structured_format_uses_json_schema_when_supported(self):
+        svc = make_service(RecordingClient())
+        fmt = svc._structured_format("planner_decision", api_module.PLANNER_DECISION_SCHEMA)
+        self.assertEqual(fmt["type"], "json_schema")
+        self.assertTrue(fmt["json_schema"]["strict"])
+        self.assertEqual(fmt["json_schema"]["name"], "planner_decision")
+
+    def test_structured_format_downgrades_after_disable(self):
+        svc = make_service(RecordingClient())
+        svc._json_schema_supported = False
+        fmt = svc._structured_format("planner_decision", api_module.PLANNER_DECISION_SCHEMA)
+        self.assertEqual(fmt, {"type": "json_object"})
+
+    def test_auto_downgrade_when_model_rejects_json_schema(self):
+        svc = make_service(RecordingClient(fail_on_json_schema=True))
+        comp = svc.client.chat.completions
+        resp = svc._chat_create(
+            model="m",
+            messages=[{"role": "user", "content": "hi"}],
+            response_format=svc._structured_format("rank_selection", api_module.RANK_SELECTION_SCHEMA),
+        )
+        # First attempt used json_schema and failed; the retry downgraded and served.
+        self.assertEqual(comp.calls[0]["response_format"]["type"], "json_schema")
+        self.assertEqual(comp.calls[1]["response_format"], {"type": "json_object"})
+        self.assertIsNotNone(resp)
+        self.assertFalse(svc._json_schema_supported)
+        # Subsequent calls never send json_schema again for the life of the process.
+        svc._chat_create(
+            model="m",
+            messages=[{"role": "user", "content": "again"}],
+            response_format=svc._structured_format("rank_selection", api_module.RANK_SELECTION_SCHEMA),
+        )
+        self.assertEqual(comp.calls[2]["response_format"], {"type": "json_object"})
+
+    def test_non_schema_errors_still_raise(self):
+        class TimeoutCompletions(RecordingChatCompletions):
+            def create(self, **kwargs):
+                self.calls.append(kwargs)
+                raise TimeoutError("request timed out")
+
+        svc = make_service(RecordingClient())
+        svc.client.chat.completions = TimeoutCompletions()
+        with self.assertRaises(TimeoutError):
+            svc._chat_create(
+                model="m",
+                messages=[{"role": "user", "content": "hi"}],
+                response_format=svc._structured_format("chat_reply", api_module.MESSAGE_ONLY_SCHEMA),
+            )
+        self.assertTrue(svc._json_schema_supported)
+
+    def test_planner_call_sends_strict_schema(self):
+        svc = make_service(RecordingClient())
+        svc._chat_decision("best writing tool", None, "balanced", None, None)
+        planner_calls = [
+            call for call in svc.client.chat.completions.calls
+            if "conversation brain" in (call.get("messages") or [{}])[0].get("content", "")
+        ]
+        self.assertTrue(planner_calls)
+        self.assertEqual(planner_calls[0]["response_format"]["type"], "json_schema")
+        self.assertEqual(planner_calls[0]["response_format"]["json_schema"]["name"], "planner_decision")
 
 
 class DegradationTrackingTests(unittest.TestCase):
