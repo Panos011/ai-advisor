@@ -166,6 +166,53 @@ class RuntimeMetrics:
             }
 
 
+# === Per-request degradation and progress context ===
+
+import contextvars
+from collections.abc import Callable
+
+# Reasons the current request was served on a degraded path (planner/ranker/
+# embedding fallbacks). Route handlers start tracking; fallback sites append.
+# ContextVars propagate into the threadpool FastAPI runs sync routes on, so no
+# service-method signatures need to change.
+_degradation_reasons: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
+    "degradation_reasons", default=None
+)
+# Optional stage-progress callback used by streaming endpoints; None everywhere else.
+_progress_callback: contextvars.ContextVar[Callable[[str], None] | None] = contextvars.ContextVar(
+    "progress_callback", default=None
+)
+
+
+def begin_degradation_tracking() -> None:
+    _degradation_reasons.set([])
+
+
+def note_degradation(reason: str) -> None:
+    """Record that the current request fell back to a degraded path.
+
+    No-op when tracking has not been started (offline scripts, internal callers),
+    so this is safe to call from anywhere in the pipeline.
+    """
+    reasons = _degradation_reasons.get()
+    if reasons is not None and reason not in reasons:
+        reasons.append(reason)
+
+
+def current_degradation_reasons() -> list[str]:
+    return list(_degradation_reasons.get() or [])
+
+
+def emit_progress(stage: str) -> None:
+    callback = _progress_callback.get()
+    if callback is None:
+        return
+    try:
+        callback(stage)
+    except Exception:  # noqa: BLE001 - progress reporting must never break a request
+        pass
+
+
 # === Settings ===
 
 import os
@@ -367,6 +414,11 @@ class RecommendResponse(BaseModel):
     hits: list[SearchHit]
     message: str | None = None
     contract: RecommenderContract | None = None
+    # True when any LLM/embedding stage fell back to a degraded path (keyword
+    # search, retrieval-order ranking, rule-based planning); reasons list the
+    # specific fallbacks so clients and operators can see silent degradation.
+    degraded: bool = False
+    degradation: list[str] = Field(default_factory=list)
 
 
 class ChatRequest(BaseModel):
@@ -411,10 +463,14 @@ class ChatResponse(BaseModel):
     hits: list[SearchHit] = Field(default_factory=list)
     refined_query: str | None = None
     contract: RecommenderContract | None = None
+    degraded: bool = False
+    degradation: list[str] = Field(default_factory=list)
 
 
 class SearchResponse(BaseModel):
     hits: list[SearchHit]
+    degraded: bool = False
+    degradation: list[str] = Field(default_factory=list)
 
 
 class ClarifyRequest(BaseModel):
@@ -613,7 +669,8 @@ def requires_no_cloud_data(text: str) -> bool:
 def has_cloud_local_conflict(text: str) -> bool:
     normalized = normalize_query_text(text).lower()
     asks_for_cloud = bool(re.search(
-        r"\b(?:cloud[- ]based|hosted|saas|online\s+service|cloud\s+(?:tool|app|platform|assistant|analytics|api))\b",
+        r"\b(?:cloud[- ]based|hosted|saas|online\s+service|cloud\s+(?:tool|app|platform|assistant|analytics|api)|"
+        r"cloud\b[^.?!]{0,40}\b(?:tool|app|platform|assistant|service))\b",
         normalized,
     ))
     if re.search(r"\bnot\s+(?:cloud[- ]hosted|hosted|cloud[- ]based|a\s+cloud\s+(?:tool|app|platform)|saas)\b", normalized):
@@ -1027,6 +1084,8 @@ def feedback_chat_response() -> str:
 
 UNSAFE_REQUEST_PATTERNS = (
     r"\billegal\s+(?:tools?|activities|apps?|software|services?)\b",
+    r"\b(?:scam|scamming|scammer|fraud|black[- ]?hat)\s+(?:tools?|toolkits?|apps?|software|services?|automation|bots?)\b|"
+    r"\btools?\s+(?:for|to)\s+(?:scam|defraud|commit\s+fraud)\b",
     r"\bphishing\b|\bbypass\s+spam\s+filters?\b|\bspam\s+filters?\b",
     r"\bimpersonat(?:e|ing|ion)\b[^.?!]{0,100}\b(?:boss|ceo|cfo|payment|approval|invoice|wire|bank)\b",
     r"\bvoice\s+clon(?:e|ing)\b[^.?!]{0,100}\b(?:impersonat|payment|approval|boss|ceo|cfo|scam)\b",
@@ -1063,9 +1122,20 @@ def is_defensive_security_request(text: str) -> bool:
     return defensive and security_training
 
 
+def is_benign_fraud_prevention_request(text: str) -> bool:
+    normalized = normalize_query_text(text).lower()
+    has_fraud_topic = bool(re.search(r"\b(?:fraud|scam|fake\s+review|phishing|abuse)\b", normalized))
+    prevention = bool(re.search(
+        r"\b(?:detect|detection|prevent|prevention|monitor|moderation|compliance|risk|"
+        r"anti[- ]fraud|anti[- ]scam|trust\s+and\s+safety|investigat(?:e|ion)|reporting|protect)\b",
+        normalized,
+    ))
+    return has_fraud_topic and prevention
+
+
 def is_unsafe_tool_request(text: str) -> bool:
     normalized = normalize_query_text(text).lower()
-    if is_defensive_security_request(normalized):
+    if is_defensive_security_request(normalized) or is_benign_fraud_prevention_request(normalized):
         return False
     return any(re.search(pattern, normalized) for pattern in UNSAFE_REQUEST_PATTERNS)
 
@@ -1080,8 +1150,18 @@ def unsafe_request_response() -> str:
 def is_refusal_followup_query(text: str) -> bool:
     normalized = normalize_query_text(text).lower().strip()
     return bool(re.fullmatch(
-        r"(?:why|why\s+is\s+that|why\s+not|why\s+cant\s+you|why\s+can't\s+you|"
-        r"why\s+can\s+you\s+not|what\s+do\s+you\s+mean|explain\s+that)\??",
+        r"(?:why|(?:but\s+)?why\s*(?:tho|though|exactly|again)?|how\s+come|why\s+is\s+(?:that|this)(?:\s+(?:a\s+)?(?:conflict|unsafe|not\s+allowed))?|"
+        r"why\s+not|why\s+cant\s+you|why\s+can't\s+you|why\s+can\s+you\s+not|"
+        r"why\s+(?:no|zero)\s+(?:results?|tools?|cards?|matches?)|"
+        r"why\s+(?:are|is)\s+there\s+no\s+(?:results?|tools?|cards?|matches?)|"
+        r"why\s+(?:is\s+)?(?:it\s+)?(?:illegal|unsafe|blocked|refused|not\s+allowed|a\s+conflict)|"
+        r"why\s+does\s+(?:it|that|this)\s+conflict|what\s+conflicts?|explain\s+the\s+conflict|"
+        r"why\s+did(?:n'?t| not)\s+you\s+(?:find|show|recommend)\s+(?:anything|tools?|cards?|matches?)|"
+        r"why\s+did\s+you\s+(?:find|show|recommend)\s+(?:nothing|no\s+(?:tools?|cards?|matches?))|"
+        r"why\s+did\s+you\s+refuse|"
+        r"what\s+(?:rule|policy|boundary)\s+did\s+i\s+(?:break|cross|hit)|"
+        r"what\s+do\s+you\s+mean|explain\s+that|explain\s+why|"
+        r"explain\s+why\s+(?:it|this|that)\s+(?:is\s+)?(?:illegal|unsafe|blocked|refused|not\s+allowed))\??",
         normalized,
     ))
 
@@ -1115,6 +1195,51 @@ def safety_refusal_followup_response(last_message: str) -> str:
         "Because that request crosses a safety boundary for this advisor. "
         "I can still help find legitimate tools for a safer version of the task."
     )
+
+
+def is_constraint_clarification_message(text: str) -> bool:
+    normalized = normalize_query_text(text).lower()
+    if not normalized:
+        return False
+    return bool(
+        ("conflict" in normalized and re.search(r"\b(?:cloud|local|offline|sync|integrat|constraint)\b", normalized))
+        or "i could not find" in normalized
+        or "could not find a clearly local-only" in normalized
+        or "could not find a tool with clear self-hosting" in normalized
+        or "none of the current matches list clear privacy" in normalized
+    )
+
+
+def constraint_clarification_followup_response(last_message: str) -> str:
+    normalized = normalize_query_text(last_message).lower()
+    if "cloud" in normalized and re.search(r"\b(?:local|offline|off-device|no cloud|data should not leave|data stays)\b", normalized):
+        return (
+            "Because cloud tools normally process or store data off your device, while local-only or no-cloud means the data should stay on your device. "
+            "Those requirements point in opposite directions, so I need to know which one matters more."
+        )
+    if re.search(r"\b(?:sync|integrat|slack|salesforce|hubspot|zapier|crm)\b", normalized):
+        return (
+            "Because fully offline tools usually cannot automatically sync with cloud apps. "
+            "Automatic integrations normally require sending data to those services."
+        )
+    if re.search(r"\b(?:local-only|self-hosting|privacy|clear privacy)\b", normalized):
+        return (
+            "Because I only trust explicit catalog evidence for privacy, local-only, or self-hosted claims. "
+            "If the tool record does not say that data stays local or can be self-hosted, I should not present it as a proven match."
+        )
+    if "open-source" in normalized or "open source" in normalized:
+        return (
+            "Because I only count a tool as open source when the catalog gives explicit evidence, such as an open-source claim or license. "
+            "A free tier or generic developer wording is not enough."
+        )
+    if "paid-only" in normalized:
+        return "Because the matching records did not clearly exclude free trials or freemium plans, so I should not label them as paid-only."
+    if "i could not find" in normalized:
+        return (
+            "Because the catalog did not show enough matching evidence for the constraints in that request. "
+            "I can broaden the filters or try a safer adjacent search."
+        )
+    return "Because the requirements conflict or need stronger evidence than the catalog currently shows."
 
 
 def is_high_stakes_guarantee_request(text: str) -> bool:
@@ -2416,6 +2541,54 @@ def _price_sort_key(meta: dict[str, Any]) -> tuple[int, float]:
     if re.search(r"[$€£]|\b(paid|pro|premium|subscription|enterprise)\b", price):
         return (2, 0.0)
     return (3, 0.0)
+
+
+def requested_monthly_price_cap(text: str) -> float | None:
+    normalized = normalize_query_text(text).lower()
+    patterns = (
+        r"\b(?:under|below|less\s+than|no\s+more\s+than|max(?:imum)?|up\s+to|budget\s+of|cap(?:ped)?\s+at|limit(?:ed)?\s+to)\s*[$€£]\s*([\d,]+(?:\.\d{1,2})?)",
+        r"[$€£]\s*([\d,]+(?:\.\d{1,2})?)\s*(?:or\s+)?(?:less|max|maximum|budget|per\s+month|/month|/mo|monthly)",
+        r"\b(?:under|below|less\s+than|no\s+more\s+than|max(?:imum)?|up\s+to|budget\s+(?:of|is)|price\s+(?:under|below)|cost\s+(?:under|below))\s*"
+        r"([\d,]+(?:\.\d{1,2})?)\s*(?:dollars?|bucks?|usd|eur|euros?|gbp|pounds?)\s*(?:a\s+)?(?:month|mo|monthly)?\b",
+        r"\b(?:under|below|less\s+than|no\s+more\s+than|max(?:imum)?|up\s+to|budget\s+(?:of|is))\s*"
+        r"([\d,]+(?:\.\d{1,2})?)\s*(?:/\s*mo|/\s*month|per\s+month|a\s+month|monthly)\b",
+        r"\b([\d,]+(?:\.\d{1,2})?)\s*(?:dollars?|bucks?|usd|eur|euros?|gbp|pounds?|/\s*mo|/\s*month|per\s+month|a\s+month|monthly)\s*(?:or\s+)?(?:less|max|maximum|tops?|cap(?:ped)?|budget)\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, normalized)
+        if match:
+            try:
+                return float(match.group(1).replace(",", ""))
+            except ValueError:
+                return None
+    return None
+
+
+def explicit_monthly_prices(meta: dict[str, Any]) -> list[float]:
+    price = normalize_display_text(meta.get("Price", "")).lower()
+    prices: list[float] = []
+    for match in re.finditer(r"\$\s*([\d,]+(?:\.\d{1,2})?)\s*(?:/\s*)?(month|mo|monthly)?", price):
+        try:
+            amount = float(match.group(1).replace(",", ""))
+        except ValueError:
+            continue
+        unit = match.group(2) or ""
+        # Most catalog prices are monthly when no unit is supplied. Avoid treating
+        # explicit yearly prices as monthly; annual conversion needs clearer data.
+        after = price[match.end(): match.end() + 16]
+        if re.search(r"\b(?:year|yr|annual|annually)\b", unit + " " + after):
+            continue
+        prices.append(amount)
+    return prices
+
+
+def matches_price_cap(meta: dict[str, Any], cap: float | None) -> bool:
+    if cap is None:
+        return True
+    if is_free_tool(meta) or is_open_source_tool(meta):
+        return True
+    prices = explicit_monthly_prices(meta)
+    return bool(prices) and min(prices) <= cap
 
 
 def _matches_tool_name(meta: dict[str, Any], name: str) -> bool:
@@ -3736,11 +3909,20 @@ class RecommendationService:
             self.last_shown[conversation_id] = hit
 
     def health(self) -> dict[str, Any]:
+        counters = self.metrics.snapshot().get("counters", {})
+        degradation_counters = {
+            name: count
+            for name, count in counters.items()
+            if "fallback" in name or name in ("openai_rank_errors", "chat_decision_invalid", "degraded_requests")
+        }
         return {
             "ok": self.store.ready,
             "items": len(self.store.meta),
             "openai_configured": bool(self.settings.openai_api_key),
             "vectors_loaded": self.store.vectors is not None,
+            # Non-empty counters here mean requests were served on silent-fallback
+            # paths (keyword search, retrieval-order ranking, rule-based planning).
+            "degradation_counters": degradation_counters,
         }
 
     def embed(self, texts: list[str]) -> np.ndarray:
@@ -3780,6 +3962,7 @@ class RecommendationService:
         except Exception as exc:
             logger.info("Embedding unavailable; served keyword search fallback (%s)", type(exc).__name__)
             self.metrics.increment("embedding_fallbacks")
+            note_degradation("embedding_unavailable_keyword_search")
             return {"hits": keyword_search(q, k, self.store.meta)}
 
         with self.metrics.timer("faiss.search_ms"):
@@ -4094,6 +4277,7 @@ class RecommendationService:
         )
         strict_free = requires_strict_free(retrieval_query)
         strict_free = strict_free or bool(filter_value(filters, "strict_free", False) or filter_value(filters, "strictFree", False))
+        price_cap = requested_monthly_price_cap(retrieval_query)
         wants_cheaper = bool(re.search(
             r"\b(?:cheap(?:er|est)?|more\s+affordable|lower[- ]cost|less\s+expensive|budget[- ]friendly)\b",
             retrieval_lower,
@@ -4142,6 +4326,7 @@ class RecommendationService:
         except Exception as exc:
             logger.info("Embedding unavailable; served keyword recommendation fallback (%s)", type(exc).__name__)
             self.metrics.increment("embedding_fallbacks")
+            note_degradation("embedding_unavailable_keyword_recommendation")
             broad_filter_required = (
                 local_only_required
                 or no_cloud_required
@@ -4149,6 +4334,7 @@ class RecommendationService:
                 or open_source_only
                 or strict_open_source
                 or strict_free
+                or price_cap is not None
                 or paid_only
                 or privacy_required
                 or coding_intent
@@ -4212,6 +4398,13 @@ class RecommendationService:
                         "message": "I could not find a clearly paid-only match that excludes free trials or freemium tiers for that.",
                     }
             hits = filtered_hits or hits
+            if price_cap is not None:
+                hits = [hit for hit in hits if matches_price_cap(hit.get("meta") or {}, price_cap)]
+                if not hits:
+                    return {
+                        "hits": [],
+                        "message": f"I could not find a clearly matching tool priced at or under ${price_cap:g}/month for that.",
+                    }
             if exclude_ref_names:
                 hits = [
                     hit for hit in hits
@@ -4341,6 +4534,18 @@ class RecommendationService:
             ]
             candidates = cheaper or candidates
 
+        if price_cap is not None:
+            capped = [
+                candidate for candidate in candidates
+                if matches_price_cap(self.store.meta[int(candidate["id"])], price_cap)
+            ]
+            if not capped:
+                return {
+                    "hits": [],
+                    "message": f"I could not find a clearly matching tool priced at or under ${price_cap:g}/month for that.",
+                }
+            candidates = capped
+
         if strict_free:
             strictly_free = [
                 candidate for candidate in candidates
@@ -4424,6 +4629,7 @@ class RecommendationService:
                 for candidate in candidates[:effective_final_k]
                 if not free_only or is_free_tool(self.store.meta[int(candidate["id"])])
                 if not paid_only or (is_paid_tool(self.store.meta[int(candidate["id"])]) and not is_free_tool(self.store.meta[int(candidate["id"])]))
+                if price_cap is None or matches_price_cap(self.store.meta[int(candidate["id"])], price_cap)
                 if not strict_free or is_completely_free_tool(self.store.meta[int(candidate["id"])])
                 if not open_source_only or (is_strict_open_source_tool(self.store.meta[int(candidate["id"])]) if strict_open_source else is_open_source_tool(self.store.meta[int(candidate["id"])]))
                 if not local_only_required or is_local_only_tool(self.store.meta[int(candidate["id"])])
@@ -4431,6 +4637,7 @@ class RecommendationService:
                 if not self_hosted_required or is_self_hosted_tool(self.store.meta[int(candidate["id"])])
             ]
             self.metrics.increment("llm_rank_fallbacks")
+            note_degradation("llm_rank_unused_retrieval_order")
 
         if exclude_ref_names:
             kept = [
@@ -4452,6 +4659,8 @@ class RecommendationService:
                 if free_only and not is_free_tool(meta):
                     continue
                 if paid_only and (not is_paid_tool(meta) or is_free_tool(meta)):
+                    continue
+                if price_cap is not None and not matches_price_cap(meta, price_cap):
                     continue
                 if strict_free and not is_completely_free_tool(meta):
                     continue
@@ -4476,6 +4685,8 @@ class RecommendationService:
         final_hits = filter_hits_for_query_domain(final_hits, retrieval_query)
         if paid_only:
             final_hits = [hit for hit in final_hits if is_paid_tool(hit.get("meta") or {}) and not is_free_tool(hit.get("meta") or {})]
+        if price_cap is not None:
+            final_hits = [hit for hit in final_hits if matches_price_cap(hit.get("meta") or {}, price_cap)]
         if coding_intent and final_hits:
             final_hits = prioritize_coding_hits(final_hits)
 
@@ -4534,6 +4745,20 @@ class RecommendationService:
         # "stop recommending the same ones" / "give me different ones" is an actionable
         # request for NEW options, not venting — fetch a fresh distinct alternative.
         if has_context_hits and wants_different_not_same(q):
+            prior_task = self._latest_task_query(conversation_id, history)
+            if has_explicit_task(q) and request_goal(q) != request_goal(prior_task):
+                response = self.recommend(
+                    q,
+                    retrieve_k,
+                    final_k,
+                    filters=filters,
+                    mode=mode,
+                    conversation_id=conversation_id,
+                    history=history,
+                    pre_routed=True,
+                )
+                self._ensure_assistant_remembered(conversation_id, response.get("message"))
+                return {"action": "recommend", "refined_query": q, **response}
             response = self._chat_alternative(
                 q, conversation_id, history, retrieve_k, final_k, filters, mode,
                 visible_hits=provided_hits,
@@ -4575,6 +4800,11 @@ class RecommendationService:
                 self.conversations.append(conversation_id, "user", q)
                 self.conversations.append(conversation_id, "assistant", message)
                 return {"action": "chat_only", "hits": [], "message": message}
+            if is_constraint_clarification_message(last_reply):
+                message = constraint_clarification_followup_response(last_reply)
+                self.conversations.append(conversation_id, "user", q)
+                self.conversations.append(conversation_id, "assistant", message)
+                return {"action": "chat_only", "hits": [], "message": message}
 
         if is_tool_card_request(q) and not has_explicit_task(q):
             prior_task = self._latest_task_query(conversation_id, history)
@@ -4589,6 +4819,7 @@ class RecommendationService:
                     history=history,
                     pre_routed=True,
                 )
+                self._ensure_assistant_remembered(conversation_id, response.get("message"))
                 return {"action": "recommend", "refined_query": prior_task, **response}
             message = "Tell me what kind of tool cards you want, and I will search the catalog."
             self.conversations.append(conversation_id, "user", q)
@@ -4606,6 +4837,7 @@ class RecommendationService:
                 history=history,
                 pre_routed=True,
             )
+            self._ensure_assistant_remembered(conversation_id, response.get("message"))
             return {"action": "recommend", "refined_query": q, **response}
 
         if is_alternative_query(q) and not alternative_requests_new_search(q):
@@ -4738,6 +4970,9 @@ class RecommendationService:
             refined_query = f"{refined_query} paid-only no free freemium".strip()
             base_nf = next_filters if isinstance(next_filters, dict) else {}
             next_filters = {**base_nf, "budget": "paid", "paid_only": True}
+        original_price_cap = requested_monthly_price_cap(q)
+        if original_price_cap is not None and requested_monthly_price_cap(refined_query) is None:
+            refined_query = f"{refined_query} under ${original_price_cap:g}/month".strip()
         if re.search(r"\b(?:local[- ](?:only|first)|on[- ]device|offline|never\s+(?:sends?|leaves?)|no\s+cloud|without\s+(?:the\s+)?cloud|self[- ]hosted|on[- ]prem)\b", original_lower):
             base_nf = next_filters if isinstance(next_filters, dict) else {}
             next_filters = {**base_nf, "privacy": "local-first"}
@@ -4773,6 +5008,7 @@ class RecommendationService:
             pre_routed=True,
             exclude_tools=exclude_tools or None,
         )
+        self._ensure_assistant_remembered(conversation_id, response.get("message"))
         return {
             "action": "refine" if action == "refine" else "recommend",
             "refined_query": refined_query,
@@ -4898,6 +5134,9 @@ class RecommendationService:
         # "show another" requests keep advancing instead of looping back.
         prior_shown_names = set(self.shown_tools.get(conversation_id, set())) if conversation_id else set()
         reason_query = self._latest_task_query(conversation_id, history) or q
+        followup_price_cap = requested_monthly_price_cap(q)
+        if followup_price_cap is not None and requested_monthly_price_cap(reason_query) is None:
+            reason_query = f"{reason_query} under ${followup_price_cap:g}/month".strip()
         alt_filters = self._followup_filters(filters, q)
         fresh = self._fresh_distinct_alternative(
             reason_query,
@@ -5003,6 +5242,7 @@ class RecommendationService:
         except Exception as exc:
             logger.warning("Tool-question model reply failed (%s): %s", type(exc).__name__, exc)
             self.metrics.increment("tool_question_model_fallbacks")
+        note_degradation("tool_question_template_reply")
         return ""
 
     def _model_chat_only_response(
@@ -5047,6 +5287,7 @@ class RecommendationService:
         except Exception as exc:
             logger.warning("Chat-only model reply failed (%s): %s", type(exc).__name__, exc)
             self.metrics.increment("chat_only_model_fallbacks")
+        note_degradation("chat_reply_template")
         return ""
 
     def _fresh_distinct_alternative(
@@ -5113,6 +5354,8 @@ class RecommendationService:
             exclude_tools=list(prior_names) or None,
         )
         for hit in response.get("hits", []):
+            if filters and not apply_decision_filters([hit], filters, self.store.meta):
+                continue
             name = str((hit.get("meta") or {}).get("Name", "")).strip().lower()
             if name and name not in prior_names:
                 return enrich_hit(dict(hit), reason_query)
@@ -5138,6 +5381,8 @@ class RecommendationService:
         if re.search(r"\b(?:cheap(?:er|est)?|more\s+affordable|less\s+expensive|budget[- ]friendly)\b", lower):
             if base.get("budget", "any") in (None, "any"):
                 base["budget"] = "freemium"
+        if requires_free_only(lower):
+            base["budget"] = "free"
         if requires_strict_free(lower):
             base["budget"] = "free"
             base["strict_free"] = True
@@ -5164,6 +5409,17 @@ class RecommendationService:
         stored = self.conversations.get(conversation_id)
         prior_messages = merge_history_messages(history, stored)
         return next((m for m in reversed(prior_messages) if has_explicit_task(m)), "")
+
+    def _ensure_assistant_remembered(self, conversation_id: str | None, message: Any) -> None:
+        if not conversation_id:
+            return
+        cleaned = normalize_query_text(message)
+        if not cleaned:
+            return
+        stored = self.conversations.get(conversation_id)
+        if stored and stored[-1].get("role") == "assistant" and stored[-1].get("content") == cleaned:
+            return
+        self.conversations.append(conversation_id, "assistant", cleaned)
 
     def _merge_chat_filters(self, filters: Any, decision_filters: Any) -> Any:
         base = filters.model_dump() if hasattr(filters, "model_dump") else dict(filters or {})
@@ -5285,6 +5541,7 @@ class RecommendationService:
             logger.warning("Chat planner model failed (%s): %s", type(exc).__name__, exc)
             self.metrics.increment("chat_decision_fallbacks")
 
+        note_degradation("planner_fallback_rules")
         return self._fallback_chat_decision(q, filters, mode, conversation_id, history)
 
     def _fallback_chat_decision(
@@ -5404,6 +5661,7 @@ class RecommendationService:
             data = json.loads(raw)
         except Exception:
             self.metrics.increment("clarify_fallbacks")
+            note_degradation("clarify_fallback_rules")
             if needs_clarification(context_query):
                 return {"action": "clarify", "question": default_clarifying_question(q)}
             return {"action": "search", "refined_query": context_query}
@@ -5494,6 +5752,7 @@ class RecommendationService:
             return {"intent": intent}
         except Exception:
             self.metrics.increment("detect_intent_fallbacks")
+            note_degradation("detect_intent_fallback")
             return {"intent": "new"}
 
     def cache_stats(self) -> dict[str, Any]:
@@ -5595,6 +5854,7 @@ class RecommendationService:
             )
 
         self.metrics.increment("mmr_vector_fallbacks")
+        note_degradation("mmr_vectors_unavailable")
         dim = getattr(self.store.index, "d", 0)
         return np.zeros((len(ids), dim), dtype="float32")
 
@@ -5684,6 +5944,7 @@ class RecommendationService:
                 exc,
             )
             self.metrics.increment("openai_rank_errors")
+            note_degradation("llm_rank_failed")
             return []
 
     def _selected_hits(
@@ -5860,9 +6121,25 @@ def chat_wrapper_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
+def with_degradation(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    """Attach per-request degradation info collected during the service call."""
+    reasons = current_degradation_reasons()
+    if reasons:
+        request.app.state.metrics.increment("degraded_requests")
+        payload = dict(payload)
+        payload["degraded"] = True
+        payload["degradation"] = reasons
+    return payload
+
+
 @app.get("/health")
-def health(request: Request):
-    return service(request).health()
+def health(request: Request, strict: bool = False):
+    payload = service(request).health()
+    # strict=1 lets deploy checks and monitors fail hard when the advisor would
+    # only be able to serve degraded (keyword/template) responses.
+    if strict and not (payload.get("ok") and payload.get("openai_configured")):
+        return JSONResponse(status_code=503, content=payload)
+    return payload
 
 
 @app.get("/")
@@ -5889,12 +6166,14 @@ def metrics(request: Request):
 
 @app.post("/search", response_model=SearchResponse)
 def search(body: SearchRequest, request: Request):
-    return service(request).search(body.q, body.k)
+    begin_degradation_tracking()
+    return with_degradation(request, service(request).search(body.q, body.k))
 
 
 @app.post("/recommend", response_model=RecommendResponse)
 def recommend(body: RecommendRequest, request: Request):
-    return chat_wrapper_payload(service(request).recommend(
+    begin_degradation_tracking()
+    return with_degradation(request, chat_wrapper_payload(service(request).recommend(
         body.q,
         body.retrieve_k,
         body.final_k,
@@ -5902,12 +6181,13 @@ def recommend(body: RecommendRequest, request: Request):
         mode=getattr(body, "mode", "balanced"),
         conversation_id=getattr(body, "conversation_id", None),
         history=getattr(body, "history", None),
-    ))
+    )))
 
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(body: ChatRequest, request: Request):
-    return chat_wrapper_payload(service(request).chat(
+    begin_degradation_tracking()
+    return with_degradation(request, chat_wrapper_payload(service(request).chat(
         body.q,
         body.retrieve_k,
         body.final_k,
@@ -5916,7 +6196,7 @@ def chat(body: ChatRequest, request: Request):
         conversation_id=getattr(body, "conversation_id", None),
         history=getattr(body, "history", None),
         visible_tools=getattr(body, "visible_tools", None),
-    ))
+    )))
 
 
 @app.post("/clarify", response_model=ClarifyResponse)

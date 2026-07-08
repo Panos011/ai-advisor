@@ -3,6 +3,8 @@ import json
 import unittest
 from types import SimpleNamespace
 
+import api as api_module
+
 import numpy as np
 from pydantic import ValidationError
 
@@ -18,7 +20,10 @@ from api import (
     Settings,
     ToolStore,
     alternative_requests_new_search,
+    begin_degradation_tracking,
     build_retrieval_query,
+    current_degradation_reasons,
+    note_degradation,
     clean_assistant_message,
     clean_best_for,
     focus_latest_intent,
@@ -27,6 +32,7 @@ from api import (
     is_completely_free_tool,
     is_free_tool,
     is_local_only_tool,
+    is_unsafe_tool_request,
     is_pick_best_query,
     is_referential_pick,
     local_reason,
@@ -36,6 +42,7 @@ from api import (
     recommendation_message,
     recent_dialogue_turns,
     referenced_similar_tool,
+    requested_monthly_price_cap,
     requires_no_cloud_data,
     request_goal,
     sanitize_reason,
@@ -340,6 +347,45 @@ def make_marketing_switch_service(client=None):
         index=SequenceIndex(len(meta)),
         meta=meta,
         vectors=np.array([[1.0, 0.0], [0.9, 0.1], [0.8, 0.2], [0.7, 0.3]], dtype="float32"),
+    )
+    settings = Settings(cache_ttl_seconds=60, cache_max_entries=16)
+    return RecommendationService(store, client or FakeClient(embedding_failure=True), settings, RuntimeMetrics())
+
+
+def make_budget_service(client=None):
+    meta = [
+        {
+            "Name": "CheapCut",
+            "Categories": "video | editing | marketing",
+            "Price": "$8/month",
+            "Description": "AI video editing tool for short marketing videos and captions.",
+            "Features": "Edits clips and creates captions.",
+            "Pros": "Affordable video workflow.",
+            "Use_cases": "Video editing",
+        },
+        {
+            "Name": "MidMotion",
+            "Categories": "video | editing",
+            "Price": "Basic plan $19/month",
+            "Description": "Video creation platform for social clips and promo videos.",
+            "Features": "Templates, exports, and editing.",
+            "Pros": "Good for quick videos.",
+            "Use_cases": "Video creation",
+        },
+        {
+            "Name": "EnterpriseVideo",
+            "Categories": "video | editing",
+            "Price": "Pro $99/month",
+            "Description": "AI video suite for teams with advanced automation.",
+            "Features": "Automated editing and enterprise controls.",
+            "Pros": "Powerful team workflow.",
+            "Use_cases": "Video production",
+        },
+    ]
+    store = ToolStore(
+        index=SequenceIndex(len(meta)),
+        meta=meta,
+        vectors=np.array([[1.0, 0.0], [0.9, 0.1], [0.8, 0.2]], dtype="float32"),
     )
     settings = Settings(cache_ttl_seconds=60, cache_max_entries=16)
     return RecommendationService(store, client or FakeClient(embedding_failure=True), settings, RuntimeMetrics())
@@ -960,6 +1006,27 @@ class BackendUnitTests(unittest.TestCase):
         self.assertIn("Another option is", response["message"])
         self.assertNotIn("My top pick", response["message"])
 
+    def test_free_alternative_followup_does_not_return_paid_next_tool(self):
+        service = make_service()
+        conversation_id = "free-alt-thread"
+        service.chat(
+            "I need a writing tool",
+            retrieve_k=2,
+            final_k=1,
+            conversation_id=conversation_id,
+        )
+
+        response = service.chat(
+            "show another free one",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["action"], "show_alternative")
+        self.assertEqual(response["hits"], [])
+        self.assertIn("another distinct option", response["message"].lower())
+
     def test_anything_else_followup_returns_next_option(self):
         service = make_service()
         conversation_id = "anything-else-thread"
@@ -1212,6 +1279,112 @@ class BackendUnitTests(unittest.TestCase):
         self.assertTrue(names)
         self.assertEqual(names[0], "Writerly")
         self.assertNotIn("ImageBox", names)
+
+    def test_under_dollar_budget_filters_explicit_monthly_prices(self):
+        service = make_budget_service()
+
+        response = service.recommend(
+            "video editing tool under $20/month",
+            retrieve_k=3,
+            final_k=3,
+            conversation_id="budget-under-20",
+        )
+
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+        self.assertTrue(names)
+        self.assertIn("CheapCut", names)
+        self.assertIn("MidMotion", names)
+        self.assertNotIn("EnterpriseVideo", names)
+
+    def test_plain_language_monthly_budget_filters_prices(self):
+        service = make_budget_service()
+
+        response = service.recommend(
+            "video editing tool under 20 bucks a month",
+            retrieve_k=3,
+            final_k=3,
+            conversation_id="budget-under-20-bucks",
+        )
+
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+        self.assertTrue(names)
+        self.assertIn("CheapCut", names)
+        self.assertIn("MidMotion", names)
+        self.assertNotIn("EnterpriseVideo", names)
+
+    def test_suffix_monthly_budget_phrasing_filters_prices(self):
+        service = make_budget_service()
+
+        for prompt in (
+            "video editing tool 20 bucks max",
+            "video editing tool 20/month max",
+            "video editing tool capped at $20/month",
+        ):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(requested_monthly_price_cap(prompt), 20.0)
+                response = service.recommend(
+                    prompt,
+                    retrieve_k=3,
+                    final_k=3,
+                    conversation_id=f"budget-{prompt}",
+                )
+                names = [hit["meta"]["Name"] for hit in response["hits"]]
+                self.assertTrue(names)
+                self.assertIn("CheapCut", names)
+                self.assertNotIn("EnterpriseVideo", names)
+
+    def test_under_dollar_budget_no_match_does_not_return_expensive_tool(self):
+        service = make_budget_service()
+
+        response = service.recommend(
+            "video editing tool under $5/month",
+            retrieve_k=3,
+            final_k=3,
+            conversation_id="budget-under-5",
+        )
+
+        self.assertEqual(response["hits"], [])
+        self.assertIn("$5/month", response["message"])
+        self.assertNotIn("EnterpriseVideo", response["message"])
+
+    def test_chat_preserves_price_cap_when_planner_drops_budget(self):
+        service = make_budget_service(client=DecisionClient([
+            {"action": "recommend", "refined_query": "video editing tool"},
+        ]))
+
+        response = service.chat(
+            "What about video editing tools under $20/month?",
+            retrieve_k=3,
+            final_k=3,
+            conversation_id="planner-dropped-budget",
+        )
+
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+        self.assertIn("under $20/month", response["refined_query"])
+        self.assertIn("CheapCut", names)
+        self.assertNotIn("EnterpriseVideo", names)
+
+    def test_alternative_followup_preserves_price_cap(self):
+        service = make_budget_service()
+        conversation_id = "alt-under-budget"
+        service.chat(
+            "video editing tool",
+            retrieve_k=3,
+            final_k=1,
+            conversation_id=conversation_id,
+        )
+
+        response = service.chat(
+            "show another under $20/month",
+            retrieve_k=3,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+        self.assertEqual(response["action"], "show_alternative")
+        self.assertTrue(names)
+        self.assertNotIn("EnterpriseVideo", names)
 
     def test_alternatives_to_named_tool_excludes_it(self):
         service = make_service()
@@ -1565,6 +1738,30 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["refined_query"], "What about marketing tools")
         self.assertTrue(set(names).issubset({"Hostinger Reach", "Ocoya"}))
         self.assertNotIn("Traycer", names)
+
+    def test_new_marketing_tools_after_coding_shortlist_is_not_old_alternative(self):
+        service = make_marketing_switch_service()
+        conversation_id = "new-marketing-not-coding-alt"
+        service.chat(
+            "Find coding assistants",
+            retrieve_k=4,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        response = service.chat(
+            "Give me new marketing tools",
+            retrieve_k=4,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+        self.assertEqual(response["action"], "recommend")
+        self.assertTrue(names)
+        self.assertTrue(set(names).issubset({"Hostinger Reach", "Ocoya"}))
+        self.assertNotIn("Traycer", names)
+        self.assertNotIn("Factory", names)
 
     def test_chat_fallback_understands_why_tho(self):
         service = make_service(client=FakeClient(embedding_failure=True))
@@ -2595,6 +2792,14 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(response["hits"], [])
         self.assertIn("cannot help", response["message"].lower())
 
+    def test_generic_scam_tool_request_is_blocked_but_detection_is_allowed(self):
+        self.assertTrue(is_unsafe_tool_request("Can you recommend scam tools?"))
+        self.assertTrue(is_unsafe_tool_request("I need black-hat automation bots."))
+        self.assertTrue(is_unsafe_tool_request("Can you find a scammer toolkit?"))
+        self.assertTrue(is_unsafe_tool_request("Need blackhat software."))
+        self.assertFalse(is_unsafe_tool_request("Find fraud detection tools for payment risk monitoring."))
+        self.assertFalse(is_unsafe_tool_request("I need anti-scam moderation tools for marketplace trust and safety."))
+
     def test_why_after_illegal_refusal_explains_refusal_not_visible_cards(self):
         service = make_service()
         conversation_id = "illegal-why"
@@ -2623,6 +2828,169 @@ class BackendUnitTests(unittest.TestCase):
         self.assertNotIn("Writerly", response["message"])
         self.assertNotIn("ImageBox", response["message"])
         self.assertNotIn("$", response["message"])
+
+    def test_safety_refusal_followup_variants_do_not_resurrect_old_cards(self):
+        prompts = [
+            "how come?",
+            "but why?",
+            "why is it illegal?",
+            "why illegal?",
+            "what rule did I break?",
+            "explain why this is not allowed",
+        ]
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                service = make_service()
+                conversation_id = f"illegal-followup-{prompt}"
+                service.shortlists[conversation_id] = [
+                    {"score": 0.9, "meta": service.store.meta[0], "why": "Writerly helps with writing."},
+                    {"score": 0.8, "meta": service.store.meta[1], "why": "ImageBox helps with images."},
+                ]
+                service.chat(
+                    "Can you recommend me any illegal tools?",
+                    retrieve_k=2,
+                    final_k=2,
+                    conversation_id=conversation_id,
+                )
+
+                response = service.chat(
+                    prompt,
+                    retrieve_k=2,
+                    final_k=2,
+                    conversation_id=conversation_id,
+                )
+
+                self.assertEqual(response["action"], "chat_only")
+                self.assertEqual(response["hits"], [])
+                self.assertIn("legal", response["message"].lower())
+                self.assertNotIn("Writerly", response["message"])
+                self.assertNotIn("ImageBox", response["message"])
+
+    def test_why_after_cloud_local_conflict_explains_conflict_not_visible_cards(self):
+        service = make_local_note_service()
+        conversation_id = "cloud-local-why"
+        service.shortlists[conversation_id] = [
+            {"score": 0.9, "meta": service.store.meta[0], "why": "CloudNote handles meeting notes."},
+            {"score": 0.8, "meta": service.store.meta[1], "why": "LocalNote runs locally."},
+        ]
+
+        conflict = service.chat(
+            "I need a cloud meeting note tool that never sends audio to cloud",
+            retrieve_k=5,
+            final_k=3,
+            conversation_id=conversation_id,
+        )
+        response = service.chat(
+            "why tho?",
+            retrieve_k=5,
+            final_k=3,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(conflict["action"], "clarify")
+        self.assertEqual(response["action"], "chat_only")
+        self.assertEqual(response["hits"], [])
+        self.assertIn("cloud", response["message"].lower())
+        self.assertIn("device", response["message"].lower())
+        self.assertNotIn("CloudNote", response["message"])
+        self.assertNotIn("LocalNote", response["message"])
+
+    def test_conflict_followup_variants_do_not_explain_old_cards(self):
+        prompts = [
+            "how come?",
+            "but why?",
+            "why is it a conflict?",
+            "why does that conflict?",
+            "what conflicts?",
+            "explain the conflict",
+        ]
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                service = make_local_note_service()
+                conversation_id = f"cloud-conflict-{prompt}"
+                service.shortlists[conversation_id] = [
+                    {"score": 0.9, "meta": service.store.meta[0], "why": "CloudNote handles meeting notes."},
+                    {"score": 0.8, "meta": service.store.meta[1], "why": "LocalNote runs locally."},
+                ]
+                service.chat(
+                    "I need a cloud meeting note tool that never sends audio to cloud",
+                    retrieve_k=5,
+                    final_k=3,
+                    conversation_id=conversation_id,
+                )
+
+                response = service.chat(
+                    prompt,
+                    retrieve_k=5,
+                    final_k=3,
+                    conversation_id=conversation_id,
+                )
+
+                self.assertEqual(response["action"], "chat_only")
+                self.assertEqual(response["hits"], [])
+                self.assertIn("cloud", response["message"].lower())
+                self.assertIn("device", response["message"].lower())
+                self.assertNotIn("CloudNote", response["message"])
+                self.assertNotIn("LocalNote", response["message"])
+
+    def test_why_after_no_match_explains_missing_evidence_not_visible_cards(self):
+        service = make_service()
+        conversation_id = "no-match-why"
+        service.shortlists[conversation_id] = [
+            {"score": 0.9, "meta": service.store.meta[0], "why": "Writerly helps with writing."},
+            {"score": 0.8, "meta": service.store.meta[1], "why": "ImageBox helps with images."},
+        ]
+
+        no_match = service.chat(
+            "open source writing tool",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+        response = service.chat(
+            "why exactly?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(no_match["action"], "recommend")
+        self.assertEqual(no_match["hits"], [])
+        self.assertEqual(response["action"], "chat_only")
+        self.assertEqual(response["hits"], [])
+        self.assertIn("open source", response["message"].lower())
+        self.assertIn("evidence", response["message"].lower())
+        self.assertNotIn("Writerly", response["message"])
+        self.assertNotIn("ImageBox", response["message"])
+
+    def test_why_no_results_after_no_match_does_not_explain_old_cards(self):
+        service = make_service()
+        conversation_id = "why-no-results"
+        service.shortlists[conversation_id] = [
+            {"score": 0.9, "meta": service.store.meta[0], "why": "Writerly helps with writing."},
+            {"score": 0.8, "meta": service.store.meta[1], "why": "ImageBox helps with images."},
+        ]
+
+        service.chat(
+            "open source writing tool",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+        response = service.chat(
+            "why no results?",
+            retrieve_k=2,
+            final_k=2,
+            conversation_id=conversation_id,
+        )
+
+        self.assertEqual(response["action"], "chat_only")
+        self.assertEqual(response["hits"], [])
+        self.assertIn("open source", response["message"].lower())
+        self.assertNotIn("Writerly", response["message"])
+        self.assertNotIn("ImageBox", response["message"])
 
     def test_greek_local_meeting_request_uses_local_privacy_constraints(self):
         service = make_local_note_service()
@@ -3080,6 +3448,63 @@ class ChatCreateReasoningTests(unittest.TestCase):
         svc, comp = self._service(reasoning_effort="")
         svc._chat_create(model="m", messages=[{"role": "user", "content": "hi"}])
         self.assertNotIn("reasoning_effort", comp.calls[0])
+
+
+class DegradationTrackingTests(unittest.TestCase):
+    def setUp(self):
+        # Reset the per-request context so tests do not leak reasons into each other.
+        api_module._degradation_reasons.set(None)
+
+    def test_note_is_noop_without_tracking(self):
+        note_degradation("anything")
+        self.assertEqual(current_degradation_reasons(), [])
+
+    def test_embedding_fallback_is_recorded(self):
+        begin_degradation_tracking()
+        svc = make_service(FakeClient(embedding_failure=True))
+        result = svc.search("ai writing tool", 2)
+        self.assertTrue(result["hits"])  # keyword fallback still serves hits
+        self.assertIn("embedding_unavailable_keyword_search", current_degradation_reasons())
+
+    def test_healthy_search_records_nothing(self):
+        begin_degradation_tracking()
+        svc = make_service()
+        svc.search("ai writing tool", 2)
+        self.assertEqual(current_degradation_reasons(), [])
+
+    def test_reasons_deduplicate(self):
+        begin_degradation_tracking()
+        note_degradation("planner_fallback_rules")
+        note_degradation("planner_fallback_rules")
+        self.assertEqual(current_degradation_reasons(), ["planner_fallback_rules"])
+
+    def test_recommend_embedding_fallback_is_recorded(self):
+        begin_degradation_tracking()
+        svc = make_service(FakeClient(embedding_failure=True))
+        svc.recommend("tool for writing blog posts", 2, 1)
+        self.assertIn(
+            "embedding_unavailable_keyword_recommendation",
+            current_degradation_reasons(),
+        )
+
+    def test_health_exposes_degradation_counters(self):
+        svc = make_service()
+        payload = svc.health()
+        self.assertIn("degradation_counters", payload)
+        self.assertIsInstance(payload["degradation_counters"], dict)
+
+    def test_chat_response_model_accepts_degradation_fields(self):
+        response = ChatResponse(
+            action="chat_only",
+            message="hello",
+            degraded=True,
+            degradation=["planner_fallback_rules"],
+        )
+        self.assertTrue(response.degraded)
+        # Defaults keep the wire format backward-compatible for clients.
+        default_response = ChatResponse(action="chat_only", message="hi")
+        self.assertFalse(default_response.degraded)
+        self.assertEqual(default_response.degradation, [])
 
 
 if __name__ == "__main__":
