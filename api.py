@@ -3378,6 +3378,38 @@ def visible_tool_hits(visible_tools: Any) -> list[dict[str, Any]]:
     return hits
 
 
+def truncate_field_text(value: Any, max_chars: int) -> str:
+    """Whitespace-normalize and cut long catalog text at a word boundary."""
+    text = " ".join(str(value or "").split())
+    if len(text) <= max_chars:
+        return text
+    cut = text[:max_chars].rsplit(" ", 1)[0].rstrip(" ,;:.")
+    return f"{cut} …"
+
+
+def compact_rank_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Prompt-only view of a retrieval candidate for the LLM ranker.
+
+    Keeps every field the ranking rules reference (categories, description,
+    features, use cases, price) but bounds the free-text blobs — the rank call
+    scales linearly with this payload, and it is the chat path's dominant
+    latency. Price keeps the largest budget because free-tier/plan evidence
+    lives there. Retrieval bookkeeping (score, retrieval_source) is dropped:
+    the ranker is instructed not to use retrieval order anyway, and the id is
+    what maps selections back to the catalog.
+    """
+    return {
+        "id": int(candidate["id"]),
+        "name": str(candidate.get("name", "")),
+        "categories": str(candidate.get("categories", "")),
+        "price": truncate_field_text(candidate.get("price"), 400),
+        "description": truncate_field_text(candidate.get("description"), 360),
+        "features": truncate_field_text(candidate.get("features"), 280),
+        "use_cases": truncate_field_text(candidate.get("use_cases"), 220),
+        "pros": truncate_field_text(candidate.get("pros"), 160),
+    }
+
+
 def compact_hit_for_prompt(hit: dict[str, Any]) -> dict[str, Any]:
     meta = hit.get("meta") or {}
     return {
@@ -6038,7 +6070,7 @@ class RecommendationService:
                             "content": (
                                 f"User need: {q}\n\n"
                                 f"{select_instruction} Choose from these candidates:\n"
-                                f"{json.dumps(candidates, ensure_ascii=False)}"
+                                f"{json.dumps([compact_rank_candidate(c) for c in candidates], ensure_ascii=False)}"
                             ),
                         },
                     ],

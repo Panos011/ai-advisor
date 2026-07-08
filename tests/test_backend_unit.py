@@ -3519,6 +3519,70 @@ class StructuredOutputTests(unittest.TestCase):
         self.assertEqual(planner_calls[0]["response_format"]["json_schema"]["name"], "planner_decision")
 
 
+class CompactRankCandidateTests(unittest.TestCase):
+    def _candidate(self, **overrides):
+        base = {
+            "id": 3,
+            "score": 0.91,
+            "retrieval_source": "hybrid",
+            "name": "Writerly",
+            "categories": "writing | copywriting",
+            "price": "Free tier available. Pro $12/month.",
+            "description": "Writing assistant for blog posts. " * 30,
+            "features": "Drafts posts and rewrites content. " * 20,
+            "use_cases": "Blog writing and SEO. " * 20,
+            "pros": "Fast and simple. " * 20,
+        }
+        base.update(overrides)
+        return base
+
+    def test_keeps_ranker_rule_fields_and_id(self):
+        compact = api_module.compact_rank_candidate(self._candidate())
+        self.assertEqual(compact["id"], 3)
+        self.assertEqual(compact["name"], "Writerly")
+        self.assertEqual(compact["categories"], "writing | copywriting")
+        for field in ("price", "description", "features", "use_cases", "pros"):
+            self.assertIn(field, compact)
+
+    def test_drops_retrieval_bookkeeping(self):
+        compact = api_module.compact_rank_candidate(self._candidate())
+        self.assertNotIn("score", compact)
+        self.assertNotIn("retrieval_source", compact)
+
+    def test_bounds_long_fields_at_word_boundary(self):
+        compact = api_module.compact_rank_candidate(self._candidate())
+        self.assertLessEqual(len(compact["description"]), 362)
+        self.assertTrue(compact["description"].endswith("…"))
+        # Truncation never cuts mid-word.
+        self.assertNotIn("blo …", compact["description"])
+
+    def test_short_fields_pass_through_unchanged(self):
+        compact = api_module.compact_rank_candidate(
+            self._candidate(description="Short description.", price="Free")
+        )
+        self.assertEqual(compact["description"], "Short description.")
+        self.assertEqual(compact["price"], "Free")
+
+    def test_free_tier_evidence_survives_price_truncation(self):
+        compact = api_module.compact_rank_candidate(
+            self._candidate(price="Free tier available. " + "Enterprise pricing details. " * 40)
+        )
+        self.assertIn("Free tier", compact["price"])
+
+    def test_rank_prompt_uses_compact_candidates(self):
+        svc = make_service(RecordingClient())
+        candidates = [self._candidate(id=0), self._candidate(id=1, name="ImageBox")]
+        svc._rank_with_llm("writing tool", candidates, 2)
+        call = svc.client.chat.completions.calls[-1]
+        user_content = call["messages"][1]["content"]
+        sent = json.loads(user_content.split("Choose from these candidates:\n", 1)[1])
+        self.assertEqual([c["id"] for c in sent], [0, 1])
+        self.assertNotIn("score", sent[0])
+        self.assertLessEqual(len(sent[0]["description"]), 362)
+        # The original candidate dicts stay untouched for downstream filtering.
+        self.assertIn("score", candidates[0])
+
+
 class DegradationTrackingTests(unittest.TestCase):
     def setUp(self):
         # Reset the per-request context so tests do not leak reasons into each other.
