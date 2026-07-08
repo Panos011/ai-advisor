@@ -3583,6 +3583,67 @@ class CompactRankCandidateTests(unittest.TestCase):
         self.assertIn("score", candidates[0])
 
 
+class IndexManifestTests(unittest.TestCase):
+    def _settings(self, tmp_path, **overrides):
+        return dataclasses.replace(
+            Settings(cache_ttl_seconds=60, cache_max_entries=8),
+            index_manifest_path=tmp_path,
+            **overrides,
+        )
+
+    def _write_manifest(self, payload):
+        import tempfile
+
+        handle = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False, encoding="utf-8"
+        )
+        json.dump(payload, handle)
+        handle.close()
+        self.addCleanup(lambda: __import__("os").unlink(handle.name))
+        return handle.name
+
+    def test_missing_manifest_returns_none(self):
+        settings = self._settings("/nonexistent/index_manifest.json")
+        self.assertIsNone(api_module._load_index_manifest(settings, 2, FakeIndex()))
+
+    def test_matching_manifest_verifies(self):
+        path = self._write_manifest(
+            {"schema": 1, "emb_model": "text-embedding-3-small", "rows": 2, "dim": 2}
+        )
+        settings = self._settings(path)
+        manifest = api_module._load_index_manifest(settings, 2, FakeIndex())
+        self.assertTrue(manifest["verified"])
+
+    def test_model_mismatch_flags_unverified(self):
+        path = self._write_manifest(
+            {"schema": 1, "emb_model": "text-embedding-3-large", "rows": 2, "dim": 2}
+        )
+        settings = self._settings(path)
+        with self.assertLogs("api", level="ERROR"):
+            manifest = api_module._load_index_manifest(settings, 2, FakeIndex())
+        self.assertFalse(manifest["verified"])
+
+    def test_row_and_dim_mismatch_flags_unverified(self):
+        path = self._write_manifest(
+            {"schema": 1, "emb_model": "text-embedding-3-small", "rows": 99, "dim": 7}
+        )
+        settings = self._settings(path)
+        with self.assertLogs("api", level="ERROR"):
+            manifest = api_module._load_index_manifest(settings, 2, FakeIndex())
+        self.assertFalse(manifest["verified"])
+
+    def test_unreadable_manifest_does_not_block_startup(self):
+        import tempfile
+
+        handle = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+        handle.write("{not json")
+        handle.close()
+        self.addCleanup(lambda: __import__("os").unlink(handle.name))
+        settings = self._settings(handle.name)
+        with self.assertLogs("api", level="ERROR"):
+            self.assertIsNone(api_module._load_index_manifest(settings, 2, FakeIndex()))
+
+
 class DegradationTrackingTests(unittest.TestCase):
     def setUp(self):
         # Reset the per-request context so tests do not leak reasons into each other.

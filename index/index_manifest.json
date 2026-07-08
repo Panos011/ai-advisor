@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "emb_model": "text-embedding-3-small",
+  "rows": 2225,
+  "dim": 1536,
+  "source_csv": "Embeddings_AI_tools.csv",
+  "built_at": "2026-07-08T12:03:26+00:00",
+  "note": "backfilled from existing artifacts on 2026-07-08"
+}

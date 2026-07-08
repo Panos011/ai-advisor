@@ -238,6 +238,7 @@ class Settings:
     index_path: str = os.getenv("INDEX_PATH", "index/tools.faiss")
     meta_path: str = os.getenv("META_PATH", "index/meta.jsonl")
     vectors_path: str = os.getenv("VECTORS_PATH", "index/tool_vectors.npy")
+    index_manifest_path: str = os.getenv("INDEX_MANIFEST_PATH", "index/index_manifest.json")
     emb_model: str = os.getenv("EMB_MODEL", "text-embedding-3-small")
     chat_model: str = os.getenv("CHAT_MODEL", "gpt-5.4-mini")
     # .strip() guards against a trailing newline/space in the env var, which makes the
@@ -818,10 +819,59 @@ class ToolStore:
     index: Any
     meta: list[dict[str, Any]]
     vectors: np.ndarray | None
+    manifest: dict[str, Any] | None = None
 
     @property
     def ready(self) -> bool:
         return self.index is not None and bool(self.meta)
+
+
+def _load_index_manifest(settings: Settings, meta_rows: int, index: Any) -> dict[str, Any] | None:
+    """Load index_manifest.json (written by Index.py) and verify the artifacts
+    match it and the runtime configuration.
+
+    The index, vector matrix, metadata, and embedding model must stay in
+    lockstep; a drifted set produces silently wrong retrieval rather than an
+    error. Mismatches are logged loudly (not raised) so existing deployments
+    without a manifest, or mid-migration, keep serving.
+    """
+    path = settings.index_manifest_path
+    if not os.path.exists(path):
+        logger.info(
+            "No index manifest at %s; skipping artifact version check "
+            "(rebuild with Index.py to create one)", path,
+        )
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except Exception as exc:  # noqa: BLE001 - a bad manifest must not block startup
+        logger.error("Failed to read index manifest %s: %s", path, exc)
+        return None
+
+    problems = []
+    manifest_model = manifest.get("emb_model")
+    if manifest_model and manifest_model != settings.emb_model:
+        problems.append(
+            f"embedding model mismatch: index built with {manifest_model!r}, "
+            f"runtime configured for {settings.emb_model!r} — query and catalog "
+            "vectors live in different spaces"
+        )
+    manifest_rows = manifest.get("rows")
+    if isinstance(manifest_rows, int) and manifest_rows != meta_rows:
+        problems.append(
+            f"row count mismatch: manifest says {manifest_rows}, metadata has {meta_rows}"
+        )
+    manifest_dim = manifest.get("dim")
+    index_dim = getattr(index, "d", None)
+    if isinstance(manifest_dim, int) and index_dim and manifest_dim != index_dim:
+        problems.append(
+            f"vector dimension mismatch: manifest says {manifest_dim}, index has {index_dim}"
+        )
+    for problem in problems:
+        logger.error("INDEX MANIFEST: %s", problem)
+    manifest["verified"] = not problems
+    return manifest
 
 
 def load_tool_store(settings: Settings) -> ToolStore:
@@ -845,11 +895,13 @@ def load_tool_store(settings: Settings) -> ToolStore:
             f"Vector row count ({len(vectors)}) does not match metadata rows ({len(meta)})"
         )
 
+    manifest = _load_index_manifest(settings, len(meta), index)
+
     # Warm the per-tool token/flag cache once at startup so the first request does
     # not pay the full 2.2k-tool tokenization cost.
     _search_index(meta)
     logger.info("Loaded %s tools from %s", len(meta), settings.index_path)
-    return ToolStore(index=index, meta=meta, vectors=vectors)
+    return ToolStore(index=index, meta=meta, vectors=vectors, manifest=manifest)
 
 
 def _load_vectors(path: str, index: Any, expected_rows: int) -> np.ndarray | None:
@@ -4073,6 +4125,9 @@ class RecommendationService:
             # Non-empty counters here mean requests were served on silent-fallback
             # paths (keyword search, retrieval-order ranking, rule-based planning).
             "degradation_counters": degradation_counters,
+            # Present when index/index_manifest.json exists; verified=False means
+            # the index artifacts drifted from each other or from EMB_MODEL.
+            "index_manifest": self.store.manifest,
         }
 
     def embed(self, texts: list[str]) -> np.ndarray:

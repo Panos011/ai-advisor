@@ -63,5 +63,22 @@ with open(os.path.join(INDEX_DIR, "meta.jsonl"), "w", encoding="utf-8") as f:
     for m in meta:
         f.write(json.dumps(m, ensure_ascii=False) + "\n")
 
+# Version-stamp the artifact set so the API can detect drift at startup:
+# index, vectors, metadata, and embedding model must stay in lockstep or
+# retrieval is silently wrong. api.load_tool_store() verifies this manifest.
+from datetime import datetime, timezone
+
+manifest = {
+    "schema": 1,
+    "emb_model": EMB_MODEL,
+    "rows": len(meta),
+    "dim": int(embs.shape[1]),
+    "source_csv": CSV_IN,
+    "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+}
+with open(os.path.join(INDEX_DIR, "index_manifest.json"), "w", encoding="utf-8") as f:
+    json.dump(manifest, f, indent=2)
+
 print(f"Indexed {len(meta)} tools → {INDEX_DIR}/tools.faiss")
 print(f"Saved vector matrix → {INDEX_DIR}/tool_vectors.npy")
+print(f"Wrote manifest → {INDEX_DIR}/index_manifest.json")
