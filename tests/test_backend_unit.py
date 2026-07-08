@@ -3583,6 +3583,44 @@ class CompactRankCandidateTests(unittest.TestCase):
         self.assertIn("score", candidates[0])
 
 
+class RoutingGoldenTests(unittest.TestCase):
+    """Replay the routing golden set through chat() with deterministic stubs.
+
+    This is the offline regression net for the chat routing contract: the
+    deterministic gates that keep breaking whenever a new UX guard is added.
+    Planner-dependent cases are skipped here and only checked by
+    `python eval_routing.py --live`.
+    """
+
+    def test_offline_golden_cases_all_pass(self):
+        import eval_routing
+
+        passed, total, skipped, failures = eval_routing.evaluate(live=False, verbose=False)
+        detail = "\n".join(
+            f"  {f['case']['q']!r}: expected {f['expected']}, got {f['got']!r}"
+            for f in failures
+        )
+        self.assertEqual(failures, [], f"routing regressions:\n{detail}")
+        self.assertGreater(passed, 0)
+        self.assertEqual(passed, total)
+
+    def test_golden_set_is_nonempty_and_well_formed(self):
+        import eval_routing
+
+        cases = eval_routing.load_golden()
+        self.assertGreaterEqual(len(cases), 15)
+        valid_actions = {
+            "chat_only", "clarify", "recommend", "refine",
+            "explain", "pick_best", "show_alternative",
+        }
+        for case in cases:
+            self.assertIn("q", case)
+            expected = case["expected_action"]
+            expected_list = expected if isinstance(expected, list) else [expected]
+            for action in expected_list:
+                self.assertIn(action, valid_actions, f"bad expected action in {case['q']!r}")
+
+
 class ChatStreamEndpointTests(unittest.TestCase):
     """Drive the SSE endpoint through the real ASGI app with an injected service,
     so the app wiring is exercised without loading the production index."""
