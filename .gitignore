@@ -5,3 +5,6 @@ __pycache__/
 venv/
 .venv/
 .idea/
+
+freshness_report.json
+freshness_state.json

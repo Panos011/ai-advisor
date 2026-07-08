@@ -62,6 +62,24 @@ Each response includes a 'contract' object that names this pipeline and the expe
   from each other or from 'EMB_MODEL', so a mismatched index fails visibly
   instead of returning silently wrong results. A missing manifest only warns.
 
+### Catalog freshness ('Freshness.py')
+An advisor is only as good as its catalog, so 'Freshness.py' checks every tool's
+'Tool_link' for liveness and tracks the result across runs in 'freshness_state.json'.
+It writes 'freshness_report.json' (dead + unreachable tools) each run.
+
+Safety: a single failed request never prunes a tool. A tool must fail on
+'--fail-threshold' consecutive runs (default 2) before it is eligible for removal,
+so a transient outage or a bot block cannot delete a good listing. Bot-blocked
+responses (401/403/405/429) count as alive; only 404/410 are 'dead', and
+timeouts / DNS / 5xx are 'unreachable' (ambiguous, gated by the threshold).
+
+With '--emit-deletions' it appends prune-eligible tools to 'deleted_tools.json',
+reusing the existing deletion path ('Apply_Deletions.py' / 'Filter_Blocklist.py')
+rather than editing the CSVs directly. Run it on a schedule (e.g. before the
+biweekly refresh):
+  'python Freshness.py --workers 16'                 # audit + report only
+  'python Freshness.py --emit-deletions'             # also queue dead tools for removal
+
 ## Platform sync (CommAI)
 Deleted-tool lifecycle scripts keep the dataset aligned with the CommAI platform:
 - 'Apply_Deletions.py' — consumes 'advisor-tool-deleted' / 'advisor-tool-restored'
