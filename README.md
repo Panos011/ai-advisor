@@ -15,9 +15,26 @@ Run the API:
 
 Useful endpoints:
 'GET /health' checks index, metadata, OpenAI configuration and vector loading.
+  It also returns 'degradation_counters' (non-zero means requests were served on
+  fallback paths) and 'index_manifest' (with a 'verified' flag). Pass '?strict=1'
+  to make it return 503 when the advisor cannot serve fully-intelligent responses
+  (no OpenAI key or index not ready) — use this for deploy/uptime checks.
 'GET /metrics' returns request counters, stage latency averages and cache sizes.
 'POST /chat' is the main GPT-wrapper endpoint for the app.
+'POST /chat/stream' is the SSE variant of '/chat': it streams 'status' events at
+  each pipeline stage (routing, planning, retrieving, ranking, replying), then one
+  'result' event whose payload is identical to '/chat', then 'done'. Use it to show
+  live progress and cut perceived latency. '/chat' is unchanged; adopt at your pace.
 'POST /search', 'POST /recommend', 'POST /clarify', and 'POST /detect_intent' remain lower-level building blocks.
+
+### Degradation visibility
+'/chat', '/recommend' and '/search' responses now carry two optional fields:
+'degraded' (bool) and 'degradation' (list of reasons) whenever a request fell back
+to a non-LLM path — embedding outage -> keyword search, LLM rank failure ->
+retrieval-order results, planner failure -> rule-based routing, etc. The fields
+default to false/[] so the existing wire format is unchanged. Surface 'degraded'
+in the client (or alert on '/metrics' 'degraded_requests') so the advisor silently
+becoming a keyword-search engine is visible instead of hidden.
 
 ## React Native Client Contract
 The backend is API-only. The mobile app should treat 'POST /chat' like a GPT-wrapper call: send one user message and render the returned assistant bubble plus any structured tool cards.
@@ -39,7 +56,11 @@ Each response includes a 'contract' object that names this pipeline and the expe
 ## Scripts 
 'Data_Collection.py'
 'Data_Cleaning.py'
-'Index.py'
+'Index.py' — builds the FAISS index and also writes 'index/index_manifest.json'
+  (embedding model, row count, vector dim, source CSV, build time). The API
+  verifies this manifest at startup and logs loud errors if the artifacts drift
+  from each other or from 'EMB_MODEL', so a mismatched index fails visibly
+  instead of returning silently wrong results. A missing manifest only warns.
 
 ## Platform sync (CommAI)
 Deleted-tool lifecycle scripts keep the dataset aligned with the CommAI platform:
@@ -62,6 +83,21 @@ Local unit tests do not require an OpenAI key:
 
 Live API checks:
 'python -m unittest Testing.py'
+
+### Routing eval
+Chat routing (search / refine / explain / alternative / chat) is the part that
+breaks most when guards are added. 'routing_golden.jsonl' captures that contract
+as replayable cases; 'eval_routing.py' replays them through 'chat()':
+- 'python eval_routing.py' — offline, deterministic stub client, no key needed.
+  Locks down the gate contract and the two known UX-bug guardrails (compare must
+  not re-recommend; alternatives must not re-show already-shown tools). Also runs
+  inside the unittest suite.
+- 'python eval_routing.py --live' — routes the same cases through the real OpenAI
+  planner (needs 'OPENAI_API_KEY'). This is the number to watch when editing the
+  planner prompt, and where 'chat_decision_invalid' surfaces.
+Add a case whenever you fix a routing bug: it turns a one-off regex patch into a
+permanent regression check, which is the safe way to migrate routing off the
+regex gates and onto the planner over time.
 
 ## Notes
 '.env' is git-ignored.
