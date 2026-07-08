@@ -494,6 +494,9 @@ class RecommendResponse(BaseModel):
     # specific fallbacks so clients and operators can see silent degradation.
     degraded: bool = False
     degradation: list[str] = Field(default_factory=list)
+    # True when the result was tailored to the user's supplied UserContext
+    # (stack/role/priorities); lets the client show a "personalized" badge.
+    personalized: bool = False
 
 
 class ChatRequest(BaseModel):
@@ -541,6 +544,7 @@ class ChatResponse(BaseModel):
     contract: RecommenderContract | None = None
     degraded: bool = False
     degradation: list[str] = Field(default_factory=list)
+    personalized: bool = False
 
 
 class SearchResponse(BaseModel):
@@ -4062,22 +4066,38 @@ def mmr_rerank(
 # eliminates the "model returned unusable JSON" failure class; _chat_create
 # downgrades to json_object automatically if the model rejects json_schema.
 
+# The exact action/tool vocabulary the planner is allowed to emit. Constraining
+# these as schema enums means the model literally cannot return an out-of-band
+# action — the previous main cause of chat_decision_invalid fallbacks. `None`
+# stays valid because the planner may set only one of action/tool.
+PLANNER_ACTION_ENUM = [
+    "chat_only", "clarify", "recommend", "refine",
+    "explain_shortlist", "explain_best", "pick_best",
+    "show_alternative", "tool_question", "criterion", "explain_last",
+    None,
+]
+PLANNER_TOOL_ENUM = [
+    "none", "search_tools", "refine_search", "get_more_tools",
+    "compare_tools", "explain_recommendation", "pick_best", "answer_tool_question",
+    None,
+]
+
 PLANNER_DECISION_SCHEMA = {
     "type": "object",
     "properties": {
-        "action": {"type": ["string", "null"]},
-        "tool": {"type": ["string", "null"]},
+        "action": {"type": ["string", "null"], "enum": PLANNER_ACTION_ENUM},
+        "tool": {"type": ["string", "null"], "enum": PLANNER_TOOL_ENUM},
         "message": {"type": ["string", "null"]},
         "refined_query": {"type": ["string", "null"]},
         "filters": {
             "type": ["object", "null"],
             "properties": {
-                "budget": {"type": ["string", "null"]},
-                "privacy": {"type": ["string", "null"]},
+                "budget": {"type": ["string", "null"], "enum": ["any", "free", "freemium", "paid", None]},
+                "privacy": {"type": ["string", "null"], "enum": ["standard", "privacy-first", "local-first", None]},
                 "integrations": {"type": ["array", "null"], "items": {"type": "string"}},
                 "categories": {"type": ["array", "null"], "items": {"type": "string"}},
                 "platforms": {"type": ["array", "null"], "items": {"type": "string"}},
-                "skill_level": {"type": ["string", "null"]},
+                "skill_level": {"type": ["string", "null"], "enum": ["any", "beginner", "intermediate", "advanced", None]},
             },
             "required": ["budget", "privacy", "integrations", "categories", "platforms", "skill_level"],
             "additionalProperties": False,
@@ -4697,6 +4717,13 @@ class RecommendationService:
             f"{TEXT_FORMAT_VERSION}:{self.settings.emb_model}:{self.settings.chat_model}:"
             f"{retrieve_k}:{self.settings.rank_k}:{effective_final_k}:{mode}:{filter_key}:{retrieval_query}"
         )
+        # Personalization changes the result (owned/avoid tools excluded, ranker
+        # tailored to the user's stack), so it MUST be part of the cache key —
+        # otherwise two users with different stacks would collide on the same
+        # entry. Non-personalized requests keep the exact prior key, so they
+        # still share cache with each other.
+        if personalization:
+            cache_key = f"{cache_key}:ctx={json.dumps(personalization, sort_keys=True)}"
         cached = self.recommend_cache.get(cache_key)
         if cached is not None:
             self.metrics.increment("recommend_cache_hit")
@@ -4706,7 +4733,7 @@ class RecommendationService:
                 self._record_shown(conversation_id, cached)
             message = recommendation_message(cached, q, mode, pick_best=pick_best)
             self.conversations.append(conversation_id, "assistant", message)
-            return {"hits": cached, "message": message}
+            return {"hits": cached, "message": message, "personalized": bool(personalization)}
 
         emit_progress("retrieving")
         try:
@@ -5088,7 +5115,7 @@ class RecommendationService:
             self._record_shown(conversation_id, final_hits)
         message = recommendation_message(final_hits, q, mode, pick_best=pick_best)
         self.conversations.append(conversation_id, "assistant", message)
-        return {"hits": final_hits, "message": message}
+        return {"hits": final_hits, "message": message, "personalized": bool(personalization)}
 
     def chat(
         self,

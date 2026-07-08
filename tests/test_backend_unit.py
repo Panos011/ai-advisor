@@ -3508,6 +3508,28 @@ class StructuredOutputTests(unittest.TestCase):
             )
         self.assertTrue(svc._json_schema_supported)
 
+    def test_planner_schema_constrains_action_and_tool_to_enums(self):
+        action_schema = api_module.PLANNER_DECISION_SCHEMA["properties"]["action"]
+        tool_schema = api_module.PLANNER_DECISION_SCHEMA["properties"]["tool"]
+        self.assertIn("enum", action_schema)
+        self.assertIn("enum", tool_schema)
+        # Enum values (minus null) exactly match the vocabulary the code accepts,
+        # so the model cannot emit an out-of-band action/tool.
+        self.assertEqual({v for v in action_schema["enum"] if v}, api_module.CHAT_ACTIONS)
+        self.assertEqual({v for v in tool_schema["enum"] if v}, api_module.CHAT_TOOLS)
+        # null stays valid because the planner may set only one of action/tool.
+        self.assertIn(None, action_schema["enum"])
+        self.assertIn(None, tool_schema["enum"])
+
+    def test_planner_filter_sub_enums_match_decision_filters(self):
+        props = api_module.PLANNER_DECISION_SCHEMA["properties"]["filters"]["properties"]
+        self.assertEqual({v for v in props["budget"]["enum"] if v}, {"any", "free", "freemium", "paid"})
+        self.assertEqual({v for v in props["privacy"]["enum"] if v}, {"standard", "privacy-first", "local-first"})
+        self.assertEqual(
+            {v for v in props["skill_level"]["enum"] if v},
+            {"any", "beginner", "intermediate", "advanced"},
+        )
+
     def test_planner_call_sends_strict_schema(self):
         svc = make_service(RecordingClient())
         svc._chat_decision("best writing tool", None, "balanced", None, None)
@@ -3704,6 +3726,39 @@ class PersonalizationTests(unittest.TestCase):
     def test_user_context_model_rejects_unknown_priorities(self):
         ctx = UserContext(priorities=["cost", "banana", "speed"])
         self.assertEqual(ctx.priorities, ["cost", "speed"])
+
+    def test_personalized_flag_set_when_context_drives_result(self):
+        svc = make_personalization_service()
+        res = svc.chat(
+            "tool for writing blog posts", 20, 3,
+            conversation_id="pf1", user_context={"owned_tools": ["Writerly"]},
+        )
+        self.assertTrue(res.get("personalized"))
+
+    def test_personalized_flag_false_without_context(self):
+        svc = make_personalization_service()
+        res = svc.chat("tool for writing blog posts", 20, 3, conversation_id="pf2")
+        self.assertFalse(res.get("personalized", False))
+
+    def test_cache_does_not_leak_across_user_contexts(self):
+        # Regression guard: the recommend cache must key on user_context, or a
+        # personalized result would be served to a different user with the same
+        # query. Here a non-personalized call caches a result containing Writerly;
+        # a later call from a user who OWNS Writerly must not receive it.
+        svc = make_personalization_service(pick_id=0)
+        first = svc.chat("tool for writing blog posts", 20, 3, conversation_id="cx1")
+        self.assertIn(
+            "Writerly",
+            {(h.get("meta") or {}).get("Name") for h in first["hits"]},
+        )
+        second = svc.chat(
+            "tool for writing blog posts", 20, 3,
+            conversation_id="cx2", user_context={"owned_tools": ["Writerly"]},
+        )
+        self.assertNotIn(
+            "Writerly",
+            {(h.get("meta") or {}).get("Name") for h in second["hits"]},
+        )
 
 
 class RoutingGoldenTests(unittest.TestCase):
