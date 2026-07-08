@@ -25,3 +25,5 @@
 {"q": "alternatives to Notion", "expected_action": "recommend", "category": "named_alternative", "note": "Fresh search excluding the named tool."}
 {"q": "actually I need a coding tool instead", "shortlist": ["Writerly", "Draftly"], "prior_task": "tool for writing blog posts", "expected_action": "recommend", "category": "pivot", "note": "Pivot to a new concrete task is a new search."}
 {"q": "free only", "shortlist": ["Writerly", "Draftly"], "prior_task": "tool for writing blog posts", "expected_action": ["refine", "recommend"], "category": "refine_filter", "note": "Filter change on the current task."}
+{"q": "I need a writing tool", "user_context": {"owned_tools": ["Writerly"]}, "expected_action": "recommend", "forbid_hit_names": ["Writerly"], "category": "personalization", "note": "Owned tools must never be re-recommended."}
+{"q": "I need a tool for writing blog posts", "user_context": {"avoid_tools": ["Draftly"]}, "expected_action": "recommend", "forbid_hit_names": ["Draftly"], "category": "personalization", "note": "Avoid-listed tools must never be recommended."}

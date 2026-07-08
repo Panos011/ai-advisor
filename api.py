@@ -352,6 +352,79 @@ class DecisionFilters(BaseModel):
         return [item.strip() for item in value if item and item.strip()]
 
 
+# Priorities the advisor can weigh when personalizing (kept small and closed so
+# the ranker prompt stays predictable).
+USER_PRIORITY_VALUES = {"cost", "speed", "quality", "privacy", "automation", "ease_of_use", "integrations"}
+
+
+class UserContext(BaseModel):
+    """Who the user is and what they already use — the personalization signal.
+
+    Every field is optional; an empty UserContext is treated as no context and
+    leaves recommendation behavior identical to the non-personalized path. This
+    is the copy-proof layer: a scraped directory cannot rank against the user's
+    own stack, role, and priorities.
+    """
+
+    # Tools the user already uses. Never re-recommended (you don't suggest a tool
+    # someone told you they already have); passed to the ranker as stack context
+    # so it can prefer complements.
+    owned_tools: list[str] = Field(default_factory=list, max_length=60)
+    # Tools the user explicitly does not want. Hard-excluded from results.
+    avoid_tools: list[str] = Field(default_factory=list, max_length=60)
+    # Free-text role/persona, e.g. "solo founder", "marketing team", "student".
+    role: str | None = Field(None, max_length=120)
+    # Ordered priorities (see USER_PRIORITY_VALUES); unknown values are dropped.
+    priorities: list[str] = Field(default_factory=list, max_length=len(USER_PRIORITY_VALUES))
+    # Optional budget/skill hints; when set they seed the decision filters if the
+    # request did not already specify them.
+    budget: Literal["any", "free", "freemium", "paid"] = "any"
+    skill_level: Literal["any", "beginner", "intermediate", "advanced"] = "any"
+
+    @field_validator("owned_tools", "avoid_tools")
+    @classmethod
+    def clean_tool_lists(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            name = (item or "").strip()
+            key = name.lower()
+            if name and key not in seen:
+                seen.add(key)
+                cleaned.append(name)
+        return cleaned
+
+    @field_validator("priorities")
+    @classmethod
+    def clean_priorities(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            key = (item or "").strip().lower().replace(" ", "_").replace("-", "_")
+            if key in USER_PRIORITY_VALUES and key not in seen:
+                seen.add(key)
+                cleaned.append(key)
+        return cleaned
+
+    @field_validator("role")
+    @classmethod
+    def clean_role(cls, value: str | None) -> str | None:
+        if not value:
+            return None
+        cleaned = " ".join(str(value).split())
+        return cleaned or None
+
+    def is_empty(self) -> bool:
+        return not (
+            self.owned_tools
+            or self.avoid_tools
+            or self.role
+            or self.priorities
+            or self.budget != "any"
+            or self.skill_level != "any"
+        )
+
+
 class RecommendRequest(BaseModel):
     q: str = Field(..., min_length=1, max_length=MAX_QUERY_LENGTH)
     retrieve_k: int = Field(30, ge=1, le=100)
@@ -360,6 +433,7 @@ class RecommendRequest(BaseModel):
     mode: str = Field("balanced", max_length=40)
     conversation_id: str | None = Field(None, max_length=128)
     history: list[ChatMessage] = Field(default_factory=list, max_length=MAX_HISTORY_TURNS)
+    user_context: UserContext | None = None
 
     @field_validator("q")
     @classmethod
@@ -431,6 +505,7 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = Field(None, max_length=128)
     history: list[ChatMessage] = Field(default_factory=list, max_length=MAX_HISTORY_TURNS)
     visible_tools: list[SearchHit] = Field(default_factory=list, max_length=10)
+    user_context: UserContext | None = None
 
     @field_validator("q")
     @classmethod
@@ -3430,6 +3505,103 @@ def visible_tool_hits(visible_tools: Any) -> list[dict[str, Any]]:
     return hits
 
 
+def normalize_user_context(value: Any) -> dict[str, Any] | None:
+    """Coerce a UserContext model / dict / None into a plain dict, or None when
+    there is no usable personalization signal. Safe to call on any input."""
+    if value is None:
+        return None
+    if hasattr(value, "model_dump"):
+        data = value.model_dump()
+    elif isinstance(value, dict):
+        data = value
+    else:
+        return None
+
+    def _clean_names(items: Any) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in items or []:
+            name = str(item or "").strip()
+            key = name.lower()
+            if name and key not in seen:
+                seen.add(key)
+                out.append(name)
+        return out[:60]
+
+    def _clean_priorities(items: Any) -> list[str]:
+        out: list[str] = []
+        for item in items or []:
+            key = str(item or "").strip().lower().replace(" ", "_").replace("-", "_")
+            if key in USER_PRIORITY_VALUES and key not in out:
+                out.append(key)
+        return out
+
+    owned = _clean_names(data.get("owned_tools"))
+    avoid = _clean_names(data.get("avoid_tools"))
+    role = data.get("role")
+    role = " ".join(str(role).split()) if role else None
+    priorities = _clean_priorities(data.get("priorities"))
+    budget = data.get("budget") if data.get("budget") in ("any", "free", "freemium", "paid") else "any"
+    skill = data.get("skill_level") if data.get("skill_level") in ("any", "beginner", "intermediate", "advanced") else "any"
+
+    if not (owned or avoid or role or priorities or budget != "any" or skill != "any"):
+        return None
+    return {
+        "owned_tools": owned,
+        "avoid_tools": avoid,
+        "role": role,
+        "priorities": priorities,
+        "budget": budget,
+        "skill_level": skill,
+    }
+
+
+_PRIORITY_PHRASES = {
+    "cost": "low cost",
+    "speed": "speed",
+    "quality": "output quality",
+    "privacy": "privacy",
+    "automation": "automation",
+    "ease_of_use": "ease of use",
+    "integrations": "integrations with their existing tools",
+}
+
+
+def personalization_prompt_block(ctx: dict[str, Any] | None) -> str:
+    """Render the user's stack/role/priorities as a short ranker instruction.
+
+    Returns "" when there is nothing to personalize, so the ranker prompt is
+    byte-for-byte unchanged on the non-personalized path.
+    """
+    if not ctx:
+        return ""
+    lines: list[str] = []
+    if ctx.get("role"):
+        lines.append(f"- The user describes themselves as: {ctx['role']}.")
+    owned = ctx.get("owned_tools") or []
+    if owned:
+        lines.append(
+            "- The user already uses: " + ", ".join(owned[:15]) + ". "
+            "Prefer tools that complement this stack; do NOT recommend a near-duplicate of a tool they already have, "
+            "and when relevant note how a pick fits alongside what they use."
+        )
+    priorities = ctx.get("priorities") or []
+    if priorities:
+        phrases = [_PRIORITY_PHRASES.get(p, p) for p in priorities]
+        lines.append(f"- They care most about (in order): {', '.join(phrases)}. Weigh these when choosing and explaining.")
+    if ctx.get("budget") and ctx["budget"] != "any":
+        lines.append(f"- Budget preference: {ctx['budget']}.")
+    if ctx.get("skill_level") and ctx["skill_level"] != "any":
+        lines.append(f"- Skill level: {ctx['skill_level']}. Match tool complexity to this.")
+    if not lines:
+        return ""
+    return (
+        "\nPersonalization — tailor the shortlist and each reason to THIS user:\n"
+        + "\n".join(lines)
+        + "\nKeep reasons grounded in the candidate data; personalize the emphasis, do not invent facts.\n"
+    )
+
+
 def truncate_field_text(value: Any, max_chars: int) -> str:
     """Whitespace-normalize and cut long catalog text at a word boundary."""
     text = " ".join(str(value or "").split())
@@ -4193,6 +4365,7 @@ class RecommendationService:
         history: Any = None,
         pre_routed: bool = False,
         exclude_tools: list[str] | None = None,
+        user_context: Any = None,
     ) -> dict[str, Any]:
         # pre_routed=True means the chat() planner already classified intent as a
         # fresh/refined search, so we skip recommend()'s own conversational gating
@@ -4201,6 +4374,9 @@ class RecommendationService:
         # pre_routed=False so it still behaves conversationally on its own.
         self.metrics.increment("recommend_requests")
         mode = normalize_mode(mode)
+        personalization = normalize_user_context(user_context)
+        if personalization:
+            self.metrics.increment("recommend_personalized")
         if not pre_routed and is_non_search_message(q):
             self.metrics.increment("recommend_non_search_blocked")
             return {"hits": [], "message": non_search_response(q)}
@@ -4413,6 +4589,12 @@ class RecommendationService:
                 retrieval_query = f"{retrieval_query} coding assistant developer tools code review"
         candidate_exclusions.extend(negated_tools(retrieval_query))
         candidate_exclusions.extend(negated_tools(q))
+        if personalization:
+            # Never recommend a tool the user told us they already use or want to
+            # avoid. Owned tools are still passed to the ranker as stack context
+            # (see personalization block) so it can prefer complements.
+            candidate_exclusions.extend(personalization.get("owned_tools") or [])
+            candidate_exclusions.extend(personalization.get("avoid_tools") or [])
         for name_str in candidate_exclusions:
             cleaned_name = normalize_query_text(name_str).strip().lower()
             if cleaned_name:
@@ -4815,7 +4997,9 @@ class RecommendationService:
             )
 
         emit_progress("ranking")
-        selected = self._rank_with_llm(retrieval_query, candidates, effective_final_k, mode=mode)
+        selected = self._rank_with_llm(
+            retrieval_query, candidates, effective_final_k, mode=mode, personalization=personalization
+        )
         final_hits = self._selected_hits(
             selected,
             q,
@@ -4916,6 +5100,7 @@ class RecommendationService:
         conversation_id: str | None = None,
         history: Any = None,
         visible_tools: Any = None,
+        user_context: Any = None,
     ) -> dict[str, Any]:
         self.metrics.increment("chat_requests")
         emit_progress("routing")
@@ -4964,12 +5149,13 @@ class RecommendationService:
                     conversation_id=conversation_id,
                     history=history,
                     pre_routed=True,
+                    user_context=user_context,
                 )
                 self._ensure_assistant_remembered(conversation_id, response.get("message"))
                 return {"action": "recommend", "refined_query": q, **response}
             response = self._chat_alternative(
                 q, conversation_id, history, retrieve_k, final_k, filters, mode,
-                visible_hits=provided_hits,
+                visible_hits=provided_hits, user_context=user_context,
             )
             return {"action": "show_alternative", **response}
 
@@ -5026,6 +5212,7 @@ class RecommendationService:
                     conversation_id=conversation_id,
                     history=history,
                     pre_routed=True,
+                    user_context=user_context,
                 )
                 self._ensure_assistant_remembered(conversation_id, response.get("message"))
                 return {"action": "recommend", "refined_query": prior_task, **response}
@@ -5044,6 +5231,7 @@ class RecommendationService:
                 conversation_id=conversation_id,
                 history=history,
                 pre_routed=True,
+                user_context=user_context,
             )
             self._ensure_assistant_remembered(conversation_id, response.get("message"))
             return {"action": "recommend", "refined_query": q, **response}
@@ -5059,6 +5247,7 @@ class RecommendationService:
                     filters,
                     mode,
                     visible_hits=provided_hits,
+                    user_context=user_context,
                 )
                 return {"action": "show_alternative", **response}
             message = "I can show alternatives after I have a current shortlist. Tell me the task or run a search first."
@@ -5151,7 +5340,10 @@ class RecommendationService:
             }
 
         if action == "show_alternative":
-            response = self._chat_alternative(q, conversation_id, history, retrieve_k, final_k, filters, mode)
+            response = self._chat_alternative(
+                q, conversation_id, history, retrieve_k, final_k, filters, mode,
+                user_context=user_context,
+            )
             return {"action": "show_alternative", **response}
 
         if action == "tool_question":
@@ -5216,6 +5408,7 @@ class RecommendationService:
             history=history,
             pre_routed=True,
             exclude_tools=exclude_tools or None,
+            user_context=user_context,
         )
         self._ensure_assistant_remembered(conversation_id, response.get("message"))
         return {
@@ -5330,6 +5523,7 @@ class RecommendationService:
         filters: Any,
         mode: str,
         visible_hits: list[dict[str, Any]] | None = None,
+        user_context: Any = None,
     ) -> dict[str, Any]:
         self.conversations.append(conversation_id, "user", q)
         visible_hits = visible_hits or []
@@ -5356,6 +5550,7 @@ class RecommendationService:
             mode,
             exclude_names=prior_shown_names,
             followup_query=q,
+            user_context=user_context,
         )
         if fresh:
             message = alternative_message(fresh, reason_query)
@@ -5511,6 +5706,7 @@ class RecommendationService:
         mode: str,
         exclude_names: set[str] | None = None,
         followup_query: str = "",
+        user_context: Any = None,
     ) -> dict[str, Any] | None:
         if not reason_query:
             return None
@@ -5563,6 +5759,7 @@ class RecommendationService:
             history=None,
             pre_routed=True,
             exclude_tools=list(prior_names) or None,
+            user_context=user_context,
         )
         for hit in response.get("hits", []):
             if filters and not apply_decision_filters([hit], filters, self.store.meta):
@@ -6075,8 +6272,10 @@ class RecommendationService:
         candidates: list[dict[str, Any]],
         final_k: int,
         mode: str = "balanced",
+        personalization: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         mode = normalize_mode(mode)
+        personalization_block = personalization_prompt_block(personalization)
         mode_rules = {
             MODE_BEST_FIT: (
                 f"MODE = BEST FIT: Return a balanced shortlist of up to {final_k} tools, "
@@ -6129,7 +6328,8 @@ class RecommendationService:
                         {
                             "role": "user",
                             "content": (
-                                f"User need: {q}\n\n"
+                                f"User need: {q}\n"
+                                f"{personalization_block}\n"
                                 f"{select_instruction} Choose from these candidates:\n"
                                 f"{json.dumps([compact_rank_candidate(c) for c in candidates], ensure_ascii=False)}"
                             ),
@@ -6394,6 +6594,7 @@ def recommend(body: RecommendRequest, request: Request):
         mode=getattr(body, "mode", "balanced"),
         conversation_id=getattr(body, "conversation_id", None),
         history=getattr(body, "history", None),
+        user_context=getattr(body, "user_context", None),
     )))
 
 
@@ -6409,6 +6610,7 @@ def chat(body: ChatRequest, request: Request):
         conversation_id=getattr(body, "conversation_id", None),
         history=getattr(body, "history", None),
         visible_tools=getattr(body, "visible_tools", None),
+        user_context=getattr(body, "user_context", None),
     )))
 
 
@@ -6441,6 +6643,7 @@ async def chat_stream(body: ChatRequest, request: Request):
             conversation_id=body.conversation_id,
             history=body.history,
             visible_tools=body.visible_tools,
+            user_context=body.user_context,
         ))
         return with_degradation(request, payload)
 

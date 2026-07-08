@@ -19,6 +19,7 @@ from api import (
     SearchRequest,
     Settings,
     ToolStore,
+    UserContext,
     alternative_requests_new_search,
     begin_degradation_tracking,
     build_retrieval_query,
@@ -3581,6 +3582,128 @@ class CompactRankCandidateTests(unittest.TestCase):
         self.assertLessEqual(len(sent[0]["description"]), 362)
         # The original candidate dicts stay untouched for downstream filtering.
         self.assertIn("score", candidates[0])
+
+
+class _RankCapturingCompletions:
+    """Planner returns {} (fall through to gates); ranker returns a fixed pick and
+    records the user message so tests can inspect the personalization block."""
+
+    def __init__(self, pick_id=1):
+        self.pick_id = pick_id
+        self.rank_user_messages = []
+
+    def create(self, **kwargs):
+        system = (kwargs.get("messages") or [{}])[0].get("content", "")
+        if "AI tool recommender" in system:
+            self.rank_user_messages.append(kwargs["messages"][1]["content"])
+            content = json.dumps({
+                "selected": [
+                    {"id": self.pick_id, "reason": "Complements the stack.", "tradeoff": "x", "best_for": "writing"}
+                ]
+            })
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+        if "conversation brain" in system:
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))])
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({"message": "ok"})))])
+
+
+class _RankCapturingClient:
+    def __init__(self, pick_id=1):
+        self.embeddings = FakeEmbeddings()
+        self.chat = SimpleNamespace(completions=_RankCapturingCompletions(pick_id=pick_id))
+
+
+def make_personalization_service(pick_id=1):
+    meta = [
+        {"Name": "Writerly", "Categories": "writing", "Price": "Free tier",
+         "Description": "Writing assistant for blog posts.", "Features": "Drafts posts.",
+         "Use_cases": "Writing", "Pros": "Fast."},
+        {"Name": "Draftly", "Categories": "writing", "Price": "Free",
+         "Description": "Long-form article writer for blogs.", "Features": "Outlines and drafts.",
+         "Use_cases": "Articles", "Pros": "Structured."},
+        {"Name": "ImageBox", "Categories": "image", "Price": "Paid",
+         "Description": "Text to image generator.", "Features": "Image gen.",
+         "Use_cases": "Images", "Pros": "Fast."},
+    ]
+    store = ToolStore(
+        index=SequenceIndex(len(meta)),
+        meta=meta,
+        vectors=np.array([[1.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype="float32"),
+    )
+    settings = Settings(cache_ttl_seconds=60, cache_max_entries=8)
+    return RecommendationService(store, _RankCapturingClient(pick_id=pick_id), settings, RuntimeMetrics())
+
+
+class PersonalizationTests(unittest.TestCase):
+    def test_normalize_empty_variants_return_none(self):
+        self.assertIsNone(api_module.normalize_user_context(None))
+        self.assertIsNone(api_module.normalize_user_context({}))
+        self.assertIsNone(api_module.normalize_user_context({"owned_tools": [], "role": "  "}))
+
+    def test_normalize_cleans_and_dedupes(self):
+        ctx = api_module.normalize_user_context({
+            "owned_tools": ["Notion", "notion", " Figma "],
+            "priorities": ["Cost", "unknown", "ease-of-use"],
+            "role": "  solo   founder ",
+            "budget": "free",
+        })
+        self.assertEqual(ctx["owned_tools"], ["Notion", "Figma"])
+        self.assertEqual(ctx["priorities"], ["cost", "ease_of_use"])
+        self.assertEqual(ctx["role"], "solo founder")
+        self.assertEqual(ctx["budget"], "free")
+
+    def test_prompt_block_empty_when_no_context(self):
+        self.assertEqual(api_module.personalization_prompt_block(None), "")
+        self.assertEqual(api_module.personalization_prompt_block({}), "")
+
+    def test_owned_and_avoid_tools_excluded_from_results(self):
+        svc = make_personalization_service()
+        ctx = {"owned_tools": ["Writerly"], "avoid_tools": ["ImageBox"]}
+        res = svc.chat("tool for writing blog posts", 20, 3, conversation_id="p1", user_context=ctx)
+        names = {(h.get("meta") or {}).get("Name") for h in res.get("hits", [])}
+        self.assertNotIn("Writerly", names)   # already owned
+        self.assertNotIn("ImageBox", names)   # explicitly avoided
+        self.assertIn("Draftly", names)       # the complement survives
+
+    def test_ranker_prompt_carries_stack_and_role(self):
+        svc = make_personalization_service()
+        ctx = {"owned_tools": ["Writerly"], "role": "solo founder", "priorities": ["cost"]}
+        svc.chat("tool for writing blog posts", 20, 3, conversation_id="p2", user_context=ctx)
+        msgs = svc.client.chat.completions.rank_user_messages
+        self.assertTrue(msgs)
+        self.assertIn("already uses: Writerly", msgs[-1])
+        self.assertIn("solo founder", msgs[-1])
+        self.assertIn("low cost", msgs[-1])
+
+    def test_no_context_leaves_ranker_prompt_unpersonalized(self):
+        svc = make_personalization_service()
+        svc.chat("tool for writing blog posts", 20, 3, conversation_id="p3")
+        msgs = svc.client.chat.completions.rank_user_messages
+        self.assertTrue(msgs)
+        self.assertNotIn("Personalization", msgs[-1])
+
+    def test_budget_skill_are_soft_prefs_not_hard_filters(self):
+        # A paid-only profile must not empty a result set that has only free tools;
+        # budget/skill are ranker preferences, not hard filters.
+        svc = make_personalization_service()
+        ctx = {"budget": "paid", "skill_level": "advanced"}
+        res = svc.chat("tool for writing blog posts", 20, 3, conversation_id="p4", user_context=ctx)
+        self.assertTrue(res.get("hits"))  # free tools still returned
+        self.assertIn("Budget preference: paid", svc.client.chat.completions.rank_user_messages[-1])
+
+    def test_request_models_accept_user_context(self):
+        chat_req = ChatRequest(q="writing tool", user_context={
+            "owned_tools": ["Notion"], "role": "founder", "priorities": ["cost"], "budget": "free",
+        })
+        self.assertEqual(chat_req.user_context.owned_tools, ["Notion"])
+        rec_req = RecommendRequest(q="writing tool", user_context={"avoid_tools": ["X"]})
+        self.assertEqual(rec_req.user_context.avoid_tools, ["X"])
+        # Absent user_context stays None (wire-compatible default).
+        self.assertIsNone(ChatRequest(q="writing tool").user_context)
+
+    def test_user_context_model_rejects_unknown_priorities(self):
+        ctx = UserContext(priorities=["cost", "banana", "speed"])
+        self.assertEqual(ctx.priorities, ["cost", "speed"])
 
 
 class RoutingGoldenTests(unittest.TestCase):
