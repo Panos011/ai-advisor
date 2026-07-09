@@ -271,6 +271,14 @@ class Settings:
     skip_planner_for_tasks: bool = (
         os.getenv("SKIP_PLANNER", "1").strip().lower() not in ("0", "false", "no", "off", "")
     )
+    # Regex->planner migration, Stage 1. When on, every /chat request ALSO asks
+    # the planner what it would route to and logs whether that matches what the
+    # gate logic shipped (planner_shadow_agree / _disagree metrics). Off by
+    # default: it adds a second LLM round-trip and is a measurement tool, not a
+    # production path. It never changes the response. Enable with PLANNER_SHADOW=1.
+    planner_shadow: bool = (
+        os.getenv("PLANNER_SHADOW", "0").strip().lower() in ("1", "true", "yes", "on")
+    )
 
 
 def get_settings() -> Settings:
@@ -865,6 +873,23 @@ CHAT_TOOLS = {
     "refine_search",
     "pick_best",
     "answer_tool_question",
+}
+
+# Maps the planner's internal action vocabulary to the public response action the
+# frontend receives. Used by planner shadow mode to compare the planner's
+# proposed routing against what the gate logic actually shipped.
+_INTERNAL_TO_PUBLIC_ACTION = {
+    "chat_only": "chat_only",
+    "clarify": "clarify",
+    "recommend": "recommend",
+    "refine": "refine",
+    "explain_shortlist": "explain",
+    "explain_best": "explain",
+    "criterion": "explain",
+    "explain_last": "explain",
+    "tool_question": "explain",
+    "pick_best": "pick_best",
+    "show_alternative": "show_alternative",
 }
 
 _MODE_ALIASES = {
@@ -5118,6 +5143,88 @@ class RecommendationService:
         return {"hits": final_hits, "message": message, "personalized": bool(personalization)}
 
     def chat(
+        self,
+        q: str,
+        retrieve_k: int,
+        final_k: int,
+        filters: Any = None,
+        mode: str = "balanced",
+        conversation_id: str | None = None,
+        history: Any = None,
+        visible_tools: Any = None,
+        user_context: Any = None,
+    ) -> dict[str, Any]:
+        """Public chat entry point.
+
+        Delegates to _chat_impl (the unchanged routing pipeline). When planner
+        shadow mode is enabled it then compares what the planner alone would have
+        routed to against what shipped — the measurement step of the regex->planner
+        migration. Shadow mode never alters the returned response.
+        """
+        result = self._chat_impl(
+            q,
+            retrieve_k,
+            final_k,
+            filters=filters,
+            mode=mode,
+            conversation_id=conversation_id,
+            history=history,
+            visible_tools=visible_tools,
+            user_context=user_context,
+        )
+        if self.settings.planner_shadow:
+            self._record_planner_shadow(
+                q, result.get("action"), filters, mode, conversation_id, history
+            )
+        return result
+
+    def _record_planner_shadow(
+        self,
+        q: str,
+        actual_action: Any,
+        filters: Any,
+        mode: str,
+        conversation_id: str | None,
+        history: Any,
+    ) -> None:
+        """Compare the planner's proposed action to what the gate logic shipped.
+
+        Records planner_shadow_agree / planner_shadow_disagree and logs each
+        disagreement (the migration signal: which gates the planner would route
+        differently). Guarantees: never raises, never changes the response, and
+        restores the request's degradation state so the extra planner call cannot
+        flip the real response's `degraded` flag if it happens to fall back.
+        """
+        saved_raw = _degradation_reasons.get()
+        saved = list(saved_raw) if saved_raw is not None else None
+        try:
+            decision = self._chat_decision(
+                normalize_query_text(q), filters, normalize_mode(mode), conversation_id, history
+            )
+            internal = (
+                decision.get("action")
+                or action_from_planner_tool(decision.get("tool"))
+                or "recommend"
+            )
+            planner_action = _INTERNAL_TO_PUBLIC_ACTION.get(internal, "recommend")
+            self.metrics.increment("planner_shadow_total")
+            if planner_action == actual_action:
+                self.metrics.increment("planner_shadow_agree")
+            else:
+                self.metrics.increment("planner_shadow_disagree")
+                logger.info(
+                    "PLANNER SHADOW disagree: shipped=%s planner=%s q=%r",
+                    actual_action,
+                    planner_action,
+                    normalize_query_text(q)[:80],
+                )
+        except Exception as exc:  # noqa: BLE001 - measurement must never break a request
+            logger.warning("Planner shadow comparison failed (%s)", type(exc).__name__)
+        finally:
+            # Discard any degradation the shadow planner call may have recorded.
+            _degradation_reasons.set(saved)
+
+    def _chat_impl(
         self,
         q: str,
         retrieve_k: int,

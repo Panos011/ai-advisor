@@ -3761,6 +3761,85 @@ class PersonalizationTests(unittest.TestCase):
         )
 
 
+class PlannerShadowTests(unittest.TestCase):
+    """Stage 1 of the regex->planner migration: shadow mode observes the planner
+    without letting it affect the response."""
+
+    def setUp(self):
+        api_module._degradation_reasons.set(None)
+
+    def _shadow_service(self, decisions):
+        svc = make_service(client=DecisionClient(decisions))
+        svc.settings = dataclasses.replace(svc.settings, planner_shadow=True)
+        return svc
+
+    def test_shadow_off_makes_no_extra_planner_call(self):
+        svc = make_service(client=DecisionClient([{"action": "recommend"}]))
+        # Default: planner_shadow is off.
+        self.assertFalse(svc.settings.planner_shadow)
+        svc.chat("I need a tool for writing blog posts", 2, 2, conversation_id="s-off")
+        snap = svc.metrics.snapshot()["counters"]
+        self.assertNotIn("planner_shadow_total", snap)
+
+    def test_shadow_records_agreement(self):
+        # Planner says recommend; the fresh-task request also ships recommend.
+        svc = self._shadow_service([{"action": "recommend"}, {"action": "recommend"}])
+        result = svc.chat("I need a tool for writing blog posts", 2, 2, conversation_id="s-agree")
+        self.assertEqual(result["action"], "recommend")
+        snap = svc.metrics.snapshot()["counters"]
+        self.assertEqual(snap.get("planner_shadow_total"), 1)
+        self.assertEqual(snap.get("planner_shadow_agree"), 1)
+        self.assertNotIn("planner_shadow_disagree", snap)
+
+    def test_shadow_records_disagreement(self):
+        # "why these?" is gate-handled to 'explain' without consulting the planner,
+        # so the only planner call is the shadow one — which we seed to propose
+        # 'recommend'. That mismatch is the migration signal we want to log.
+        svc = self._shadow_service([{"action": "recommend"}])
+        cid = "s-dis"
+        svc.recommend("I need a writing tool", retrieve_k=2, final_k=2, conversation_id=cid)
+        result = svc.chat("why these?", 2, 2, conversation_id=cid)
+        self.assertEqual(result["action"], "explain")
+        snap = svc.metrics.snapshot()["counters"]
+        self.assertEqual(snap.get("planner_shadow_total"), 1)
+        self.assertEqual(snap.get("planner_shadow_disagree"), 1)
+
+    def test_shadow_does_not_change_the_response(self):
+        # The shipped action must be identical whether or not shadow is on.
+        base = make_service(client=DecisionClient([{"action": "recommend"}]))
+        shadow = self._shadow_service([{"action": "recommend"}, {"action": "recommend"}])
+        q = "I need a tool for writing blog posts"
+        self.assertEqual(
+            base.chat(q, 2, 2, conversation_id="b").get("action"),
+            shadow.chat(q, 2, 2, conversation_id="s").get("action"),
+        )
+
+    def test_shadow_does_not_pollute_degradation(self):
+        # Even if the shadow planner call fails/falls back, the request's degraded
+        # flag must not flip. Start clean tracking, run a shadow chat, assert no
+        # degradation leaked from the shadow call.
+        api_module.begin_degradation_tracking()
+        svc = self._shadow_service([{"action": "recommend"}, {"action": "recommend"}])
+        svc.chat("I need a tool for writing blog posts", 2, 2, conversation_id="s-deg")
+        self.assertEqual(api_module.current_degradation_reasons(), [])
+
+    def test_shadow_never_raises(self):
+        # A planner that blows up must not break the request.
+        class ExplodingPlanner(DecisionChatCompletions):
+            def create(self, **kwargs):
+                system = (kwargs.get("messages") or [{}])[0].get("content", "")
+                if "conversation brain" in system:
+                    raise RuntimeError("planner exploded")
+                return super().create(**kwargs)
+
+        svc = make_service(client=DecisionClient([{"action": "recommend"}]))
+        svc.settings = dataclasses.replace(svc.settings, planner_shadow=True)
+        svc.client.chat.completions = ExplodingPlanner([{"action": "recommend"}])
+        # Should not raise despite the planner error inside the shadow call.
+        result = svc.chat("I need a tool for writing blog posts", 2, 2, conversation_id="s-boom")
+        self.assertIn("action", result)
+
+
 class RoutingGoldenTests(unittest.TestCase):
     """Replay the routing golden set through chat() with deterministic stubs.
 

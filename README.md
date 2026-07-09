@@ -117,5 +117,16 @@ Add a case whenever you fix a routing bug: it turns a one-off regex patch into a
 permanent regression check, which is the safe way to migrate routing off the
 regex gates and onto the planner over time.
 
+### Planner shadow mode (regex→planner migration, Stage 1)
+Set 'PLANNER_SHADOW=1' to make every '/chat' request also ask the planner what it
+would route to and log whether that matches what the gate logic shipped
+('planner_shadow_agree' / 'planner_shadow_disagree' counters in '/metrics', plus a
+'PLANNER SHADOW disagree' log line per mismatch). This is how you measure — with
+real traffic and zero user impact — which gates the planner already agrees with
+before retiring them. It never changes the response, and it restores the request's
+degradation state so the extra planner call can't flip the 'degraded' flag. It is
+off by default because it adds a second LLM round-trip; enable it for a measurement
+window, not in steady state.
+
 ## Notes
 '.env' is git-ignored.
