@@ -51,7 +51,14 @@ Behind 'POST /chat', the recommender uses:
 'FAISS' for vector retrieval, 'MMR' for candidate diversity, and a RAG ranking step where the chat model chooses from retrieved catalogue records only.
 
 Each response includes a 'contract' object that names this pipeline and the expected tool-card fields. Each recommendation hit contains:
-'score', 'why', 'tradeoff', 'best_for', 'fit_label', and 'meta'. The mobile card can use 'meta.Name', 'meta.Categories', 'meta.Price', 'meta.Description', 'meta.Tool_link', 'meta.Logo_URL', and 'meta.Logo_File'.
+'score', 'why', 'tradeoff', 'best_for', 'fit_label', 'cost_summary', and 'meta'. The mobile card can use 'meta.Name', 'meta.Categories', 'meta.Price', 'meta.Description', 'meta.Tool_link', 'meta.Logo_URL', and 'meta.Logo_File'.
+
+'cost_summary' is a short, deterministic cost line for the card — e.g. 'Free',
+'Free tier, then from $12/mo', 'From $15/mo', 'Paid', or 'Pricing not public yet'.
+It is derived only from the catalog price (never from the LLM, so it cannot drift
+or hallucinate a number) and is null/absent when the price is genuinely unknown,
+so the client should hide the line rather than show a misleading one. This is the
+"what it'll cost you" half of an explainable recommendation.
 
 ## Scripts 
 'Data_Collection.py'

@@ -468,6 +468,9 @@ class SearchHit(BaseModel):
     tradeoff: str | None = None
     best_for: str | None = None
     fit_label: Literal["Strong match", "Good match", "Possible match"] | None = None
+    # Deterministic, grounded cost line (e.g. "Free tier, then from $12/mo").
+    # Derived from the catalog price, never from the LLM, so it can't drift.
+    cost_summary: str | None = None
 
 
 class RecommenderContract(BaseModel):
@@ -1787,6 +1790,11 @@ def enrich_hit(hit: dict[str, Any], q: str) -> dict[str, Any]:
     enriched.setdefault("tradeoff", build_tradeoff(meta))
     enriched.setdefault("best_for", build_best_for(q, meta))
     enriched.setdefault("fit_label", fit_label(score))
+    # Deterministic, grounded cost line ("what it'll cost you"). Only set when we
+    # can state it honestly; an empty string lets the client hide it.
+    summary = cost_summary(meta)
+    if summary:
+        enriched.setdefault("cost_summary", summary)
     return enriched
 
 
@@ -2736,6 +2744,43 @@ def explicit_monthly_prices(meta: dict[str, Any]) -> list[float]:
             continue
         prices.append(amount)
     return prices
+
+
+def _format_price(amount: float) -> str:
+    """'$12' for whole dollars, '$12.50' otherwise — no trailing '.0'."""
+    if amount == int(amount):
+        return f"${int(amount)}"
+    return f"${amount:.2f}"
+
+
+def cost_summary(meta: dict[str, Any]) -> str:
+    """A short, HONEST, deterministic cost line for a tool — the "what it'll cost
+    you" half of an explainable recommendation.
+
+    Derived only from the catalog Price field via the existing price predicates,
+    so it never invents a number the record does not support. Returns "" when the
+    price is genuinely unknown, so the client can hide the line rather than show a
+    misleading one.
+    """
+    price = normalize_display_text(meta.get("Price", ""))
+    if is_completely_free_tool(meta):
+        return "Free"
+    prices = explicit_monthly_prices(meta)
+    positive_prices = [p for p in prices if p > 0]
+    cheapest_paid = min(positive_prices) if positive_prices else None
+    # A listed $0 plan is itself a free tier, even if the tool isn't flagged free.
+    has_free_plan = is_free_tool(meta) or any(p == 0 for p in prices)
+    if has_free_plan:
+        if cheapest_paid is not None:
+            return f"Free tier, then from {_format_price(cheapest_paid)}/mo"
+        return "Free tier available"
+    if cheapest_paid is not None:
+        return f"From {_format_price(cheapest_paid)}/mo"
+    if "waitlist" in price.lower():
+        return "Pricing not public yet"
+    if is_paid_tool(meta):
+        return "Paid"
+    return ""
 
 
 def matches_price_cap(meta: dict[str, Any], cap: float | None) -> bool:

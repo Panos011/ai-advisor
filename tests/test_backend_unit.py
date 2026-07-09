@@ -16,6 +16,7 @@ from api import (
     RecommendRequest,
     RecommendationService,
     RuntimeMetrics,
+    SearchHit,
     SearchRequest,
     Settings,
     ToolStore,
@@ -3759,6 +3760,59 @@ class PersonalizationTests(unittest.TestCase):
             "Writerly",
             {(h.get("meta") or {}).get("Name") for h in second["hits"]},
         )
+
+
+class CostSummaryTests(unittest.TestCase):
+    def _summary(self, price):
+        return api_module.cost_summary({"Price": price})
+
+    def test_completely_free(self):
+        self.assertEqual(self._summary("Free Access: all features free forever."), "Free")
+
+    def test_free_tier_with_paid_upgrade(self):
+        self.assertEqual(
+            self._summary("Free Tier: limited. Pro: $12/month."),
+            "Free tier, then from $12/mo",
+        )
+
+    def test_free_trial_then_price(self):
+        self.assertEqual(
+            self._summary("Free Trial. Then $20 per month."),
+            "Free tier, then from $20/mo",
+        )
+
+    def test_zero_dollar_plan_is_a_free_tier(self):
+        # A listed $0 plan must read as a free tier, never "From $0/mo".
+        self.assertEqual(
+            self._summary("Basic: $0 per month. Pro: $8/month."),
+            "Free tier, then from $8/mo",
+        )
+
+    def test_paid_only_with_price(self):
+        self.assertEqual(self._summary("Monthly: $15.00 per month."), "From $15/mo")
+
+    def test_paid_without_a_number(self):
+        self.assertEqual(self._summary("Enterprise: custom pricing."), "Paid")
+
+    def test_waitlist(self):
+        self.assertEqual(self._summary("Join the waitlist."), "Pricing not public yet")
+
+    def test_unknown_price_returns_empty(self):
+        self.assertEqual(self._summary("Accuracy: 4.2/5 | Ease: 4.5/5"), "")
+        self.assertEqual(self._summary(""), "")
+
+    def test_whole_dollars_have_no_decimals(self):
+        self.assertEqual(self._summary("Pro: $9.00 per month."), "From $9/mo")
+
+    def test_enrich_hit_attaches_cost_summary(self):
+        hit = {"score": 0.9, "meta": {"Name": "X", "Price": "Pro: $12/month.", "Categories": "writing"}}
+        enriched = api_module.enrich_hit(hit, "writing tool")
+        self.assertEqual(enriched["cost_summary"], "From $12/mo")
+
+    def test_search_hit_model_accepts_cost_summary(self):
+        hit = SearchHit(score=0.9, meta={"Name": "X"}, cost_summary="Free")
+        self.assertEqual(hit.cost_summary, "Free")
+        self.assertIsNone(SearchHit(score=0.9, meta={"Name": "X"}).cost_summary)
 
 
 class PlannerShadowTests(unittest.TestCase):
