@@ -655,6 +655,11 @@ NON_SEARCH_PATTERNS = (
     r"^(?:(?:hi|hello|hey|yo)[,\s]+)?(?:how\s+(?:are|r)\s+(?:you|u)|how'?s\s+it\s+going|what'?s\s+up)[\s!.?]*$",
     r"\b(?:how\s+old\s+are\s+you|what\s+is\s+your\s+age|who\s+made\s+you|who\s+created\s+you|what\s+are\s+you|are\s+you\s+(?:real|human|a\s+bot|an?\s+ai)|tell\s+me\s+about\s+yourself)\b",
     r"^(?:thanks|thank\s+you|thx|cheers|ok|okay|nice|cool|great|perfect|awesome)[\s!.?]*$",
+    # Gratitude with a short positive tail ("thanks, that helps") or the tail
+    # alone ("that helped"). Closed list only — "thanks, now I need X" must
+    # still route as a task.
+    r"^(?:thanks|thank\s+you|thx|cheers)\s*[,!.]?\s*(?:a\s+lot|so\s+much|(?:that|this)\s+help(?:s|ed)|that'?s\s+(?:great|helpful|perfect|useful)|very\s+helpful|appreciated?|appreciate\s+it)[\s!.?]*$",
+    r"^(?:that|this)\s+(?:help(?:s|ed)|works)[\s!.?]*$",
     r"\bwhat\s+can\s+you\s+do\b",
     r"\bhow\s+do\s+i\s+use\s+this\b",
     r"\bwho\s+are\s+you\b",
@@ -2431,11 +2436,81 @@ def is_compare_request(text: str) -> bool:
     normalized = normalize_query_text(text).lower().strip()
     return bool(re.search(
         r"\b(?:differences?|the\s+difference|how\s+do\s+they\s+(?:differ|compare)|"
-        r"compare\s+(?:them|these|those|all|first|top|the\s+(?:first|second|top|two|three|four|options|tools|ones))|"
-        r"compare\b[^.?!]{0,80}\b(?:between\s+(?:them|these|those)|risk|pricing|price|paid\s+upgrade)|"
-        r"comparison|pros\s+and\s+cons|side\s+by\s+side|tell\s+me\s+(?:their|the)\s+differences?)\b",
+        r"compare\s+(?:them|these|those|all|both|first|top|the\s+(?:first|second|top|two|three|four|options|tools|ones))|"
+        r"compare\b[^.?!]{0,80}\b(?:between\s+(?:them|these|those)|risk|pricing|price|paid\s+upgrade|features?|"
+        r"you\s+(?:showed|gave|recommended|suggested))|"
+        r"comparison|pros\s+and\s+cons|side\s+by\s+side|strengths\s+and\s+weaknesses|"
+        r"tell\s+me\s+(?:their|the)\s+differences?)\b",
         normalized,
     ))
+
+
+_NAMED_COMPARE_MARKER = re.compile(
+    r"\b(?:vs\.?|versus|or|compared?|comparison|better|worse|cheaper|pricier|difference|differences)\b"
+)
+
+
+def mentioned_context_tool_names(text: str, context_hits: list[dict[str, Any]] | None) -> list[str]:
+    """Names of current-card tools literally mentioned in the message, in card order."""
+    normalized = normalize_query_text(text).lower()
+    names: list[str] = []
+    for hit in context_hits or []:
+        name = str((hit.get("meta") or {}).get("Name", "")).strip()
+        if not name or name in names:
+            continue
+        if re.search(rf"\b{re.escape(name.lower())}\b", normalized):
+            names.append(name)
+    return names
+
+
+def is_named_context_compare(text: str, context_hits: list[dict[str, Any]] | None) -> bool:
+    """'Writerly vs Draftly', 'is Writerly better than Draftly?' — a comparison
+    between tools that are already on the user's screen is a question about the
+    current cards, never a fresh search. Requires at least two named cards plus
+    a comparative marker, so 'tools like Writerly' style requests stay searches."""
+    if not context_hits:
+        return False
+    if len(mentioned_context_tool_names(text, context_hits)) < 2:
+        return False
+    if _rejects_or_replaces_named_tools(text):
+        return False
+    return bool(_NAMED_COMPARE_MARKER.search(normalize_query_text(text).lower()))
+
+
+_NAMED_TOOL_REJECTION = re.compile(
+    r"\b(?:do\s*not|don'?t|never|no\s+longer)\s+(?:want|like|need|use)\b|"
+    r"\bexcept\b|\bneither\b|\binstead\s+of\b|\bother\s+than\b"
+)
+
+
+def _rejects_or_replaces_named_tools(text: str) -> bool:
+    """True when a message naming current cards asks to move AWAY from them:
+    'I don't want Writerly or Draftly', 'alternatives to Writerly',
+    'tools like Writerly'. Those are searches, never card questions."""
+    if negated_tools(text) or is_alternative_query(text) or referenced_similar_tool(text):
+        return True
+    return bool(_NAMED_TOOL_REJECTION.search(normalize_query_text(text).lower()))
+
+
+_NAMED_QUESTION_LEAD = re.compile(
+    r"^(?:is|are|was|were|does|do|did|can|could|will|would|should|has|have|"
+    r"how|what|which|why|when|tell\s+me\s+about)\b"
+)
+
+
+def is_named_context_question(text: str, context_hits: list[dict[str, Any]] | None) -> bool:
+    """'is Writerly free?', 'does Draftly have a free plan?' — a direct question
+    about a tool that is already a current card is answered from that card,
+    never re-run as a fresh search (the tool's name keyword-matches task goals,
+    so without this it looks like a new search)."""
+    if not context_hits:
+        return False
+    normalized = normalize_query_text(text).lower().strip()
+    if not _NAMED_QUESTION_LEAD.match(normalized):
+        return False
+    if not mentioned_context_tool_names(text, context_hits):
+        return False
+    return not _rejects_or_replaces_named_tools(text)
 
 
 def wants_different_not_same(text: str) -> bool:
@@ -2551,7 +2626,10 @@ def referenced_similar_tool(text: str) -> str | None:
 
 
 _NEGATED_TOOL_PATTERN = (
-    r"\b(?:but\s+not|(?:absolutely|definitely|please|really|just)\s+not|not|except(?:\s+for)?|excluding|other\s+than|besides|apart\s+from)\s+"
+    r"\b(?:but\s+not|(?:absolutely|definitely|please|really|just)\s+not|not|except(?:\s+for)?|excluding|other\s+than|besides|apart\s+from|"
+    # "I don't want Writerly (or Draftly)", "never show me Draftly" — rejection
+    # verbs, which the bare "not" alternation cannot see inside "don't".
+    r"(?:do\s+not|don'?t|never|no\s+longer)\s+(?:want|like|need|use|show|suggest|recommend)(?:\s+me)?)\s+"
     r"([a-z0-9][a-z0-9 .,&'+/-]{1,140})"
 )
 
@@ -3442,6 +3520,12 @@ def has_explicit_task(text: str) -> bool:
     if (
         is_explanation_query(text)
         or is_criterion_pick_query(text)
+        # "compare these writing tools" mentions a goal word but is a question
+        # about the current cards, not a new search. Every is_compare_request
+        # phrasing carries an anaphoric/generic marker (them/these/you showed/
+        # difference), so a genuine pivot like "compare video editing tools"
+        # does not match it and still counts as a task.
+        or is_compare_request(text)
     ):
         return False
     if is_alternative_query(text):
@@ -5576,8 +5660,18 @@ class RecommendationService:
             self.conversations.append(conversation_id, "assistant", message)
             return {"action": "clarify", "hits": [], "message": message}
 
-        if has_context_hits and not has_explicit_task(q):
-            if is_compare_request(q):
+        context_hits_for_names = list(provided_hits or []) + list(
+            (self.shortlists.get(conversation_id) or []) if conversation_id else []
+        )
+        # A comparison of or question about named current cards overrides
+        # has_explicit_task: tool names ("Writerly") keyword-match task goals
+        # ("writing"), so "Writerly vs Draftly" or "is Writerly free?" would
+        # otherwise look like a fresh writing search.
+        named_card_focus = is_named_context_compare(q, context_hits_for_names) or (
+            is_named_context_question(q, context_hits_for_names)
+        )
+        if has_context_hits and (named_card_focus or not has_explicit_task(q)):
+            if is_compare_request(q) or named_card_focus:
                 response = self._chat_tool_question(q, conversation_id, history, visible_hits=provided_hits)
                 return {"action": "explain", **response}
             if is_criterion_pick_query(q):
@@ -5606,8 +5700,12 @@ class RecommendationService:
         # Any question about the tools already on screen must be answered from those tools,
         # never re-run as a fresh search that re-dumps cards. The planner usually gets this
         # right, but this guard makes it deterministic for the common phrasings.
-        if has_context_hits and not has_explicit_task(q) and action not in {"chat_only", "clarify"}:
-            if is_compare_request(q):
+        if (
+            has_context_hits
+            and (named_card_focus or not has_explicit_task(q))
+            and action not in {"chat_only", "clarify"}
+        ):
+            if is_compare_request(q) or named_card_focus:
                 action = "tool_question"
             elif is_criterion_pick_query(q):
                 action = "criterion"
@@ -5907,6 +6005,17 @@ class RecommendationService:
                 prior_hits = [prior_hits[-1]]
             elif 0 <= pos < len(prior_hits):
                 prior_hits = [prior_hits[pos]]
+        else:
+            # "Writerly vs Draftly": when the question names specific cards,
+            # answer about exactly those instead of the top three.
+            named = set(mentioned_context_tool_names(q, prior_hits))
+            if named:
+                named_hits = [
+                    hit for hit in prior_hits
+                    if str((hit.get("meta") or {}).get("Name", "")).strip() in named
+                ]
+                if named_hits:
+                    prior_hits = named_hits
         hits = [
             enrich_hit(dict(hit), reason_query)
             for hit in prior_hits[: min(3, len(prior_hits))]

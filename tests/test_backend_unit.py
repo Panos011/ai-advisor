@@ -32,9 +32,13 @@ from api import (
     focus_latest_intent,
     has_explicit_task,
     is_coding_query,
+    is_compare_request,
     is_completely_free_tool,
     is_free_tool,
     is_local_only_tool,
+    is_named_context_compare,
+    is_named_context_question,
+    is_non_search_message,
     is_unsafe_tool_request,
     is_pick_best_query,
     is_referential_pick,
@@ -2664,6 +2668,93 @@ class BackendUnitTests(unittest.TestCase):
         )
         self.assertEqual(followup["hits"], [])
         self.assertIn("another distinct option", followup["message"])
+
+    def test_compare_request_vocabulary_additions(self):
+        # Phrasings that previously escaped to a fresh search.
+        for q in (
+            "compare both",
+            "compare features",
+            "strengths and weaknesses of each?",
+            "compare these writing tools",
+            "compare the writing tools you showed me",
+        ):
+            self.assertTrue(is_compare_request(q), q)
+        # A compare naming a NEW domain with no anaphor is still a fresh search.
+        self.assertFalse(is_compare_request("compare video editing tools"))
+
+    def test_compare_request_is_not_an_explicit_task(self):
+        # "compare these writing tools" mentions a goal word but is a question
+        # about the current cards, not a new writing search.
+        self.assertFalse(has_explicit_task("compare these writing tools"))
+        self.assertTrue(has_explicit_task("I need a video editing tool"))
+
+    def test_named_context_compare_detection(self):
+        hits = [{"meta": {"Name": "Writerly"}}, {"meta": {"Name": "Draftly"}}]
+        for q in (
+            "Writerly vs Draftly",
+            "compare Writerly and Draftly",
+            "is Writerly better than Draftly?",
+            "which is better, Writerly or Draftly?",
+            "how does Writerly compare to Draftly?",
+        ):
+            self.assertTrue(is_named_context_compare(q, hits), q)
+        # Rejections and similar-tool searches are never card comparisons.
+        for q in (
+            "I don't want Writerly or Draftly",
+            "tools like Writerly or Draftly",
+            "show me alternatives to Writerly or Draftly",
+        ):
+            self.assertFalse(is_named_context_compare(q, hits), q)
+        # Needs two named cards plus a comparative marker.
+        self.assertFalse(is_named_context_compare("Writerly and Draftly", hits))
+        self.assertFalse(is_named_context_compare("is Writerly free?", hits))
+        self.assertFalse(is_named_context_compare("Writerly vs Draftly", None))
+
+    def test_named_context_question_detection(self):
+        hits = [{"meta": {"Name": "Writerly"}}, {"meta": {"Name": "Draftly"}}]
+        self.assertTrue(is_named_context_question("is Writerly free?", hits))
+        self.assertTrue(is_named_context_question("does Draftly have a free plan?", hits))
+        # Not a current card / similar-tool search / no question lead.
+        self.assertFalse(is_named_context_question("is ImageBox free?", hits))
+        self.assertFalse(is_named_context_question("can you find tools like Writerly?", hits))
+        self.assertFalse(is_named_context_question("Writerly is free", hits))
+
+    def test_named_pair_compare_routes_to_explain_not_search(self):
+        # "Writerly vs ImageBox" with both on screen answers from the cards;
+        # the tool name must not read as a fresh writing-task search.
+        service = make_service()
+        service.recommend(
+            "I need a writing tool", retrieve_k=2, final_k=2,
+            conversation_id="conv-vs",
+        )
+        response = service.chat(
+            "Writerly vs ImageBox", retrieve_k=2, final_k=2,
+            conversation_id="conv-vs",
+        )
+        self.assertEqual(response["action"], "explain")
+        names = {hit["meta"]["Name"] for hit in response["hits"]}
+        self.assertEqual(names, {"Writerly", "ImageBox"})
+
+    def test_named_card_question_routes_to_explain_and_narrows(self):
+        # "is ImageBox free?" answers about exactly that card, not the top ones.
+        service = make_service()
+        service.recommend(
+            "I need a writing tool", retrieve_k=2, final_k=2,
+            conversation_id="conv-namedq",
+        )
+        response = service.chat(
+            "is ImageBox free?", retrieve_k=2, final_k=2,
+            conversation_id="conv-namedq",
+        )
+        self.assertEqual(response["action"], "explain")
+        self.assertEqual(len(response["hits"]), 1)
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "ImageBox")
+
+    def test_gratitude_with_tail_is_non_search(self):
+        for q in ("thanks, that helps", "thank you so much!", "that helped", "this works"):
+            self.assertTrue(is_non_search_message(q), q)
+        # Gratitude followed by a new task must still route as a task.
+        self.assertFalse(is_non_search_message("thanks, now I need a video editing tool"))
 
     def test_detect_intent_specific_tool_and_alternative_are_refine(self):
         service = make_service()
