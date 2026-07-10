@@ -44,6 +44,7 @@ Recommended chat flow:
 2. Send a stable 'conversation_id' on every turn so the backend can remember the current shortlist.
 3. Send the recent 'history' and current 'visible_tools' when available. This lets follow-ups like "why these?", "which is best?", "is it free?", and "show me another one" answer from the cards already on screen.
 3a. Optionally send 'shown_tools' — the names of every tool the app has surfaced this session (not just the currently visible cards). The server keeps its shortlist/shown memory in-process, so a deploy or a second instance would otherwise forget what "show me another" already showed and could repeat a tool. Passing 'shown_tools' makes that memory client-owned, so alternatives keep advancing across deploys. Absent it, behavior is unchanged.
+3b. Alternative requests ("show me another", "any other tool?") never return a tool the server knows was already displayed — on '/chat' and '/recommend' alike. When every stored shortlist entry has been shown, the server searches the catalogue for a fresh distinct option (excluding 'shown_tools') before saying there is nothing left.
 4. Render 'message' as the assistant bubble.
 5. Render 'hits' as tool cards. If 'hits' is empty, keep the current cards unless the UI intentionally clears them.
 6. Use 'action' to decide UI behavior: 'chat_only' and 'clarify' do not replace cards; 'recommend' and 'refine' replace the shortlist; 'explain', 'pick_best', and 'show_alternative' can highlight the returned card(s).

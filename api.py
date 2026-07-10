@@ -1125,17 +1125,29 @@ class ConversationState:
             return
         self.shortlist_pointers[conversation_id] = max(0, index)
 
-    def next_alternative(self, conversation_id: str | None) -> tuple[dict[str, Any] | None, int]:
-        """The next shortlist hit past the pointer, or (None, -1) when exhausted."""
+    def next_alternative(
+        self,
+        conversation_id: str | None,
+        exclude: set[str] | None = None,
+    ) -> tuple[dict[str, Any] | None, int]:
+        """The next shortlist hit past the pointer whose name is not in
+        ``exclude``, or (None, -1) when exhausted. Pass the conversation's shown
+        names as ``exclude`` so an "alternative" can never be a tool the user is
+        already looking at."""
         if not conversation_id:
             return None, -1
         prior_hits = self.shortlists.get(conversation_id)
         if not prior_hits:
             return None, -1
         next_idx = self.shortlist_pointers.get(conversation_id, -1) + 1
-        if next_idx >= len(prior_hits):
-            return None, -1
-        return prior_hits[next_idx], next_idx
+        excluded = {str(name or "").strip().lower() for name in (exclude or set())}
+        for idx in range(next_idx, len(prior_hits)):
+            hit = prior_hits[idx]
+            name = str((hit.get("meta") or {}).get("Name", "")).strip().lower()
+            if name and name in excluded:
+                continue
+            return hit, idx
+        return None, -1
 
     # --- shown tools ---
     def record_shown(self, conversation_id: str | None, hits: list[dict[str, Any]] | None) -> None:
@@ -4700,14 +4712,42 @@ class RecommendationService:
             and self.shortlists.get(conversation_id)
         ):
             self.metrics.increment("recommend_alternative_requests")
-            alt_hit, alt_idx = self._next_alternative_hit(conversation_id)
+            reason_query = prior_task or q
+            # A displayed card is never an "alternative": skip everything already
+            # surfaced (including client-declared shown_tools from a pre-deploy
+            # session), otherwise we hand back a tool the user is looking at.
+            shown_names = self.conversation_state.shown_names(conversation_id)
+            alt_hit, alt_idx = self._next_alternative_hit(conversation_id, exclude=shown_names)
             if alt_hit:
-                reason_query = prior_task or q
                 single_hit = enrich_hit(dict(alt_hit), reason_query)
                 message = alternative_message(single_hit, reason_query)
                 self.conversations.append(conversation_id, "assistant", message)
                 self._set_shortlist_pointer(conversation_id, alt_idx)
+                self._record_shown(conversation_id, [single_hit])
+                self._set_last_shown(conversation_id, single_hit)
                 return {"hits": [single_hit], "message": message}
+            # The stored shortlist is exhausted — recommend() records every hit it
+            # returns as shown, so cycling it would only repeat visible cards.
+            # Fetch a genuinely new tool instead, exactly like the chat path's
+            # show_alternative does.
+            self.metrics.increment("recommend_alternative_fresh")
+            fresh = self._fresh_distinct_alternative(
+                reason_query,
+                self.shortlists.get(conversation_id),
+                retrieve_k,
+                final_k,
+                self._followup_filters(filters, q),
+                mode,
+                exclude_names=shown_names,
+                followup_query=q,
+                user_context=user_context,
+            )
+            if fresh:
+                message = alternative_message(fresh, reason_query)
+                self._record_shown(conversation_id, [fresh])
+                self._set_last_shown(conversation_id, fresh)
+                self.conversations.append(conversation_id, "assistant", message)
+                return {"hits": [fresh], "message": message}
             message = no_more_alternatives_message()
             self.conversations.append(conversation_id, "assistant", message)
             return {"hits": [], "message": message}
@@ -6520,9 +6560,10 @@ class RecommendationService:
     def _next_alternative_hit(
         self,
         conversation_id: str | None,
+        exclude: set[str] | None = None,
     ) -> tuple[dict[str, Any] | None, int]:
         """Return the next hit from the shortlist that has not been shown yet."""
-        return self.conversation_state.next_alternative(conversation_id)
+        return self.conversation_state.next_alternative(conversation_id, exclude=exclude)
 
     def _candidate_embeddings(self, ids: list[int]) -> np.ndarray:
         if self.store.vectors is not None:

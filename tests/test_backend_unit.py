@@ -996,22 +996,22 @@ class BackendUnitTests(unittest.TestCase):
         self.assertNotIn("Consultant view", response["message"])
 
     def test_alternative_followup_uses_alternative_wording(self):
-        service = make_service()
+        service = make_alternative_pool_service()
         conversation_id = "alternative-thread"
         service.recommend(
-            "I need a writing tool",
-            retrieve_k=2,
+            "find a writing tool for blog posts",
+            retrieve_k=3,
             final_k=2,
             conversation_id=conversation_id,
         )
         response = service.recommend(
             "Show me another one",
-            retrieve_k=2,
+            retrieve_k=3,
             final_k=2,
             conversation_id=conversation_id,
         )
 
-        self.assertEqual(response["hits"][0]["meta"]["Name"], "ImageBox")
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "DraftPilot")
         self.assertIn("Another option is", response["message"])
         self.assertNotIn("My top pick", response["message"])
 
@@ -1037,22 +1037,22 @@ class BackendUnitTests(unittest.TestCase):
         self.assertIn("another distinct option", response["message"].lower())
 
     def test_anything_else_followup_returns_next_option(self):
-        service = make_service()
+        service = make_alternative_pool_service()
         conversation_id = "anything-else-thread"
         service.recommend(
-            "I need a writing tool",
-            retrieve_k=2,
+            "find a writing tool for blog posts",
+            retrieve_k=3,
             final_k=2,
             conversation_id=conversation_id,
         )
         response = service.recommend(
             "Anything else?",
-            retrieve_k=2,
+            retrieve_k=3,
             final_k=2,
             conversation_id=conversation_id,
         )
 
-        self.assertEqual(response["hits"][0]["meta"]["Name"], "ImageBox")
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "DraftPilot")
         self.assertIn("Another option is", response["message"])
 
     def test_chat_request_schema_accepts_visible_tools(self):
@@ -2592,8 +2592,11 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(second["hits"][0]["meta"]["Name"], "Writerly")
         self.assertEqual(len(service.shortlists["conv-cheap"]), 2)
 
-    def test_alternative_query_returns_next_hit_from_shortlist(self):
-        # "Is there any other tool?" returns the next hit from the stored shortlist.
+    def test_alternative_query_never_reshows_a_displayed_card(self):
+        # Every recommended hit is displayed as a card and recorded as shown, so
+        # "Is there any other tool?" must never return one of them. With the
+        # whole 2-tool catalogue already on screen, the honest answer is that
+        # there is no distinct alternative left.
         service = make_service()
         first = service.recommend(
             "I need a writing tool", retrieve_k=2, final_k=2,
@@ -2606,16 +2609,61 @@ class BackendUnitTests(unittest.TestCase):
             retrieve_k=2, final_k=5,
             conversation_id="conv-alt",
         )
+        self.assertEqual(second["hits"], [])
+        self.assertIn("another distinct option", second["message"])
+
+    def test_alternative_query_fetches_fresh_tool_when_shortlist_all_shown(self):
+        # When the stored shortlist is fully displayed, an alternative request
+        # falls through to a fresh distinct search instead of repeating a card.
+        service = make_alternative_pool_service()
+        first = service.recommend(
+            "find a writing tool for blog posts", retrieve_k=3, final_k=2,
+            conversation_id="conv-alt-fresh",
+        )
+        displayed = {hit["meta"]["Name"] for hit in first["hits"]}
+        self.assertEqual(len(first["hits"]), 2)
+        self.assertNotIn("DraftPilot", displayed)
+        second = service.recommend(
+            "Is there any other tool that is probably better than this?",
+            retrieve_k=3, final_k=2,
+            conversation_id="conv-alt-fresh",
+        )
         self.assertEqual(len(second["hits"]), 1)
-        self.assertEqual(second["hits"][0]["meta"]["Name"], "ImageBox")
-        # Asking again should not give the same one back.
+        self.assertEqual(second["hits"][0]["meta"]["Name"], "DraftPilot")
+        # The fresh hit becomes the conversation's last-shown tool and is
+        # recorded as shown, so the next alternative cannot repeat it either.
+        self.assertIn("draftpilot", service.conversation_state.shown_names("conv-alt-fresh"))
+        self.assertEqual(
+            service.conversation_state.get_last_shown("conv-alt-fresh")["meta"]["Name"],
+            "DraftPilot",
+        )
         third = service.recommend(
-            "You gave me the same one",
-            retrieve_k=2, final_k=5,
-            conversation_id="conv-alt",
+            "Is there any other tool?",
+            retrieve_k=3, final_k=2,
+            conversation_id="conv-alt-fresh",
         )
         self.assertEqual(third["hits"], [])
         self.assertIn("another distinct option", third["message"])
+
+    def test_alternative_honors_client_shown_tools_after_deploy(self):
+        # Stateless-server: a deploy wiped this process. The app rehydrates the
+        # shortlist via visible_tools and declares DraftPilot already shown via
+        # shown_tools; the alternative path must not offer any of the three.
+        service = make_alternative_pool_service()
+        service.shortlists["conv-alt-deploy"] = [
+            {"meta": {"Name": "Writerly"}},
+            {"meta": {"Name": "BlogMagic"}},
+        ]
+        service.shortlist_pointers["conv-alt-deploy"] = 0
+        service._record_shown("conv-alt-deploy", service.shortlists["conv-alt-deploy"])
+        service.conversation_state.merge_shown("conv-alt-deploy", ["DraftPilot"])
+        followup = service.recommend(
+            "Is there any other tool?",
+            retrieve_k=3, final_k=2,
+            conversation_id="conv-alt-deploy",
+        )
+        self.assertEqual(followup["hits"], [])
+        self.assertIn("another distinct option", followup["message"])
 
     def test_detect_intent_specific_tool_and_alternative_are_refine(self):
         service = make_service()
@@ -3849,6 +3897,16 @@ class ConversationStateTests(unittest.TestCase):
         self.assertEqual((idx, hit["meta"]["Name"]), (1, "Draftly"))
         s.set_pointer("c", 1)
         self.assertEqual(s.next_alternative("c"), (None, -1))
+
+    def test_next_alternative_skips_excluded_names(self):
+        # Stage 3: names in ``exclude`` (the shown set) are never offered as
+        # alternatives; matching is case-insensitive like record_shown.
+        s = self._state()
+        s.shortlists["c"] = self._hits() + [{"meta": {"Name": "Prosely"}}]
+        s.shortlist_pointers["c"] = 0
+        hit, idx = s.next_alternative("c", exclude={"draftly"})
+        self.assertEqual((idx, hit["meta"]["Name"]), (2, "Prosely"))
+        self.assertEqual(s.next_alternative("c", exclude={"draftly", "PROSELY"}), (None, -1))
 
     def test_set_pointer_floors_at_zero(self):
         s = self._state()
