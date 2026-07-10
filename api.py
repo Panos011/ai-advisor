@@ -1074,6 +1074,86 @@ class ConversationStore:
         self._cache.set(conversation_id, turns)
 
 
+class ConversationState:
+    """Owns all per-conversation memory: dialogue turns plus the current
+    shortlist, its pointer, the set of already-shown tools, and the last single
+    tool shown.
+
+    This is the seam for making the advisor stateless. Today the state lives
+    in-memory (bounded, TTL + LRU), which means a Render deploy or a second
+    instance wipes a conversation's shortlist and "show me another" loses its
+    place. Centralizing it here lets a later stage merge client-provided state
+    (the app already holds the shortlist and shown tools on screen) without
+    touching the rest of the service.
+
+    The individual stores stay exposed as attributes so existing call sites keep
+    using them directly; the accessor methods are the forward-looking API and the
+    place client-state merging will hook in.
+    """
+
+    def __init__(self, max_conversations: int, ttl_seconds: int) -> None:
+        self.conversations = ConversationStore(
+            max_conversations=max_conversations,
+            ttl_seconds=ttl_seconds,
+        )
+
+        def _bounded() -> BoundedTTLDict[Any]:
+            return BoundedTTLDict(max_entries=max_conversations, ttl_seconds=ttl_seconds)
+
+        self.shortlists: BoundedTTLDict[list[dict[str, Any]]] = _bounded()
+        self.shortlist_pointers: BoundedTTLDict[int] = _bounded()
+        self.shown_tools: BoundedTTLDict[set[str]] = _bounded()
+        self.last_shown: BoundedTTLDict[dict[str, Any]] = _bounded()
+
+    # --- current shortlist ---
+    def get_shortlist(self, conversation_id: str | None) -> list[dict[str, Any]] | None:
+        if not conversation_id:
+            return None
+        return self.shortlists.get(conversation_id)
+
+    def set_pointer(self, conversation_id: str | None, index: int) -> None:
+        if not conversation_id:
+            return
+        self.shortlist_pointers[conversation_id] = max(0, index)
+
+    def next_alternative(self, conversation_id: str | None) -> tuple[dict[str, Any] | None, int]:
+        """The next shortlist hit past the pointer, or (None, -1) when exhausted."""
+        if not conversation_id:
+            return None, -1
+        prior_hits = self.shortlists.get(conversation_id)
+        if not prior_hits:
+            return None, -1
+        next_idx = self.shortlist_pointers.get(conversation_id, -1) + 1
+        if next_idx >= len(prior_hits):
+            return None, -1
+        return prior_hits[next_idx], next_idx
+
+    # --- shown tools ---
+    def record_shown(self, conversation_id: str | None, hits: list[dict[str, Any]] | None) -> None:
+        if not conversation_id or not hits:
+            return
+        shown = self.shown_tools.setdefault(conversation_id, set())
+        for hit in hits:
+            name = str((hit.get("meta") or {}).get("Name", "")).strip().lower()
+            if name:
+                shown.add(name)
+
+    def shown_names(self, conversation_id: str | None) -> set[str]:
+        if not conversation_id:
+            return set()
+        return set(self.shown_tools.get(conversation_id, set()))
+
+    # --- last single tool shown ---
+    def set_last_shown(self, conversation_id: str | None, hit: dict[str, Any] | None) -> None:
+        if conversation_id and hit:
+            self.last_shown[conversation_id] = hit
+
+    def get_last_shown(self, conversation_id: str | None) -> dict[str, Any] | None:
+        if not conversation_id:
+            return None
+        return self.last_shown.get(conversation_id)
+
+
 def merge_history_messages(
     history: Any,
     stored: list[dict[str, str]] | None = None,
@@ -4246,25 +4326,24 @@ class RecommendationService:
             max_entries=settings.cache_max_entries,
             ttl_seconds=settings.cache_ttl_seconds,
         )
-        self.conversations = ConversationStore(
+        # All per-conversation memory lives in ConversationState (TTL+LRU bounded
+        # so idle conversations age out). The attribute aliases below let the many
+        # existing call sites keep using self.shortlists / self.shown_tools / etc.
+        # directly — they point at the very objects ConversationState owns, so
+        # behavior is unchanged. ConversationState is the seam where a later stage
+        # merges client-provided state so a deploy no longer wipes a conversation.
+        self.conversation_state = ConversationState(
             max_conversations=settings.cache_max_entries,
             ttl_seconds=settings.cache_ttl_seconds,
         )
-        # Per-conversation state, TTL+LRU bounded so idle conversations age out
-        # instead of accumulating forever (previously plain dicts that never evicted).
-        def _conv_state() -> BoundedTTLDict[Any]:
-            return BoundedTTLDict(
-                max_entries=settings.cache_max_entries,
-                ttl_seconds=settings.cache_ttl_seconds,
-            )
-
-        self.shortlists: BoundedTTLDict[list[dict[str, Any]]] = _conv_state()
-        self.shortlist_pointers: BoundedTTLDict[int] = _conv_state()
+        self.conversations = self.conversation_state.conversations
+        self.shortlists = self.conversation_state.shortlists
+        self.shortlist_pointers = self.conversation_state.shortlist_pointers
         # Every tool name we have surfaced in a conversation, so "show another" never repeats.
-        self.shown_tools: BoundedTTLDict[set[str]] = _conv_state()
+        self.shown_tools = self.conversation_state.shown_tools
         # The single most recently surfaced tool (alternative / criterion / pick), for
         # "why did you choose the last one?" follow-ups.
-        self.last_shown: BoundedTTLDict[dict[str, Any]] = _conv_state()
+        self.last_shown = self.conversation_state.last_shown
         # Flipped off permanently for the process the first time the model rejects
         # reasoning_effort, so an unsupported model degrades to prior behavior.
         self._reasoning_supported = bool(self.settings.reasoning_effort)
@@ -4360,17 +4439,10 @@ class RecommendationService:
             )
 
     def _record_shown(self, conversation_id: str | None, hits: list[dict[str, Any]] | None) -> None:
-        if not conversation_id or not hits:
-            return
-        shown = self.shown_tools.setdefault(conversation_id, set())
-        for hit in hits:
-            name = str((hit.get("meta") or {}).get("Name", "")).strip().lower()
-            if name:
-                shown.add(name)
+        self.conversation_state.record_shown(conversation_id, hits)
 
     def _set_last_shown(self, conversation_id: str | None, hit: dict[str, Any] | None) -> None:
-        if conversation_id and hit:
-            self.last_shown[conversation_id] = hit
+        self.conversation_state.set_last_shown(conversation_id, hit)
 
     def health(self) -> dict[str, Any]:
         counters = self.metrics.snapshot().get("counters", {})
@@ -6413,25 +6485,14 @@ class RecommendationService:
         return None
 
     def _set_shortlist_pointer(self, conversation_id: str | None, index: int) -> None:
-        if not conversation_id:
-            return
-        self.shortlist_pointers[conversation_id] = max(0, index)
+        self.conversation_state.set_pointer(conversation_id, index)
 
     def _next_alternative_hit(
         self,
         conversation_id: str | None,
     ) -> tuple[dict[str, Any] | None, int]:
         """Return the next hit from the shortlist that has not been shown yet."""
-        if not conversation_id:
-            return None, -1
-        prior_hits = self.shortlists.get(conversation_id)
-        if not prior_hits:
-            return None, -1
-        last_idx = self.shortlist_pointers.get(conversation_id, -1)
-        next_idx = last_idx + 1
-        if next_idx >= len(prior_hits):
-            return None, -1
-        return prior_hits[next_idx], next_idx
+        return self.conversation_state.next_alternative(conversation_id)
 
     def _candidate_embeddings(self, ids: list[int]) -> np.ndarray:
         if self.store.vectors is not None:

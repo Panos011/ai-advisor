@@ -12,6 +12,7 @@ from api import (
     BoundedTTLDict,
     ChatRequest,
     ChatResponse,
+    ConversationState,
     ConversationStore,
     RecommendRequest,
     RecommendationService,
@@ -3813,6 +3814,74 @@ class CostSummaryTests(unittest.TestCase):
         hit = SearchHit(score=0.9, meta={"Name": "X"}, cost_summary="Free")
         self.assertEqual(hit.cost_summary, "Free")
         self.assertIsNone(SearchHit(score=0.9, meta={"Name": "X"}).cost_summary)
+
+
+class ConversationStateTests(unittest.TestCase):
+    def _state(self):
+        return ConversationState(max_conversations=8, ttl_seconds=60)
+
+    def _hits(self):
+        return [{"meta": {"Name": "Writerly"}}, {"meta": {"Name": "Draftly"}}]
+
+    def test_empty_reads(self):
+        s = self._state()
+        self.assertIsNone(s.get_shortlist("c"))
+        self.assertIsNone(s.get_shortlist(None))
+        self.assertEqual(s.shown_names("c"), set())
+        self.assertIsNone(s.get_last_shown("c"))
+        self.assertEqual(s.next_alternative("c"), (None, -1))
+        self.assertEqual(s.next_alternative(None), (None, -1))
+
+    def test_record_shown_collects_lowercased_names(self):
+        s = self._state()
+        s.record_shown("c", self._hits())
+        self.assertEqual(s.shown_names("c"), {"writerly", "draftly"})
+        # None/empty are no-ops.
+        s.record_shown(None, self._hits())
+        s.record_shown("c", None)
+        self.assertEqual(s.shown_names("c"), {"writerly", "draftly"})
+
+    def test_next_alternative_advances_and_exhausts(self):
+        s = self._state()
+        s.shortlists["c"] = self._hits()
+        s.shortlist_pointers["c"] = 0
+        hit, idx = s.next_alternative("c")
+        self.assertEqual((idx, hit["meta"]["Name"]), (1, "Draftly"))
+        s.set_pointer("c", 1)
+        self.assertEqual(s.next_alternative("c"), (None, -1))
+
+    def test_set_pointer_floors_at_zero(self):
+        s = self._state()
+        s.set_pointer("c", -5)
+        self.assertEqual(s.shortlist_pointers.get("c"), 0)
+
+    def test_last_shown_roundtrip(self):
+        s = self._state()
+        hit = self._hits()[0]
+        s.set_last_shown("c", hit)
+        self.assertEqual(s.get_last_shown("c")["meta"]["Name"], "Writerly")
+        # None hit is a no-op.
+        s.set_last_shown("c", None)
+        self.assertEqual(s.get_last_shown("c")["meta"]["Name"], "Writerly")
+
+    def test_service_aliases_share_the_same_objects(self):
+        # The refactor's core invariant: the service attributes ARE the
+        # ConversationState's stores, so every existing call site is unchanged.
+        svc = make_service()
+        self.assertIs(svc.shortlists, svc.conversation_state.shortlists)
+        self.assertIs(svc.shortlist_pointers, svc.conversation_state.shortlist_pointers)
+        self.assertIs(svc.shown_tools, svc.conversation_state.shown_tools)
+        self.assertIs(svc.last_shown, svc.conversation_state.last_shown)
+        self.assertIs(svc.conversations, svc.conversation_state.conversations)
+
+    def test_service_helpers_delegate_to_state(self):
+        svc = make_service()
+        svc._record_shown("c", self._hits())
+        self.assertEqual(svc.conversation_state.shown_names("c"), {"writerly", "draftly"})
+        svc.shortlists["c"] = self._hits()
+        svc._set_shortlist_pointer("c", 0)
+        hit, idx = svc._next_alternative_hit("c")
+        self.assertEqual((idx, hit["meta"]["Name"]), (1, "Draftly"))
 
 
 class PlannerShadowTests(unittest.TestCase):
