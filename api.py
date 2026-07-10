@@ -524,6 +524,11 @@ class ChatRequest(BaseModel):
     # Lets "show me another" keep advancing after a deploy wiped the server's
     # in-memory history. Bounded so a client can't send an unbounded payload.
     shown_tools: list[str] = Field(default_factory=list, max_length=200)
+    # Name of the single tool the app most recently rendered (client-owned
+    # state). Restores the referent for pronoun follow-ups ("is it free?",
+    # "why that one?") after a deploy wiped the server's last_shown memory —
+    # without it those questions silently answer about the wrong card.
+    last_shown_tool: str | None = Field(None, max_length=200)
 
     @field_validator("q")
     @classmethod
@@ -534,6 +539,12 @@ class ChatRequest(BaseModel):
     @classmethod
     def clean_shown_tools(cls, value: list[str]) -> list[str]:
         return [item.strip() for item in value if item and item.strip()][:200]
+
+    @field_validator("last_shown_tool")
+    @classmethod
+    def clean_last_shown_tool(cls, value: str | None) -> str | None:
+        cleaned = (value or "").strip()
+        return cleaned or None
 
     @field_validator("mode")
     @classmethod
@@ -1185,6 +1196,15 @@ class ConversationState:
     # --- last single tool shown ---
     def set_last_shown(self, conversation_id: str | None, hit: dict[str, Any] | None) -> None:
         if conversation_id and hit:
+            self.last_shown[conversation_id] = hit
+
+    def merge_last_shown(self, conversation_id: str | None, hit: dict[str, Any] | None) -> None:
+        """Fill last_shown from client state only when the server has none.
+        Server memory, when it survived, came from the same responses the
+        client replays — keeping it preserves byte-identical behavior."""
+        if not conversation_id or not hit:
+            return
+        if self.last_shown.get(conversation_id) is None:
             self.last_shown[conversation_id] = hit
 
     def get_last_shown(self, conversation_id: str | None) -> dict[str, Any] | None:
@@ -4559,6 +4579,32 @@ class RecommendationService:
     def _record_shown(self, conversation_id: str | None, hits: list[dict[str, Any]] | None) -> None:
         self.conversation_state.record_shown(conversation_id, hits)
 
+    def _resolve_tool_hit_by_name(
+        self, name: str, context_hits: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        """Resolve a client-declared tool name to a hit: prefer the context hits
+        (richer, already enriched), fall back to the catalogue metadata so a tool
+        the app saw before a deploy still resolves."""
+        target = str(name or "").strip().lower()
+        if not target:
+            return None
+        for hit in context_hits:
+            if str((hit.get("meta") or {}).get("Name", "")).strip().lower() == target:
+                return dict(hit)
+        for meta in self.store.meta:
+            if str(meta.get("Name", "")).strip().lower() == target:
+                return {"meta": dict(meta)}
+        return None
+
+    def _shortlist_index_of(self, conversation_id: str | None, name: str | None) -> int | None:
+        if not conversation_id or not name:
+            return None
+        target = str(name).strip().lower()
+        for idx, hit in enumerate(self.shortlists.get(conversation_id) or []):
+            if str((hit.get("meta") or {}).get("Name", "")).strip().lower() == target:
+                return idx
+        return None
+
     def _set_last_shown(self, conversation_id: str | None, hit: dict[str, Any] | None) -> None:
         self.conversation_state.set_last_shown(conversation_id, hit)
 
@@ -4771,9 +4817,21 @@ class RecommendationService:
             self.metrics.increment("recommend_criterion_pick_requests")
             prior_hits = self.shortlists[conversation_id]
             sorted_hits = _sort_hits_by_criterion(prior_hits, criterion)
-            if criterion in {"free", "paid"} and re.search(r"\b(?:it|this|that)\b", q.lower()):
-                current_idx = self.shortlist_pointers.get(conversation_id, 0)
-                best_hit = prior_hits[min(current_idx, len(prior_hits) - 1)]
+            if (
+                criterion in {"free", "paid"}
+                and ordinal_position(q) is None
+                and re.search(r"\b(?:it|this|that)\b", q.lower())
+            ):
+                # "is it free?" refers to the tool the user is looking at: the
+                # most recent single tool shown when we have one (it may not
+                # even be in the shortlist, e.g. a fresh alternative), else the
+                # pointer position.
+                last = self.conversation_state.get_last_shown(conversation_id)
+                if last:
+                    best_hit = last
+                else:
+                    current_idx = self.shortlist_pointers.get(conversation_id, 0)
+                    best_hit = prior_hits[min(current_idx, len(prior_hits) - 1)]
             else:
                 best_hit = sorted_hits[0] if sorted_hits else prior_hits[0]
             if best_hit:
@@ -4781,9 +4839,15 @@ class RecommendationService:
                 single_hit = enrich_hit(dict(best_hit), reason_query)
                 message = criterion_pick_message(single_hit, criterion, reason_query)
                 self.conversations.append(conversation_id, "assistant", message)
-                self._set_shortlist_pointer(
-                    conversation_id, prior_hits.index(best_hit)
+                # best_hit may come from last_shown and not sit in the shortlist,
+                # so locate it by name instead of identity.
+                pointer_idx = self._shortlist_index_of(
+                    conversation_id,
+                    str((best_hit.get("meta") or {}).get("Name", "")),
                 )
+                if pointer_idx is not None:
+                    self._set_shortlist_pointer(conversation_id, pointer_idx)
+                self._set_last_shown(conversation_id, single_hit)
                 return {"hits": [single_hit], "message": message}
 
         # Alternative request: "Is there any other tool?" / "Show me another" / "Not that one".
@@ -5417,6 +5481,7 @@ class RecommendationService:
         visible_tools: Any = None,
         user_context: Any = None,
         shown_tools: Any = None,
+        last_shown_tool: Any = None,
     ) -> dict[str, Any]:
         """Public chat entry point.
 
@@ -5436,6 +5501,18 @@ class RecommendationService:
             visible_tools=visible_tools,
             user_context=user_context,
             shown_tools=shown_tools,
+            last_shown_tool=last_shown_tool,
+        )
+        # Routing telemetry: one greppable line per request plus a per-action
+        # counter in /metrics. This is the raw material for growing
+        # routing_golden.jsonl from real traffic (grep ROUTING in Render logs).
+        action = result.get("action")
+        self.metrics.increment(f"chat_action_{action or 'none'}")
+        logger.info(
+            "ROUTING action=%s hits=%d q=%r",
+            action,
+            len(result.get("hits") or []),
+            normalize_query_text(q)[:120],
         )
         if self.settings.planner_shadow:
             self._record_planner_shadow(
@@ -5501,6 +5578,7 @@ class RecommendationService:
         visible_tools: Any = None,
         user_context: Any = None,
         shown_tools: Any = None,
+        last_shown_tool: Any = None,
     ) -> dict[str, Any]:
         self.metrics.increment("chat_requests")
         emit_progress("routing")
@@ -5524,6 +5602,18 @@ class RecommendationService:
             return {"action": "chat_only", "hits": [], "message": message}
 
         provided_hits = visible_tool_hits(visible_tools)
+        # Client-owned state: restore the referent for pronoun follow-ups
+        # ("is it free?", "why that one?") after a deploy wiped last_shown.
+        # Surviving server memory wins; the client value only fills the gap.
+        last_shown_name = str(last_shown_tool or "").strip()
+        if conversation_id and last_shown_name:
+            resolved = self._resolve_tool_hit_by_name(
+                last_shown_name,
+                provided_hits + list(self.shortlists.get(conversation_id) or []),
+            )
+            if resolved:
+                self.conversation_state.merge_last_shown(conversation_id, resolved)
+                self.conversation_state.merge_shown(conversation_id, [last_shown_name])
         if provided_hits:
             if conversation_id:
                 stored_hits = self.shortlists.get(conversation_id) or []
@@ -5532,7 +5622,12 @@ class RecommendationService:
                 # visible cards.
                 if len(provided_hits) >= len(stored_hits):
                     self.shortlists[conversation_id] = provided_hits
-                self.shortlist_pointers.setdefault(conversation_id, 0)
+                # A fresh pointer starts at the client's last-shown card when it
+                # is one of the hydrated cards, so cycling resumes in place.
+                default_pointer = self._shortlist_index_of(conversation_id, last_shown_name)
+                self.shortlist_pointers.setdefault(
+                    conversation_id, 0 if default_pointer is None else default_pointer
+                )
                 self._record_shown(conversation_id, provided_hits)
             else:
                 # No conversation memory, but we can still answer from the cards
@@ -5862,9 +5957,26 @@ class RecommendationService:
             self.conversations.append(conversation_id, "assistant", message)
             return {"hits": hits, "message": message}
         best = sorted_hits[0] if sorted_hits else prior_hits[0]
+        if (
+            criterion in {"free", "paid"}
+            and ordinal_position(q) is None
+            and re.search(r"\b(?:it|this|that)\b", q.lower())
+        ):
+            # "is it free?" refers to the tool the user is looking at, not the
+            # cheapest-sorted one. last_shown survives deploys via the client's
+            # last_shown_tool.
+            last = self.conversation_state.get_last_shown(conversation_id)
+            if last:
+                best = last
         single_hit = enrich_hit(dict(best), reason_query)
         message = clean_assistant_message(criterion_pick_message(single_hit, criterion, reason_query))
-        self._set_shortlist_pointer(conversation_id, prior_hits.index(best) if best in prior_hits else 0)
+        # best may come from last_shown and not sit in the shortlist, so locate
+        # it by name instead of identity.
+        pointer_idx = self._shortlist_index_of(
+            conversation_id, str((best.get("meta") or {}).get("Name", ""))
+        )
+        if pointer_idx is not None:
+            self._set_shortlist_pointer(conversation_id, pointer_idx)
         self._set_last_shown(conversation_id, single_hit)
         self.conversations.append(conversation_id, "assistant", message)
         return {"hits": [single_hit], "message": message}
@@ -7032,6 +7144,7 @@ def chat(body: ChatRequest, request: Request):
         visible_tools=getattr(body, "visible_tools", None),
         user_context=getattr(body, "user_context", None),
         shown_tools=getattr(body, "shown_tools", None),
+        last_shown_tool=getattr(body, "last_shown_tool", None),
     )))
 
 
@@ -7066,6 +7179,7 @@ async def chat_stream(body: ChatRequest, request: Request):
             visible_tools=body.visible_tools,
             user_context=body.user_context,
             shown_tools=body.shown_tools,
+            last_shown_tool=body.last_shown_tool,
         ))
         return with_degradation(request, payload)
 

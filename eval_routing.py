@@ -211,6 +211,7 @@ def run_case(svc: "api.RecommendationService", case: dict[str, Any], index: int)
         visible_tools=visible_tools,
         user_context=case.get("user_context"),
         shown_tools=case.get("shown_tools"),
+        last_shown_tool=case.get("last_shown_tool"),
     )
     return result
 

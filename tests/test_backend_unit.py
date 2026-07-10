@@ -4041,6 +4041,20 @@ class ConversationStateTests(unittest.TestCase):
         s.merge_shown("c", [])       # empty -> no-op
         self.assertEqual(s.shown_names("c"), {"writerly", "draftly"})
 
+    def test_merge_last_shown_fills_only_gaps(self):
+        # Stage 4: client state restores last_shown after a deploy, but
+        # surviving server memory always wins.
+        s = self._state()
+        client_hit = {"meta": {"Name": "Draftly"}}
+        s.merge_last_shown("c", client_hit)
+        self.assertEqual(s.get_last_shown("c")["meta"]["Name"], "Draftly")
+        s.set_last_shown("c", {"meta": {"Name": "Writerly"}})
+        s.merge_last_shown("c", client_hit)
+        self.assertEqual(s.get_last_shown("c")["meta"]["Name"], "Writerly")
+        s.merge_last_shown(None, client_hit)  # no conversation -> no-op
+        s.merge_last_shown("c", None)          # no hit -> no-op
+        self.assertEqual(s.get_last_shown("c")["meta"]["Name"], "Writerly")
+
 
 class ClientShownToolsTests(unittest.TestCase):
     def test_chat_merges_client_shown_tools_into_state(self):
@@ -4055,6 +4069,94 @@ class ClientShownToolsTests(unittest.TestCase):
         req = ChatRequest(q="hi", shown_tools=["  Writerly ", "", "Draftly"])
         self.assertEqual(req.shown_tools, ["Writerly", "Draftly"])
         self.assertEqual(ChatRequest(q="hi").shown_tools, [])
+
+    def test_chat_request_model_cleans_last_shown_tool(self):
+        self.assertEqual(ChatRequest(q="hi", last_shown_tool="  Writerly ").last_shown_tool, "Writerly")
+        self.assertIsNone(ChatRequest(q="hi", last_shown_tool="   ").last_shown_tool)
+        self.assertIsNone(ChatRequest(q="hi").last_shown_tool)
+
+    def test_chat_hydrates_last_shown_and_pointer_from_client_state(self):
+        # Stage 4: a deploy wiped the server; the app replays its cards plus the
+        # last tool it rendered. The server restores last_shown and resumes the
+        # pointer at that card.
+        svc = make_service(client=DecisionClient([{"action": "chat_only", "message": "ok"}]))
+        visible = [
+            {"score": 0.9, "meta": {"Name": "Writerly", "Categories": "writing", "Price": "Free tier"}},
+            {"score": 0.8, "meta": {"Name": "ImageBox", "Categories": "image generator", "Price": "Paid"}},
+        ]
+        svc.chat(
+            "hello", 2, 2,
+            conversation_id="cid-last",
+            visible_tools=visible,
+            last_shown_tool="ImageBox",
+        )
+        state = svc.conversation_state
+        self.assertEqual(state.get_last_shown("cid-last")["meta"]["Name"], "ImageBox")
+        self.assertEqual(svc.shortlist_pointers.get("cid-last"), 1)
+        self.assertIn("imagebox", state.shown_names("cid-last"))
+
+    def test_last_shown_referent_survives_deploy_for_explain_last(self):
+        # "why did you suggest the last one?" after a deploy: the client says the
+        # last rendered tool was Writerly, so the answer must be about Writerly —
+        # not the shortlist-tail fallback (ImageBox).
+        service = make_service()
+        visible = [
+            {"score": 0.9, "meta": {"Name": "Writerly", "Categories": "writing", "Price": "Free tier"}},
+            {"score": 0.8, "meta": {"Name": "ImageBox", "Categories": "image generator", "Price": "Paid"}},
+        ]
+        response = service.chat(
+            "why did you suggest the last one?", retrieve_k=2, final_k=2,
+            conversation_id="conv-deploy-last",
+            visible_tools=visible,
+            last_shown_tool="Writerly",
+        )
+        self.assertEqual(response["action"], "explain")
+        # Explanations are text-only (no cards); the referent shows in the message.
+        self.assertIn("Writerly", response["message"])
+        self.assertNotIn("ImageBox", response["message"])
+
+    def test_pronoun_free_question_answers_about_last_shown_chat_path(self):
+        # "is it free?" refers to the tool the user is looking at (last shown),
+        # not the cheapest-sorted card.
+        service = make_service()
+        service.recommend("I need a writing tool", retrieve_k=2, final_k=2, conversation_id="c-pron")
+        service.conversation_state.set_last_shown(
+            "c-pron", {"meta": {"Name": "ImageBox", "Categories": "image generator", "Price": "Paid"}}
+        )
+        response = service._chat_criterion("is it free?", "c-pron", None)
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "ImageBox")
+        # Without a pronoun the criterion still ranks the shortlist.
+        response = service._chat_criterion("which one is free?", "c-pron", None)
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "Writerly")
+
+    def test_pronoun_free_question_answers_about_last_shown_recommend_path(self):
+        service = make_service()
+        service.recommend("I need a writing tool", retrieve_k=2, final_k=2, conversation_id="c-pron2")
+        service.conversation_state.set_last_shown(
+            "c-pron2", {"meta": {"Name": "ImageBox", "Categories": "image generator", "Price": "Paid"}}
+        )
+        response = service.recommend("is it free?", retrieve_k=2, final_k=2, conversation_id="c-pron2")
+        self.assertEqual(len(response["hits"]), 1)
+        self.assertEqual(response["hits"][0]["meta"]["Name"], "ImageBox")
+
+    def test_resolve_tool_hit_by_name_prefers_context_then_catalog(self):
+        svc = make_service()
+        context = [{"score": 0.9, "why": "match", "meta": {"Name": "Writerly"}}]
+        hit = svc._resolve_tool_hit_by_name(" writerly ", context)
+        self.assertEqual(hit["why"], "match")
+        # Not in context -> resolved from catalogue metadata.
+        hit = svc._resolve_tool_hit_by_name("ImageBox", context)
+        self.assertEqual(hit["meta"]["Name"], "ImageBox")
+        self.assertIsNone(svc._resolve_tool_hit_by_name("NoSuchTool", context))
+        self.assertIsNone(svc._resolve_tool_hit_by_name("", context))
+
+    def test_shortlist_index_of_finds_by_name(self):
+        svc = make_service()
+        svc.shortlists["c"] = [{"meta": {"Name": "Writerly"}}, {"meta": {"Name": "ImageBox"}}]
+        self.assertEqual(svc._shortlist_index_of("c", "imagebox"), 1)
+        self.assertIsNone(svc._shortlist_index_of("c", "NoSuchTool"))
+        self.assertIsNone(svc._shortlist_index_of(None, "Writerly"))
+        self.assertIsNone(svc._shortlist_index_of("c", None))
 
 
 class PlannerShadowTests(unittest.TestCase):
