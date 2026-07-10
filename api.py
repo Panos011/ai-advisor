@@ -520,11 +520,20 @@ class ChatRequest(BaseModel):
     history: list[ChatMessage] = Field(default_factory=list, max_length=MAX_HISTORY_TURNS)
     visible_tools: list[SearchHit] = Field(default_factory=list, max_length=10)
     user_context: UserContext | None = None
+    # Names of every tool already surfaced this session (client-owned state).
+    # Lets "show me another" keep advancing after a deploy wiped the server's
+    # in-memory history. Bounded so a client can't send an unbounded payload.
+    shown_tools: list[str] = Field(default_factory=list, max_length=200)
 
     @field_validator("q")
     @classmethod
     def clean_query(cls, value: str) -> str:
         return _clean_required_text(value)
+
+    @field_validator("shown_tools")
+    @classmethod
+    def clean_shown_tools(cls, value: list[str]) -> list[str]:
+        return [item.strip() for item in value if item and item.strip()][:200]
 
     @field_validator("mode")
     @classmethod
@@ -1137,6 +1146,19 @@ class ConversationState:
             name = str((hit.get("meta") or {}).get("Name", "")).strip().lower()
             if name:
                 shown.add(name)
+
+    def merge_shown(self, conversation_id: str | None, names: Any) -> None:
+        """Fold a client-provided set of already-shown tool names into the shown
+        set. This is the stateless-server bridge: the app knows every tool it has
+        surfaced across the whole session, so "show me another" keeps advancing
+        even after a deploy wiped the server's in-memory history."""
+        if not conversation_id or not names:
+            return
+        shown = self.shown_tools.setdefault(conversation_id, set())
+        for name in names:
+            cleaned = str(name or "").strip().lower()
+            if cleaned:
+                shown.add(cleaned)
 
     def shown_names(self, conversation_id: str | None) -> set[str]:
         if not conversation_id:
@@ -5270,6 +5292,7 @@ class RecommendationService:
         history: Any = None,
         visible_tools: Any = None,
         user_context: Any = None,
+        shown_tools: Any = None,
     ) -> dict[str, Any]:
         """Public chat entry point.
 
@@ -5288,6 +5311,7 @@ class RecommendationService:
             history=history,
             visible_tools=visible_tools,
             user_context=user_context,
+            shown_tools=shown_tools,
         )
         if self.settings.planner_shadow:
             self._record_planner_shadow(
@@ -5352,11 +5376,17 @@ class RecommendationService:
         history: Any = None,
         visible_tools: Any = None,
         user_context: Any = None,
+        shown_tools: Any = None,
     ) -> dict[str, Any]:
         self.metrics.increment("chat_requests")
         emit_progress("routing")
         q = normalize_query_text(q)
         mode = normalize_mode(mode)
+        # Client-owned state: fold the full set of tools the app knows it has
+        # already shown into our shown set, so "show me another" survives a
+        # deploy or a second instance that lost the in-memory history.
+        if conversation_id and shown_tools:
+            self.conversation_state.merge_shown(conversation_id, shown_tools)
 
         if is_unsafe_tool_request(q):
             message = unsafe_request_response()
@@ -6851,6 +6881,7 @@ def chat(body: ChatRequest, request: Request):
         history=getattr(body, "history", None),
         visible_tools=getattr(body, "visible_tools", None),
         user_context=getattr(body, "user_context", None),
+        shown_tools=getattr(body, "shown_tools", None),
     )))
 
 
@@ -6884,6 +6915,7 @@ async def chat_stream(body: ChatRequest, request: Request):
             history=body.history,
             visible_tools=body.visible_tools,
             user_context=body.user_context,
+            shown_tools=body.shown_tools,
         ))
         return with_degradation(request, payload)
 

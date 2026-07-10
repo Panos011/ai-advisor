@@ -3883,6 +3883,30 @@ class ConversationStateTests(unittest.TestCase):
         hit, idx = svc._next_alternative_hit("c")
         self.assertEqual((idx, hit["meta"]["Name"]), (1, "Draftly"))
 
+    def test_merge_shown_folds_client_names(self):
+        # Stage 2: client-owned shown history survives a wiped server.
+        s = self._state()
+        s.merge_shown("c", ["Writerly", "  DRAFTLY ", "", None])
+        self.assertEqual(s.shown_names("c"), {"writerly", "draftly"})
+        s.merge_shown(None, ["X"])  # no conversation -> no-op
+        s.merge_shown("c", [])       # empty -> no-op
+        self.assertEqual(s.shown_names("c"), {"writerly", "draftly"})
+
+
+class ClientShownToolsTests(unittest.TestCase):
+    def test_chat_merges_client_shown_tools_into_state(self):
+        # A deploy wiped the server; the app sends the tools it already showed.
+        svc = make_service(client=DecisionClient([{"action": "chat_only", "message": "ok"}]))
+        svc.chat("hello", 2, 2, conversation_id="cid", shown_tools=["Writerly", "Draftly"])
+        self.assertTrue(
+            {"writerly", "draftly"}.issubset(svc.conversation_state.shown_names("cid"))
+        )
+
+    def test_chat_request_model_cleans_shown_tools(self):
+        req = ChatRequest(q="hi", shown_tools=["  Writerly ", "", "Draftly"])
+        self.assertEqual(req.shown_tools, ["Writerly", "Draftly"])
+        self.assertEqual(ChatRequest(q="hi").shown_tools, [])
+
 
 class PlannerShadowTests(unittest.TestCase):
     """Stage 1 of the regex->planner migration: shadow mode observes the planner
