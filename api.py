@@ -6993,7 +6993,7 @@ class RecommendationService:
 # === FastAPI App ===
 import asyncio
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -7291,3 +7291,247 @@ def detect_intent(body: IntentRequest, request: Request):
         conversation_id=getattr(body, "conversation_id", None),
         history=getattr(body, "history", None),
     ))
+
+
+# === MCP endpoint (Model Context Protocol over streamable HTTP, stateless) ===
+#
+# Distribution play: expose the advisor as an MCP server so Claude Desktop,
+# Claude Code, ChatGPT and any other MCP client can query the CommAI catalogue
+# directly ("add https://<backend>/mcp as a connector"). Hand-rolled JSON-RPC
+# instead of the mcp SDK on purpose: the surface we need (initialize,
+# tools/list, tools/call) is tiny, the server is stateless (fits the
+# stateless-server architecture — no sessions, no SSE), and it keeps the
+# Render deploy dependency-free.
+
+MCP_PROTOCOL_VERSION = "2025-03-26"
+MCP_SERVER_INFO = {"name": "commai-advisor", "version": "1.0.0"}
+
+MCP_TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "recommend_ai_tools",
+        "description": (
+            "Recommend AI tools for a task from the CommAI catalogue "
+            "(thousands of tools with honest pricing summaries and "
+            "dead-link-checked freshness). Returns a ranked shortlist with a "
+            "reason and cost summary per tool."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "What the user wants to accomplish, e.g. 'edit podcasts' or 'write SEO blog posts'.",
+                },
+                "budget": {
+                    "type": "string",
+                    "enum": ["any", "free", "freemium", "paid"],
+                    "description": "Pricing constraint. 'free' means a free tier or open source only.",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10,
+                    "description": "How many tools to return (default 5).",
+                },
+            },
+            "required": ["task"],
+        },
+    },
+    {
+        "name": "compare_tools",
+        "description": "Compare named AI tools from the CommAI catalogue on pricing and capabilities.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "names": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 2,
+                    "maxItems": 5,
+                    "description": "Tool names to compare (as they appear in the catalogue).",
+                },
+            },
+            "required": ["names"],
+        },
+    },
+    {
+        "name": "tool_details",
+        "description": "Full catalogue record for one AI tool: description, pricing, categories, features, use cases.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Tool name as it appears in the catalogue."},
+            },
+            "required": ["name"],
+        },
+    },
+]
+
+
+def _mcp_find_meta(svc: RecommendationService, name: Any) -> dict[str, Any] | None:
+    target = str(name or "").strip().lower()
+    if not target:
+        return None
+    for row in svc.store.meta:
+        if str(row.get("Name", "")).strip().lower() == target:
+            return row
+    return None
+
+
+def _mcp_tool_record(meta: dict[str, Any], full: bool = False) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "name": str(meta.get("Name", "")).strip(),
+        "categories": normalize_display_text(meta.get("Categories", "")),
+        "pricing": cost_summary(meta) or "Unknown",
+        "description": complete_sentences(
+            normalize_display_text(meta.get("Description", "")), 300, max_sentences=2
+        ),
+    }
+    if full:
+        record["price_text"] = normalize_display_text(meta.get("Price", ""))[:200]
+        record["features"] = complete_sentences(
+            normalize_display_text(meta.get("Features", "")), 300, max_sentences=2
+        )
+        record["use_cases"] = normalize_display_text(meta.get("Use_cases", ""))[:200]
+    return record
+
+
+def _mcp_recommend_ai_tools(svc: RecommendationService, args: dict[str, Any]) -> dict[str, Any]:
+    task = str(args.get("task") or "").strip()
+    if not task:
+        raise ValueError("'task' is required: describe what the user wants to accomplish.")
+    budget = str(args.get("budget") or "any").strip().lower()
+    filters = {"budget": budget} if budget in ("free", "freemium", "paid") else None
+    try:
+        max_results = max(1, min(10, int(args.get("max_results") or 5)))
+    except (TypeError, ValueError):
+        max_results = 5
+    response = svc.recommend(
+        task,
+        retrieve_k=30,
+        final_k=max_results,
+        filters=filters,
+        mode=MODE_BEST_FIT,
+    )
+    hits = response.get("hits") or []
+    # MCP traffic feeds the vendor ledger too — these shortlists are served
+    # recommendations like any other.
+    log_shortlist(task, hits, "mcp_recommend", MODE_BEST_FIT, metrics=svc.metrics)
+    return {
+        "message": response.get("message") or "",
+        "tools": [
+            {
+                "rank": rank,
+                "name": str((hit.get("meta") or {}).get("Name", "")).strip(),
+                "why": str(hit.get("why") or "")[:300],
+                "pricing": str(hit.get("cost_summary") or cost_summary(hit.get("meta") or {}) or "Unknown"),
+                "categories": normalize_display_text((hit.get("meta") or {}).get("Categories", "")),
+            }
+            for rank, hit in enumerate(hits, start=1)
+        ],
+    }
+
+
+def _mcp_compare_tools(svc: RecommendationService, args: dict[str, Any]) -> dict[str, Any]:
+    names = args.get("names") or []
+    if not isinstance(names, list) or not names:
+        raise ValueError("'names' is required: a list of tool names to compare.")
+    found: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for name in names[:5]:
+        meta = _mcp_find_meta(svc, name)
+        if meta is None:
+            missing.append(str(name))
+        else:
+            found.append(_mcp_tool_record(meta))
+    if not found:
+        raise ValueError(
+            "None of the named tools are in the catalogue: " + ", ".join(missing)
+        )
+    return {"tools": found, "not_found": missing}
+
+
+def _mcp_tool_details(svc: RecommendationService, args: dict[str, Any]) -> dict[str, Any]:
+    meta = _mcp_find_meta(svc, args.get("name"))
+    if meta is None:
+        raise ValueError(f"Tool {str(args.get('name') or '')!r} is not in the catalogue.")
+    return _mcp_tool_record(meta, full=True)
+
+
+_MCP_TOOL_HANDLERS = {
+    "recommend_ai_tools": _mcp_recommend_ai_tools,
+    "compare_tools": _mcp_compare_tools,
+    "tool_details": _mcp_tool_details,
+}
+
+
+def _mcp_result(msg_id: Any, result: dict[str, Any]) -> JSONResponse:
+    return JSONResponse({"jsonrpc": "2.0", "id": msg_id, "result": result})
+
+
+def _mcp_error(msg_id: Any, code: int, message: str, status: int = 200) -> JSONResponse:
+    return JSONResponse(
+        {"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}},
+        status_code=status,
+    )
+
+
+@app.get("/mcp")
+def mcp_get() -> Response:
+    # Stateless server: no SSE stream to subscribe to.
+    return Response(status_code=405, headers={"Allow": "POST"})
+
+
+@app.post("/mcp")
+async def mcp_endpoint(request: Request):
+    begin_degradation_tracking()
+    try:
+        message = await request.json()
+    except Exception:
+        return _mcp_error(None, -32700, "Parse error: body is not valid JSON", status=400)
+    if not isinstance(message, dict):
+        return _mcp_error(None, -32600, "Batch requests are not supported", status=400)
+
+    method = str(message.get("method") or "")
+    msg_id = message.get("id")
+    params = message.get("params") or {}
+
+    # Notifications (no id) are acknowledged and ignored — stateless server.
+    if msg_id is None:
+        return Response(status_code=202)
+
+    if method == "initialize":
+        requested = str(params.get("protocolVersion") or "").strip()
+        version = requested if 0 < len(requested) <= 20 else MCP_PROTOCOL_VERSION
+        return _mcp_result(msg_id, {
+            "protocolVersion": version,
+            "capabilities": {"tools": {}},
+            "serverInfo": MCP_SERVER_INFO,
+        })
+    if method == "ping":
+        return _mcp_result(msg_id, {})
+    if method == "tools/list":
+        return _mcp_result(msg_id, {"tools": MCP_TOOLS})
+    if method == "tools/call":
+        try:
+            svc = service(request)
+        except HTTPException:
+            return _mcp_error(msg_id, -32000, "Search service is not ready")
+        tool_name = str(params.get("name") or "")
+        handler = _MCP_TOOL_HANDLERS.get(tool_name)
+        if handler is None:
+            return _mcp_error(msg_id, -32602, f"Unknown tool: {tool_name}")
+        arguments = params.get("arguments") or {}
+        try:
+            payload = await run_in_threadpool(handler, svc, arguments)
+        except ValueError as exc:
+            # Tool execution errors are results with isError, not JSON-RPC errors.
+            return _mcp_result(msg_id, {
+                "content": [{"type": "text", "text": str(exc)}],
+                "isError": True,
+            })
+        return _mcp_result(msg_id, {
+            "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}],
+            "isError": False,
+        })
+    return _mcp_error(msg_id, -32601, f"Method not found: {method}")

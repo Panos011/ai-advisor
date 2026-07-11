@@ -4301,6 +4301,117 @@ class RoutingGoldenTests(unittest.TestCase):
                 self.assertIn(action, valid_actions, f"bad expected action in {case['q']!r}")
 
 
+class McpEndpointTests(unittest.TestCase):
+    """Drive the /mcp JSON-RPC endpoint through the real ASGI app with an
+    injected service — the MCP handshake plus all three tools."""
+
+    def _client(self, svc=None):
+        from fastapi.testclient import TestClient
+
+        import api as mod
+
+        svc = svc or make_service()
+        mod.app.state.recommender = svc
+        mod.app.state.metrics = svc.metrics
+        mod.app.state.settings = svc.settings
+        return TestClient(mod.app), svc
+
+    def _rpc(self, client, method, params=None, msg_id=1):
+        body = {"jsonrpc": "2.0", "id": msg_id, "method": method}
+        if params is not None:
+            body["params"] = params
+        return client.post("/mcp", json=body)
+
+    def _call_tool(self, client, name, arguments):
+        resp = self._rpc(client, "tools/call", {"name": name, "arguments": arguments})
+        self.assertEqual(resp.status_code, 200)
+        return resp.json()["result"]
+
+    def test_initialize_handshake(self):
+        client, _ = self._client()
+        resp = self._rpc(client, "initialize", {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "0"},
+        })
+        result = resp.json()["result"]
+        self.assertEqual(result["protocolVersion"], "2025-03-26")
+        self.assertEqual(result["serverInfo"]["name"], "commai-advisor")
+        self.assertIn("tools", result["capabilities"])
+
+    def test_initialized_notification_gets_202(self):
+        client, _ = self._client()
+        resp = client.post("/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+        self.assertEqual(resp.status_code, 202)
+
+    def test_tools_list(self):
+        client, _ = self._client()
+        tools = self._rpc(client, "tools/list").json()["result"]["tools"]
+        names = {tool["name"] for tool in tools}
+        self.assertEqual(names, {"recommend_ai_tools", "compare_tools", "tool_details"})
+        for tool in tools:
+            self.assertIn("inputSchema", tool)
+            self.assertTrue(tool["description"])
+
+    def test_recommend_tool_returns_ranked_shortlist_and_feeds_ledger(self):
+        client, svc = self._client()
+        with self.assertLogs("api", level="INFO") as captured:
+            result = self._call_tool(client, "recommend_ai_tools", {"task": "I need a writing tool"})
+        self.assertFalse(result["isError"])
+        payload = json.loads(result["content"][0]["text"])
+        self.assertTrue(payload["tools"])
+        self.assertEqual(payload["tools"][0]["rank"], 1)
+        self.assertEqual(payload["tools"][0]["name"], "Writerly")
+        self.assertTrue(payload["tools"][0]["pricing"])
+        # MCP recommendations land in the vendor ledger like any other.
+        self.assertTrue([line for line in captured.output if "SHORTLIST " in line])
+
+    def test_recommend_tool_requires_task(self):
+        client, _ = self._client()
+        result = self._call_tool(client, "recommend_ai_tools", {})
+        self.assertTrue(result["isError"])
+        self.assertIn("task", result["content"][0]["text"])
+
+    def test_compare_tools_case_insensitive_with_missing_reported(self):
+        client, _ = self._client()
+        result = self._call_tool(client, "compare_tools", {"names": ["writerly", "ImageBox", "Nope"]})
+        payload = json.loads(result["content"][0]["text"])
+        self.assertEqual([tool["name"] for tool in payload["tools"]], ["Writerly", "ImageBox"])
+        self.assertEqual(payload["not_found"], ["Nope"])
+
+    def test_compare_tools_all_unknown_is_error(self):
+        client, _ = self._client()
+        result = self._call_tool(client, "compare_tools", {"names": ["Nope", "AlsoNope"]})
+        self.assertTrue(result["isError"])
+
+    def test_tool_details_full_record(self):
+        client, _ = self._client()
+        result = self._call_tool(client, "tool_details", {"name": "imagebox"})
+        payload = json.loads(result["content"][0]["text"])
+        self.assertEqual(payload["name"], "ImageBox")
+        self.assertIn("price_text", payload)
+        self.assertIn("features", payload)
+
+    def test_unknown_tool_and_unknown_method(self):
+        client, _ = self._client()
+        resp = self._rpc(client, "tools/call", {"name": "nope", "arguments": {}})
+        self.assertEqual(resp.json()["error"]["code"], -32602)
+        resp = self._rpc(client, "resources/list")
+        self.assertEqual(resp.json()["error"]["code"], -32601)
+
+    def test_malformed_body_and_batch_rejected(self):
+        client, _ = self._client()
+        resp = client.post("/mcp", content=b"{not json", headers={"content-type": "application/json"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["error"]["code"], -32700)
+        resp = client.post("/mcp", json=[{"jsonrpc": "2.0", "id": 1, "method": "ping"}])
+        self.assertEqual(resp.json()["error"]["code"], -32600)
+
+    def test_get_is_405(self):
+        client, _ = self._client()
+        self.assertEqual(client.get("/mcp").status_code, 405)
+
+
 class ChatStreamEndpointTests(unittest.TestCase):
     """Drive the SSE endpoint through the real ASGI app with an injected service,
     so the app wiring is exercised without loading the production index."""
