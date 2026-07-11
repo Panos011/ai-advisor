@@ -2965,6 +2965,44 @@ def _format_price(amount: float) -> str:
     return f"${amount:.2f}"
 
 
+def log_shortlist(
+    q: str,
+    hits: list[dict[str, Any]] | None,
+    action: str | None,
+    mode: str,
+    personalized: Any = False,
+    metrics: "RuntimeMetrics | None" = None,
+) -> None:
+    """One structured line per served recommendation — the raw material for
+    per-vendor intelligence ("your tool was shortlisted N times for <goal>
+    queries and ranked behind X"). Tool order IS rank order. Export the Render
+    logs (grep SHORTLIST) and feed them to vendor_report.py."""
+    names = [
+        str((hit.get("meta") or {}).get("Name", "")).strip()
+        for hit in hits or []
+    ]
+    names = [name for name in names if name]
+    if not names:
+        return
+    if metrics is not None:
+        metrics.increment("shortlist_events")
+    normalized_q = normalize_query_text(q)
+    logger.info(
+        "SHORTLIST %s",
+        json.dumps(
+            {
+                "goal": request_goal(normalized_q),
+                "action": action or "recommend",
+                "mode": normalize_mode(mode),
+                "personalized": bool(personalized),
+                "tools": names,
+                "q": normalized_q[:120],
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+
 def cost_summary(meta: dict[str, Any]) -> str:
     """A short, HONEST, deterministic cost line for a tool — the "what it'll cost
     you" half of an explainable recommendation.
@@ -5514,6 +5552,15 @@ class RecommendationService:
             len(result.get("hits") or []),
             normalize_query_text(q)[:120],
         )
+        # Vendor-intelligence ledger: which tools were surfaced, in rank order.
+        log_shortlist(
+            q,
+            result.get("hits"),
+            action,
+            mode,
+            personalized=result.get("personalized"),
+            metrics=self.metrics,
+        )
         if self.settings.planner_shadow:
             self._record_planner_shadow(
                 q, result.get("action"), filters, mode, conversation_id, history
@@ -7118,7 +7165,8 @@ def search(body: SearchRequest, request: Request):
 @app.post("/recommend", response_model=RecommendResponse)
 def recommend(body: RecommendRequest, request: Request):
     begin_degradation_tracking()
-    return with_degradation(request, chat_wrapper_payload(service(request).recommend(
+    svc = service(request)
+    response = svc.recommend(
         body.q,
         body.retrieve_k,
         body.final_k,
@@ -7127,7 +7175,18 @@ def recommend(body: RecommendRequest, request: Request):
         conversation_id=getattr(body, "conversation_id", None),
         history=getattr(body, "history", None),
         user_context=getattr(body, "user_context", None),
-    )))
+    )
+    # The /chat path logs its shortlist in RecommendationService.chat; direct
+    # /recommend calls log here so the vendor ledger sees every served list.
+    log_shortlist(
+        body.q,
+        response.get("hits"),
+        "recommend",
+        getattr(body, "mode", "balanced"),
+        personalized=response.get("personalized"),
+        metrics=svc.metrics,
+    )
+    return with_degradation(request, chat_wrapper_payload(response))
 
 
 @app.post("/chat", response_model=ChatResponse)

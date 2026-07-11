@@ -2750,6 +2750,31 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(len(response["hits"]), 1)
         self.assertEqual(response["hits"][0]["meta"]["Name"], "ImageBox")
 
+    def test_chat_emits_shortlist_telemetry(self):
+        # Vendor-intelligence ledger: every served recommendation logs one
+        # SHORTLIST line with the tools in rank order.
+        service = make_service()
+        with self.assertLogs("api", level="INFO") as captured:
+            service.chat(
+                "I need a writing tool", retrieve_k=2, final_k=2,
+                conversation_id="conv-ledger",
+            )
+        shortlist_lines = [
+            line for line in captured.output if "SHORTLIST " in line
+        ]
+        self.assertEqual(len(shortlist_lines), 1)
+        payload = json.loads(shortlist_lines[0].split("SHORTLIST ", 1)[1])
+        self.assertEqual(payload["tools"], ["Writerly", "ImageBox"])
+        self.assertEqual(payload["action"], "recommend")
+        self.assertIn("writing tool", payload["q"])
+        self.assertEqual(service.metrics.snapshot()["counters"]["shortlist_events"], 1)
+
+    def test_chat_only_response_emits_no_shortlist_telemetry(self):
+        service = make_service(client=DecisionClient([{"action": "chat_only", "message": "ok"}]))
+        with self.assertLogs("api", level="INFO") as captured:
+            service.chat("hello there", retrieve_k=2, final_k=2, conversation_id="conv-noledger")
+        self.assertFalse([line for line in captured.output if "SHORTLIST " in line])
+
     def test_gratitude_with_tail_is_non_search(self):
         for q in ("thanks, that helps", "thank you so much!", "that helped", "this works"):
             self.assertTrue(is_non_search_message(q), q)
