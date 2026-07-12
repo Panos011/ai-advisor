@@ -1681,16 +1681,30 @@ def is_free_tool(meta: dict[str, Any]) -> bool:
         r"\bfree\s+(?:tier|plan|trial)\s+(?:is\s+)?(?:not|unavailable)\b",
         price,
     ))
+    if negative:
+        return False
+    # A time-limited trial is not a free plan: "7-day free trial, then $49/month"
+    # must never satisfy a free-budget request. Strip trial phrasing before
+    # looking for genuine free evidence.
+    without_trials = re.sub(
+        r"\b(?:\d+[- ]?(?:day|week|month)s?\s+)?free\s+trials?\b|"
+        r"\bfree\s+to\s+try\b|\btry\s+(?:it\s+)?(?:for\s+)?free\b",
+        " ",
+        price,
+    )
     positive = bool(re.search(
         r"\bfree\b|"
+        r"\bfreemium\b|"
         r"\bno\s+cost\b|"
         r"\bat\s+no\s+cost\b|"
-        r"\bwithout\s+paying\b|"
-        r"\bno\s+credit\s+card\b|"
         r"\bopen\s+source\b",
-        price,
+        without_trials,
     ))
-    return positive and not negative
+    if not positive and not re.search(r"\btrials?\b", price):
+        # "without paying" / "no credit card" only count as free evidence when
+        # the price copy is not describing a trial.
+        positive = bool(re.search(r"\bwithout\s+paying\b|\bno\s+credit\s+card\b", price))
+    return positive
 
 
 def is_paid_tool(meta: dict[str, Any]) -> bool:
@@ -1871,6 +1885,44 @@ def apply_decision_filters(
         filtered.append(candidate)
 
     return filtered
+
+
+def has_active_decision_filters(filters: Any) -> bool:
+    """True when the request carries any constraint apply_decision_filters enforces."""
+    if filters is None:
+        return False
+    if str(filter_value(filters, "budget", "any") or "any") != "any":
+        return True
+    if str(filter_value(filters, "privacy", "standard") or "standard") != "standard":
+        return True
+    for key in (
+        "open_source", "openSource", "strict_open_source", "strictOpenSource",
+        "strict_free", "strictFree", "paid_only", "paidOnly",
+        "local_only", "localOnly", "self_hosted", "selfHosted",
+        "no_cloud_data", "noCloudData",
+    ):
+        if filter_value(filters, key, False):
+            return True
+    for key in ("integrations", "categories", "platforms"):
+        if filter_value(filters, key, None):
+            return True
+    skill = filter_value(filters, "skill_level", None) or filter_value(filters, "skillLevel", "any") or "any"
+    return str(skill) != "any"
+
+
+def budget_no_match_message(budget: str) -> str:
+    if budget == "free":
+        return (
+            "I could not find a genuinely free tool for that - the closest matches "
+            "only offer paid plans or time-limited trials. Want me to include "
+            "freemium or low-cost options instead?"
+        )
+    if budget == "freemium":
+        return (
+            "I could not find a tool with a usable free tier for that. "
+            "Want me to include paid options?"
+        )
+    return "I could not find a clearly paid match for that."
 
 
 def fit_label(score: float) -> str:
@@ -3024,6 +3076,12 @@ def cost_summary(meta: dict[str, Any]) -> str:
         if cheapest_paid is not None:
             return f"Free tier, then from {_format_price(cheapest_paid)}/mo"
         return "Free tier available"
+    # A time-limited trial is not a free tier; say what it actually is.
+    trial_mentioned = bool(re.search(r"\btrials?\b", price.lower())) and not re.search(
+        r"\b(?:no|not|without)\s+(?:a\s+)?(?:free\s+)?trials?\b", price.lower()
+    )
+    if cheapest_paid is not None and trial_mentioned:
+        return f"Free trial, then from {_format_price(cheapest_paid)}/mo"
     if cheapest_paid is not None:
         return f"From {_format_price(cheapest_paid)}/mo"
     if "waitlist" in price.lower():
@@ -5095,6 +5153,10 @@ class RecommendationService:
             filters = filter_dict
         privacy_value = filters.get("privacy") if isinstance(filters, dict) else getattr(filters, "privacy", "standard")
         privacy_required = str(privacy_value or "standard") in {"privacy-first", "local-first"}
+        # An explicit budget filter (from the structured request or inferred above)
+        # is a hard eligibility rule, never a soft ranking preference.
+        budget_value = str(filter_value(filters, "budget", "any") or "any")
+        budget_required = budget_value != "any"
 
         effective_final_k = final_k
         if mode == MODE_ONE_BEST:
@@ -5142,6 +5204,8 @@ class RecommendationService:
                 or price_cap is not None
                 or paid_only
                 or privacy_required
+                or budget_required
+                or free_only
                 or coding_intent
                 or is_security_training_query(retrieval_query)
                 or is_private_document_chat_query(retrieval_query)
@@ -5169,7 +5233,7 @@ class RecommendationService:
                         seen_names.add(name)
             hits = filter_hits_for_query_domain(hits, retrieval_query)
             filtered_hits = apply_decision_filters(hits, filters, self.store.meta)
-            hard_filter_required = local_only_required or no_cloud_required or self_hosted_required or open_source_only or strict_open_source or strict_free or paid_only or privacy_required
+            hard_filter_required = local_only_required or no_cloud_required or self_hosted_required or open_source_only or strict_open_source or strict_free or paid_only or privacy_required or budget_required
             if hard_filter_required and not filtered_hits:
                 if local_only_required:
                     return {"hits": [], "message": local_only_no_match_message()}
@@ -5202,6 +5266,17 @@ class RecommendationService:
                         "hits": [],
                         "message": "I could not find a clearly paid-only match that excludes free trials or freemium tiers for that.",
                     }
+                if privacy_required:
+                    return {
+                        "hits": [],
+                        "message": (
+                            "None of the current matches list clear privacy, security, or "
+                            "self-hosting signals. Try a different task or check each provider's "
+                            "privacy page before relying on it."
+                        ),
+                    }
+                if budget_required:
+                    return {"hits": [], "message": budget_no_match_message(budget_value)}
             hits = filtered_hits or hits
             if price_cap is not None:
                 hits = [hit for hit in hits if matches_price_cap(hit.get("meta") or {}, price_cap)]
@@ -5245,54 +5320,69 @@ class RecommendationService:
             self.conversations.append(conversation_id, "assistant", message)
             return {"hits": hits, "message": message}
 
-        with self.metrics.timer("faiss.recommend_search_ms"):
-            scores, ids = self.store.index.search(vec, min(retrieve_k, len(self.store.meta)))
+        def build_candidate_pool(pool_k: int) -> list[dict[str, Any]]:
+            with self.metrics.timer("faiss.recommend_search_ms"):
+                scores, ids = self.store.index.search(vec, min(pool_k, len(self.store.meta)))
 
-        candidates = self._hybrid_candidates(
-            retrieval_query,
-            scores[0].tolist(),
-            ids[0].tolist(),
-            retrieve_k,
-        )
-        if coding_intent:
-            by_id = {int(candidate["id"]): candidate for candidate in candidates}
-            for score, id_ in coding_rescue_scores(retrieval_query, retrieve_k, self.store.meta):
-                candidate = by_id.get(id_)
-                if candidate is None:
-                    candidate = self._candidate_for_id(id_, score)
-                    candidate["retrieval_source"] = "coding_rescue"
-                    by_id[id_] = candidate
-                else:
-                    candidate["score"] = max(float(candidate.get("score", 0.0)), float(score))
-                    candidate["retrieval_source"] = "hybrid_coding_rescue"
-            candidates = list(by_id.values())
-        if (
-            (is_writing_query(retrieval_query) and (open_source_only or local_only_required or self_hosted_required))
-            or coding_intent
-            or is_chatbot_query(retrieval_query)
-            or is_music_query(retrieval_query)
-            or is_security_training_query(retrieval_query)
-            or is_private_document_chat_query(retrieval_query)
-            or is_support_chatbot_query(retrieval_query)
-            or is_local_chatbot_ui_query(retrieval_query)
-            or is_invoice_workflow_query(retrieval_query)
-            or is_general_workflow_query(retrieval_query)
-            or is_privacy_compliance_query(retrieval_query)
-            or is_child_education_query(retrieval_query)
-            or is_marketing_query(retrieval_query)
-        ):
-            candidates = [
-                candidate for candidate in candidates
-                if not off_topic_for_query(retrieval_query, str(candidate.get("categories", "")))
-            ]
-        if coding_intent:
-            coding_candidates = [
-                candidate for candidate in candidates
-                if is_coding_tool(self.store.meta[int(candidate["id"])])
-            ]
-            candidates = prioritize_coding_candidates(coding_candidates or candidates, self.store.meta)
-        candidates = filter_candidates_for_query_domain(candidates, retrieval_query, self.store.meta)
+            candidates = self._hybrid_candidates(
+                retrieval_query,
+                scores[0].tolist(),
+                ids[0].tolist(),
+                pool_k,
+            )
+            if coding_intent:
+                by_id = {int(candidate["id"]): candidate for candidate in candidates}
+                for score, id_ in coding_rescue_scores(retrieval_query, pool_k, self.store.meta):
+                    candidate = by_id.get(id_)
+                    if candidate is None:
+                        candidate = self._candidate_for_id(id_, score)
+                        candidate["retrieval_source"] = "coding_rescue"
+                        by_id[id_] = candidate
+                    else:
+                        candidate["score"] = max(float(candidate.get("score", 0.0)), float(score))
+                        candidate["retrieval_source"] = "hybrid_coding_rescue"
+                candidates = list(by_id.values())
+            if (
+                (is_writing_query(retrieval_query) and (open_source_only or local_only_required or self_hosted_required))
+                or coding_intent
+                or is_chatbot_query(retrieval_query)
+                or is_music_query(retrieval_query)
+                or is_security_training_query(retrieval_query)
+                or is_private_document_chat_query(retrieval_query)
+                or is_support_chatbot_query(retrieval_query)
+                or is_local_chatbot_ui_query(retrieval_query)
+                or is_invoice_workflow_query(retrieval_query)
+                or is_general_workflow_query(retrieval_query)
+                or is_privacy_compliance_query(retrieval_query)
+                or is_child_education_query(retrieval_query)
+                or is_marketing_query(retrieval_query)
+            ):
+                candidates = [
+                    candidate for candidate in candidates
+                    if not off_topic_for_query(retrieval_query, str(candidate.get("categories", "")))
+                ]
+            if coding_intent:
+                coding_candidates = [
+                    candidate for candidate in candidates
+                    if is_coding_tool(self.store.meta[int(candidate["id"])])
+                ]
+                candidates = prioritize_coding_candidates(coding_candidates or candidates, self.store.meta)
+            return filter_candidates_for_query_domain(candidates, retrieval_query, self.store.meta)
+
+        candidates = build_candidate_pool(retrieve_k)
         filtered_candidates = apply_decision_filters(candidates, filters, self.store.meta)
+        # Hard constraints (budget/privacy/platform/...) can empty a small retrieval
+        # pool even when the catalogue holds enough valid tools. Retrieve deeper and
+        # refilter so a three-result request gets backfilled with valid results
+        # instead of padded with constraint-violating ones.
+        if (
+            len(filtered_candidates) < effective_final_k
+            and (has_active_decision_filters(filters) or free_only)
+            and retrieve_k < len(self.store.meta)
+        ):
+            self.metrics.increment("recommend_filter_backfill")
+            candidates = build_candidate_pool(len(self.store.meta))
+            filtered_candidates = apply_decision_filters(candidates, filters, self.store.meta)
         if len(filtered_candidates) >= effective_final_k:
             candidates = filtered_candidates
         elif local_only_required or self_hosted_required:
@@ -5327,11 +5417,24 @@ class RecommendationService:
                 candidate for candidate in candidates
                 if is_free_tool(self.store.meta[int(candidate["id"])])
             ]
+            if not candidates:
+                return {"hits": [], "message": budget_no_match_message("free")}
         elif paid_only:
             candidates = [
                 candidate for candidate in candidates
                 if is_paid_tool(self.store.meta[int(candidate["id"])]) and not is_free_tool(self.store.meta[int(candidate["id"])])
             ]
+        elif budget_required:
+            # Explicit budget filters are eligibility rules: relax the other
+            # filters when the pool runs short, but never pad the shortlist
+            # with off-budget tools.
+            on_budget = [
+                candidate for candidate in candidates
+                if matches_budget_filter(self.store.meta[int(candidate["id"])], budget_value)
+            ]
+            if not on_budget:
+                return {"hits": [], "message": budget_no_match_message(budget_value)}
+            candidates = on_budget
         elif wants_cheaper:
             cheaper = [
                 candidate for candidate in candidates

@@ -3927,6 +3927,116 @@ class PersonalizationTests(unittest.TestCase):
         )
 
 
+def make_trial_budget_service(client=None):
+    # Free tool deliberately LAST so a small retrieve_k favors the trial/paid
+    # tools first and the budget filter + backfill actually have to work.
+    meta = [
+        {
+            "Name": "TrialCut",
+            "Categories": "video | editing | marketing",
+            "Price": "$49/month with a 7-day free trial",
+            "Description": "AI video editor for short social clips.",
+            "Features": "Edits clips and creates captions.",
+            "Pros": "Fast video workflow.",
+            "Use_cases": "Video editing",
+        },
+        {
+            "Name": "PayCut",
+            "Categories": "video | editing",
+            "Price": "Pro $99/month",
+            "Description": "Video suite for teams with advanced automation.",
+            "Features": "Automated editing.",
+            "Pros": "Powerful team workflow.",
+            "Use_cases": "Video production",
+        },
+        {
+            "Name": "FreeCut",
+            "Categories": "video | editing",
+            "Price": "Free plan available. Pro $20/month.",
+            "Description": "Video creation platform for short clips and captions.",
+            "Features": "Templates, exports, and editing.",
+            "Pros": "Genuinely usable free plan.",
+            "Use_cases": "Video creation",
+        },
+    ]
+    store = ToolStore(
+        index=SequenceIndex(len(meta)),
+        meta=meta,
+        vectors=np.array([[1.0, 0.0], [0.9, 0.1], [0.8, 0.2]], dtype="float32"),
+    )
+    settings = Settings(cache_ttl_seconds=60, cache_max_entries=16)
+    return RecommendationService(store, client or FakeClient(), settings, RuntimeMetrics())
+
+
+class BudgetFilterEnforcementTests(unittest.TestCase):
+    """filters.budget is a hard eligibility rule: no trial-only tools in free
+    results, no silent fallback to off-budget tools, and deeper retrieval
+    backfills the shortlist instead of padding it with violations."""
+
+    def test_trial_only_prices_are_not_free(self):
+        self.assertFalse(is_free_tool({"Price": "$49/month with a 7-day free trial"}))
+        self.assertFalse(is_free_tool({"Price": "Free trial"}))
+        self.assertFalse(is_free_tool(
+            {"Price": "Free trial, no credit card required. Then $20/month."}
+        ))
+        self.assertFalse(is_free_tool({"Price": "Try it free, then $10/month"}))
+
+    def test_genuine_free_plans_still_count_as_free(self):
+        self.assertTrue(is_free_tool({"Price": "Free plan available. Pro $20/month."}))
+        self.assertTrue(is_free_tool({"Price": "Freemium"}))
+        self.assertTrue(is_free_tool({"Price": "Free tier"}))
+        self.assertTrue(is_free_tool({"Price": "Free, with a 14-day Pro trial"}))
+
+    def test_structured_free_budget_excludes_trial_only_tools(self):
+        # The query itself never says "free": only the structured filter does,
+        # which is exactly how the guest landing page calls /recommend.
+        service = make_trial_budget_service()
+        response = service.recommend(
+            "video editing tool for short clips",
+            retrieve_k=2,
+            final_k=3,
+            filters={"budget": "free"},
+        )
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+        self.assertEqual(names, ["FreeCut"])
+        self.assertTrue(all(is_free_tool(hit["meta"]) for hit in response["hits"]))
+
+    def test_structured_free_budget_never_falls_back_to_paid(self):
+        service = make_budget_service()  # catalog has no free tools at all
+        response = service.recommend(
+            "video editing tool for short clips",
+            retrieve_k=3,
+            final_k=3,
+            filters={"budget": "free"},
+        )
+        self.assertEqual(response["hits"], [])
+        self.assertIn("free", response["message"].lower())
+
+    def test_structured_free_budget_keyword_fallback_excludes_trial_only(self):
+        # Embedding failure path must enforce the same eligibility rules.
+        service = make_trial_budget_service(client=FakeClient(embedding_failure=True))
+        response = service.recommend(
+            "video editing tool for short clips",
+            retrieve_k=2,
+            final_k=3,
+            filters={"budget": "free"},
+        )
+        names = [hit["meta"]["Name"] for hit in response["hits"]]
+        self.assertEqual(names, ["FreeCut"])
+
+    def test_free_query_with_trial_only_matches_returns_honest_no_match(self):
+        meta_only_trials = make_trial_budget_service()
+        # Remove the free tool so nothing qualifies.
+        meta_only_trials.store.meta[2]["Price"] = "Pro $20/month"
+        response = meta_only_trials.recommend(
+            "I need a free video editing tool",
+            retrieve_k=3,
+            final_k=3,
+        )
+        self.assertEqual(response["hits"], [])
+        self.assertIn("free", response["message"].lower())
+
+
 class CostSummaryTests(unittest.TestCase):
     def _summary(self, price):
         return api_module.cost_summary({"Price": price})
@@ -3941,9 +4051,11 @@ class CostSummaryTests(unittest.TestCase):
         )
 
     def test_free_trial_then_price(self):
+        # A time-limited trial is NOT a free tier; the summary must say "trial"
+        # so strict-free budgets and cost lines stay honest.
         self.assertEqual(
             self._summary("Free Trial. Then $20 per month."),
-            "Free tier, then from $20/mo",
+            "Free trial, then from $20/mo",
         )
 
     def test_zero_dollar_plan_is_a_free_tier(self):
