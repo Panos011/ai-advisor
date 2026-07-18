@@ -336,6 +336,34 @@ class IntentResponse(BaseModel):
     intent: Literal["explain", "refine", "new"]
 
 
+class WorkflowUnderstandingRequest(BaseModel):
+    goal: str = Field(..., min_length=1, max_length=MAX_QUERY_LENGTH)
+
+    @field_validator("goal")
+    @classmethod
+    def clean_goal(cls, value: str) -> str:
+        return _clean_required_text(value)
+
+
+class WorkflowUnderstandingJob(BaseModel):
+    label: str
+    focus_goal: str
+
+
+class WorkflowUnderstandingResponse(BaseModel):
+    source: Literal["llm", "unavailable"]
+    jobs: list[WorkflowUnderstandingJob] = Field(default_factory=list)
+    stages: list[
+        Literal[
+            "research", "create", "repurpose", "review", "publish", "automate", "measure"
+        ]
+    ] = Field(default_factory=list)
+    cadence: Literal["daily", "weekly", "monthly"] | None = None
+    destination: str | None = None
+    approval_required: bool = False
+    sensitive_data: bool = False
+
+
 class SearchRequest(BaseModel):
     q: str = Field(..., min_length=1, max_length=MAX_QUERY_LENGTH)
     k: int = Field(30, ge=1, le=100)
@@ -4540,6 +4568,72 @@ MESSAGE_ONLY_SCHEMA = {
 }
 
 
+# Canonical pipeline order shared with the mobile Workflow Compiler.
+WORKFLOW_STAGE_ORDER = (
+    "research", "create", "repurpose", "review", "publish", "automate", "measure",
+)
+
+WORKFLOW_UNDERSTANDING_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "jobs": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "label": {"type": "string"},
+                    "focus_goal": {"type": "string"},
+                },
+                "required": ["label", "focus_goal"],
+                "additionalProperties": False,
+            },
+        },
+        "stages": {
+            "type": "array",
+            "items": {"type": "string", "enum": list(WORKFLOW_STAGE_ORDER)},
+        },
+        "cadence": {"type": ["string", "null"]},
+        "destination": {"type": ["string", "null"]},
+        "approval_required": {"type": "boolean"},
+        "sensitive_data": {"type": "boolean"},
+    },
+    "required": [
+        "jobs", "stages", "cadence", "destination",
+        "approval_required", "sensitive_data",
+    ],
+    "additionalProperties": False,
+}
+
+WORKFLOW_UNDERSTANDING_SYSTEM = (
+    "You turn a user's plain-language description of a recurring business job into a "
+    "structured brief for an AI workflow compiler. Think like a practical operations "
+    "consultant reading what the user actually needs.\n\n"
+    "Stage vocabulary (use only these ids):\n"
+    "- research: gathering sources, keyword/market research, planning\n"
+    "- create: producing the deliverable - writing, design, drafting replies or answers\n"
+    "- repurpose: converting one asset into other formats (clips, posts, images)\n"
+    "- review: a human approval or QA gate before work goes out\n"
+    "- publish: scheduling, sending or delivering work to its destination\n"
+    "- automate: only when the user explicitly asks to connect apps or automate handoffs\n"
+    "- measure: analytics, reporting, tracking, optimisation\n\n"
+    "Rules:\n"
+    "- stages: only the stages this goal genuinely needs. Never pad; a simple goal may "
+    "need a single stage.\n"
+    "- jobs: when the goal mixes several distinct business jobs (for example SEO, "
+    "customer support, invoicing), list each as a separate job with a short label "
+    "(2-4 words) and a focus_goal - one self-contained sentence describing a recurring "
+    "workflow for that job alone. When the goal is one coherent job, return an empty "
+    "list.\n"
+    "- cadence: daily/weekly/monthly only when stated or clearly implied, else null.\n"
+    "- destination: where the finished work must arrive, only when stated, else null.\n"
+    "- approval_required: true only when a human sign-off is requested or clearly "
+    "implied.\n"
+    "- sensitive_data: true when the workflow would handle customer or client personal "
+    "data.\n"
+    "Return ONLY valid JSON matching the schema."
+)
+
+
 class RecommendationService:
     def __init__(
         self,
@@ -6855,6 +6949,65 @@ class RecommendationService:
             note_degradation("detect_intent_fallback")
             return {"intent": "new"}
 
+
+    def understand_workflow(self, goal: str) -> dict[str, Any]:
+        """LLM goal understanding for the mobile Workflow Compiler.
+
+        Returns source="unavailable" (never raises) when the model call fails,
+        so the client can fall back to its deterministic keyword rules.
+        """
+        unavailable = {
+            "source": "unavailable", "jobs": [], "stages": [],
+            "cadence": None, "destination": None,
+            "approval_required": False, "sensitive_data": False,
+        }
+        try:
+            with self.metrics.timer("openai.understand_workflow_ms"):
+                resp = self._chat_create(
+                    model=self.settings.chat_model,
+                    messages=[
+                        {"role": "system", "content": WORKFLOW_UNDERSTANDING_SYSTEM},
+                        {"role": "user", "content": f"Goal: {goal}"},
+                    ],
+                    temperature=0.0,
+                    response_format=self._structured_format(
+                        "workflow_understanding", WORKFLOW_UNDERSTANDING_SCHEMA
+                    ),
+                )
+            data = json.loads(resp.choices[0].message.content)
+        except Exception:
+            self.metrics.increment("understand_workflow_fallbacks")
+            note_degradation("understand_workflow_fallback")
+            return unavailable
+        if not isinstance(data, dict):
+            self.metrics.increment("understand_workflow_fallbacks")
+            return unavailable
+        raw_stages = data.get("stages") or []
+        stages = [stage for stage in WORKFLOW_STAGE_ORDER if stage in raw_stages]
+        if not stages:
+            stages = ["create"]
+        jobs: list[dict[str, str]] = []
+        for job in (data.get("jobs") or [])[:5]:
+            if not isinstance(job, dict):
+                continue
+            label = str(job.get("label") or "").strip()[:40]
+            focus_goal = str(job.get("focus_goal") or "").strip()[:300]
+            if label and focus_goal:
+                jobs.append({"label": label, "focus_goal": focus_goal})
+        cadence = data.get("cadence")
+        if cadence not in ("daily", "weekly", "monthly"):
+            cadence = None
+        destination = str(data.get("destination") or "").strip()[:120] or None
+        return {
+            "source": "llm",
+            "jobs": jobs,
+            "stages": stages,
+            "cadence": cadence,
+            "destination": destination,
+            "approval_required": bool(data.get("approval_required")),
+            "sensitive_data": bool(data.get("sensitive_data")),
+        }
+
     def cache_stats(self) -> dict[str, Any]:
         return {
             "embedding_cache": self.embedding_cache.stats(),
@@ -7394,6 +7547,11 @@ def detect_intent(body: IntentRequest, request: Request):
         conversation_id=getattr(body, "conversation_id", None),
         history=getattr(body, "history", None),
     ))
+
+
+@app.post("/understand_workflow", response_model=WorkflowUnderstandingResponse)
+def understand_workflow(body: WorkflowUnderstandingRequest, request: Request):
+    return clean_payload(service(request).understand_workflow(body.goal))
 
 
 # === MCP endpoint (Model Context Protocol over streamable HTTP, stateless) ===

@@ -4709,5 +4709,79 @@ class DegradationTrackingTests(unittest.TestCase):
         self.assertEqual(default_response.degradation, [])
 
 
+
+
+class WorkflowUnderstandingChatCompletions:
+    def __init__(self, payload=None, fail=False):
+        self.payload = payload or {}
+        self.fail = fail
+        self.calls = 0
+
+    def create(self, **_kwargs):
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("model unavailable")
+        content = json.dumps(self.payload)
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+
+
+class WorkflowUnderstandingClient:
+    def __init__(self, payload=None, fail=False):
+        self.embeddings = FakeEmbeddings()
+        self.chat = SimpleNamespace(
+            completions=WorkflowUnderstandingChatCompletions(payload, fail)
+        )
+
+
+class WorkflowUnderstandingTests(unittest.TestCase):
+    def test_orders_stages_and_keeps_valid_jobs(self):
+        service = make_service(client=WorkflowUnderstandingClient(payload={
+            "jobs": [
+                {"label": "Customer support", "focus_goal": "Answer customer support conversations every day."},
+                {"label": "", "focus_goal": "dropped for empty label"},
+                {"label": "SEO", "focus_goal": "Research keywords and publish optimised articles weekly."},
+            ],
+            "stages": ["publish", "create", "publish", "research"],
+            "cadence": "weekly",
+            "destination": "Email newsletter",
+            "approval_required": True,
+            "sensitive_data": True,
+        }))
+        result = service.understand_workflow(
+            "Handle SEO, emails and customer service for my platform"
+        )
+        self.assertEqual(result["source"], "llm")
+        self.assertEqual(result["stages"], ["research", "create", "publish"])
+        self.assertEqual(
+            [job["label"] for job in result["jobs"]],
+            ["Customer support", "SEO"],
+        )
+        self.assertEqual(result["cadence"], "weekly")
+        self.assertEqual(result["destination"], "Email newsletter")
+        self.assertTrue(result["approval_required"])
+        self.assertTrue(result["sensitive_data"])
+
+    def test_defaults_to_create_when_model_returns_no_valid_stage(self):
+        service = make_service(client=WorkflowUnderstandingClient(payload={
+            "jobs": [],
+            "stages": ["not-a-stage"],
+            "cadence": "sometimes",
+            "destination": "",
+            "approval_required": False,
+            "sensitive_data": False,
+        }))
+        result = service.understand_workflow("Write a product description")
+        self.assertEqual(result["stages"], ["create"])
+        self.assertIsNone(result["cadence"])
+        self.assertIsNone(result["destination"])
+
+    def test_reports_unavailable_instead_of_raising_when_the_model_fails(self):
+        service = make_service(client=WorkflowUnderstandingClient(fail=True))
+        result = service.understand_workflow("Handle SEO and customer support")
+        self.assertEqual(result["source"], "unavailable")
+        self.assertEqual(result["stages"], [])
+        self.assertEqual(result["jobs"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
