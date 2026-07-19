@@ -4783,5 +4783,62 @@ class WorkflowUnderstandingTests(unittest.TestCase):
         self.assertEqual(result["jobs"], [])
 
 
+
+
+class NewsEnrichChatCompletions:
+    def __init__(self, payload=None, fail=False):
+        self.payload = payload or {}
+        self.fail = fail
+        self.calls = 0
+
+    def create(self, **_kwargs):
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("model unavailable")
+        return SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content=json.dumps(self.payload)))])
+
+
+class NewsEnrichClient:
+    def __init__(self, payload=None, fail=False):
+        self.embeddings = FakeEmbeddings()
+        self.chat = SimpleNamespace(completions=NewsEnrichChatCompletions(payload, fail))
+
+
+class NewsEnrichmentTests(unittest.TestCase):
+    ITEMS = [
+        {"id": "a", "title": "OpenAI ships GPT-6", "source": "OpenAI"},
+        {"id": "b", "title": "Cursor adds Slack agents", "source": "The Rundown"},
+        {"id": "c", "title": "A vague corporate press release", "source": "Wire"},
+    ]
+
+    def test_keeps_only_valid_scored_takes(self):
+        service = make_service(client=NewsEnrichClient(payload={"enrichments": [
+            {"id": "a", "why_it_matters": "A new flagship model resets the quality bar for builders.", "verdict": "major_release"},
+            {"id": "b", "why_it_matters": "Teams can steer coding agents from Slack without a context switch.", "verdict": "useful_update"},
+            {"id": "c", "why_it_matters": "", "verdict": "skip"},
+            {"id": "zzz", "why_it_matters": "Unknown id must be dropped.", "verdict": "minor"},
+        ]}))
+        result = service.enrich_news(self.ITEMS)
+        self.assertEqual(result["source"], "llm")
+        self.assertEqual([e["id"] for e in result["enrichments"]], ["a", "b"])
+        self.assertEqual(result["enrichments"][0]["verdict"], "major_release")
+
+    def test_drops_duplicate_ids_and_bad_verdicts(self):
+        service = make_service(client=NewsEnrichClient(payload={"enrichments": [
+            {"id": "a", "why_it_matters": "First take.", "verdict": "minor"},
+            {"id": "a", "why_it_matters": "Duplicate id.", "verdict": "minor"},
+            {"id": "b", "why_it_matters": "Bad verdict value.", "verdict": "enormous"},
+        ]}))
+        result = service.enrich_news(self.ITEMS)
+        self.assertEqual([e["id"] for e in result["enrichments"]], ["a"])
+
+    def test_reports_unavailable_without_raising_on_model_failure(self):
+        service = make_service(client=NewsEnrichClient(fail=True))
+        result = service.enrich_news(self.ITEMS)
+        self.assertEqual(result["source"], "unavailable")
+        self.assertEqual(result["enrichments"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

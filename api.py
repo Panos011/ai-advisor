@@ -364,6 +364,38 @@ class WorkflowUnderstandingResponse(BaseModel):
     sensitive_data: bool = False
 
 
+MAX_NEWS_ENRICH_ITEMS = 40
+MAX_NEWS_HEADLINE_LENGTH = 300
+
+
+class NewsEnrichItem(BaseModel):
+    id: str = Field(..., min_length=1, max_length=128)
+    title: str = Field(..., min_length=1, max_length=MAX_NEWS_HEADLINE_LENGTH)
+    source: str = Field("", max_length=120)
+
+    @field_validator("title")
+    @classmethod
+    def clean_title(cls, value: str) -> str:
+        return _clean_required_text(value)
+
+
+class NewsEnrichRequest(BaseModel):
+    items: list[NewsEnrichItem] = Field(
+        ..., min_length=1, max_length=MAX_NEWS_ENRICH_ITEMS
+    )
+
+
+class NewsEnrichment(BaseModel):
+    id: str
+    why_it_matters: str
+    verdict: Literal["major_release", "useful_update", "minor"]
+
+
+class NewsEnrichResponse(BaseModel):
+    source: Literal["llm", "unavailable"]
+    enrichments: list[NewsEnrichment] = Field(default_factory=list)
+
+
 class SearchRequest(BaseModel):
     q: str = Field(..., min_length=1, max_length=MAX_QUERY_LENGTH)
     k: int = Field(30, ge=1, le=100)
@@ -4634,6 +4666,50 @@ WORKFLOW_UNDERSTANDING_SYSTEM = (
 )
 
 
+NEWS_ENRICH_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "enrichments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "why_it_matters": {"type": "string"},
+                    "verdict": {
+                        "type": "string",
+                        "enum": ["major_release", "useful_update", "minor", "skip"],
+                    },
+                },
+                "required": ["id", "why_it_matters", "verdict"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["enrichments"],
+    "additionalProperties": False,
+}
+
+NEWS_ENRICH_SYSTEM = (
+    "You are the editor of CommAI, an AI-tools guide. For each AI-news headline "
+    "you receive, write one short sentence of original analysis - the CommAI "
+    "take on why it matters to someone who builds with AI tools - and rate it.\n\n"
+    "Rules:\n"
+    "- why_it_matters: ONE sentence, max 22 words, plain language, your own "
+    "wording. Explain the practical consequence for a builder or small team. Do "
+    "not restate the headline; add insight.\n"
+    "- Use ONLY what the headline itself states. Never invent prices, dates, "
+    "features, or availability. If the headline is too thin to add real insight, "
+    "set verdict to \"skip\".\n"
+    "- verdict: major_release (new model or product, or a launch that shifts the "
+    "landscape), useful_update (a real feature or improvement builders can use), "
+    "minor (incremental, niche, or corporate news), skip (not a product story, "
+    "or too vague to analyse honestly).\n"
+    "- Return one entry per input id, preserving the given id exactly.\n"
+    "Return ONLY valid JSON matching the schema."
+)
+
+
 class RecommendationService:
     def __init__(
         self,
@@ -7008,6 +7084,70 @@ class RecommendationService:
             "sensitive_data": bool(data.get("sensitive_data")),
         }
 
+    def enrich_news(self, items: list[dict[str, str]]) -> dict[str, Any]:
+        """One CommAI take + verdict per headline, in a single batched call.
+
+        Returns source="unavailable" (never raises) when the model call
+        fails, so the caller can publish the feed without takes. A "skip"
+        verdict, an empty take, or an unknown id is dropped, so only
+        headlines the editor could honestly analyse come back.
+        """
+        valid_ids = {str(item.get("id") or "") for item in items}
+        valid_ids.discard("")
+        lines = "\n".join(
+            f'{item.get("id")} | {item.get("source") or "Unknown"} | {item.get("title")}'
+            for item in items
+            if item.get("id") and item.get("title")
+        )
+        if not lines:
+            return {"source": "unavailable", "enrichments": []}
+        try:
+            with self.metrics.timer("openai.enrich_news_ms"):
+                resp = self._chat_create(
+                    model=self.settings.chat_model,
+                    messages=[
+                        {"role": "system", "content": NEWS_ENRICH_SYSTEM},
+                        {
+                            "role": "user",
+                            "content": (
+                                "Headlines as `id | source | title`:\n" + lines
+                            ),
+                        },
+                    ],
+                    temperature=0.3,
+                    response_format=self._structured_format(
+                        "news_enrichment", NEWS_ENRICH_SCHEMA
+                    ),
+                )
+            data = json.loads(resp.choices[0].message.content)
+        except Exception:
+            self.metrics.increment("enrich_news_fallbacks")
+            note_degradation("enrich_news_fallback")
+            return {"source": "unavailable", "enrichments": []}
+        if not isinstance(data, dict):
+            self.metrics.increment("enrich_news_fallbacks")
+            return {"source": "unavailable", "enrichments": []}
+        enrichments: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for entry in (data.get("enrichments") or []):
+            if not isinstance(entry, dict):
+                continue
+            item_id = str(entry.get("id") or "")
+            verdict = entry.get("verdict")
+            why = str(entry.get("why_it_matters") or "").strip()
+            if (
+                item_id not in valid_ids
+                or item_id in seen
+                or verdict not in ("major_release", "useful_update", "minor")
+                or not why
+            ):
+                continue
+            seen.add(item_id)
+            enrichments.append(
+                {"id": item_id, "why_it_matters": why[:200], "verdict": verdict}
+            )
+        return {"source": "llm", "enrichments": enrichments}
+
     def cache_stats(self) -> dict[str, Any]:
         return {
             "embedding_cache": self.embedding_cache.stats(),
@@ -7552,6 +7692,15 @@ def detect_intent(body: IntentRequest, request: Request):
 @app.post("/understand_workflow", response_model=WorkflowUnderstandingResponse)
 def understand_workflow(body: WorkflowUnderstandingRequest, request: Request):
     return clean_payload(service(request).understand_workflow(body.goal))
+
+
+@app.post("/enrich_news", response_model=NewsEnrichResponse)
+def enrich_news(body: NewsEnrichRequest, request: Request):
+    items = [
+        {"id": item.id, "title": item.title, "source": item.source}
+        for item in body.items
+    ]
+    return clean_payload(service(request).enrich_news(items))
 
 
 # === MCP endpoint (Model Context Protocol over streamable HTTP, stateless) ===
