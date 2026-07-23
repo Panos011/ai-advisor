@@ -364,6 +364,32 @@ class WorkflowUnderstandingResponse(BaseModel):
     sensitive_data: bool = False
 
 
+# The critic reviews a full plan, so it needs far more room than the 500-char
+# search query limit — the whole point of a dedicated endpoint over /chat.
+MAX_WORKFLOW_GOAL_LENGTH = _int_env("MAX_WORKFLOW_GOAL_LENGTH", 1200)
+MAX_WORKFLOW_PLAN_LENGTH = _int_env("MAX_WORKFLOW_PLAN_LENGTH", 4000)
+
+
+class WorkflowCriticRequest(BaseModel):
+    goal: str = Field(..., min_length=1, max_length=MAX_WORKFLOW_GOAL_LENGTH)
+    plan: str = Field(..., min_length=1, max_length=MAX_WORKFLOW_PLAN_LENGTH)
+
+    @field_validator("goal", "plan")
+    @classmethod
+    def clean_text(cls, value: str) -> str:
+        return _clean_required_text(value)
+
+
+class WorkflowCriticResponse(BaseModel):
+    source: Literal["llm", "unavailable"]
+    verdict: Literal["ready", "revise", "unknown"] = "unknown"
+    summary: str = ""
+    why_this_should_work: str = ""
+    risks: list[str] = Field(default_factory=list)
+    strategy_improvements: list[str] = Field(default_factory=list)
+    missing_business_steps: list[str] = Field(default_factory=list)
+
+
 MAX_NEWS_ENRICH_ITEMS = 40
 MAX_NEWS_HEADLINE_LENGTH = 300
 
@@ -4666,6 +4692,46 @@ WORKFLOW_UNDERSTANDING_SYSTEM = (
 )
 
 
+WORKFLOW_CRITIC_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": ["ready", "revise", "unknown"]},
+        "summary": {"type": "string"},
+        "why_this_should_work": {"type": "string"},
+        "risks": {"type": "array", "items": {"type": "string"}},
+        "strategy_improvements": {"type": "array", "items": {"type": "string"}},
+        "missing_business_steps": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "verdict", "summary", "why_this_should_work",
+        "risks", "strategy_improvements", "missing_business_steps",
+    ],
+    "additionalProperties": False,
+}
+
+WORKFLOW_CRITIC_SYSTEM = (
+    "You are a business-operations critic reviewing a PROPOSED AI workflow. You are "
+    "NOT recommending or naming products. Judge whether the sequence of steps can "
+    "actually achieve the user's stated outcome as a repeatable business process.\n\n"
+    "Look for conceptual gaps a competent operator would catch: a missing success "
+    "metric, no approval or ownership where a real decision is made, activity with no "
+    "business outcome, a missing input, or a handoff that cannot happen.\n\n"
+    "Hard rules:\n"
+    "- Never invent or assert product, price, privacy, capability, or integration "
+    "facts. Speak only about the PROCESS.\n"
+    "- verdict: 'ready' if the process is sound, 'revise' if it needs changes, "
+    "'unknown' only if you genuinely cannot tell.\n"
+    "- summary: one or two sentences on whether it achieves the outcome.\n"
+    "- why_this_should_work: the strongest reason the sequence holds together.\n"
+    "- risks: concrete operational risks, [] if none.\n"
+    "- strategy_improvements: product-independent improvements to the process, [] if "
+    "none.\n"
+    "- missing_business_steps: product-independent steps the workflow needs but omits, "
+    "[] if none.\n"
+    "Return ONLY valid JSON matching the schema."
+)
+
+
 NEWS_ENRICH_SCHEMA = {
     "type": "object",
     "properties": {
@@ -7084,6 +7150,64 @@ class RecommendationService:
             "sensitive_data": bool(data.get("sensitive_data")),
         }
 
+    def workflow_critic(self, goal: str, plan: str) -> dict[str, Any]:
+        """Structured strategy critique for the mobile Workflow Compiler.
+
+        A dedicated endpoint with a server-side system prompt and JSON-schema
+        forced output, so the critic reliably returns parseable JSON instead of
+        deflecting into a chat reply (the failure mode of the /chat mode path).
+        Returns source="unavailable" (never raises) so the client falls back.
+        """
+        unavailable = {
+            "source": "unavailable", "verdict": "unknown", "summary": "",
+            "why_this_should_work": "", "risks": [],
+            "strategy_improvements": [], "missing_business_steps": [],
+        }
+        try:
+            with self.metrics.timer("openai.workflow_critic_ms"):
+                resp = self._chat_create(
+                    model=self.settings.chat_model,
+                    messages=[
+                        {"role": "system", "content": WORKFLOW_CRITIC_SYSTEM},
+                        {
+                            "role": "user",
+                            "content": f"Goal: {goal}\n\nProposed workflow:\n{plan}",
+                        },
+                    ],
+                    temperature=0.0,
+                    response_format=self._structured_format(
+                        "workflow_critic", WORKFLOW_CRITIC_SCHEMA
+                    ),
+                )
+            data = json.loads(resp.choices[0].message.content)
+        except Exception:
+            self.metrics.increment("workflow_critic_fallbacks")
+            note_degradation("workflow_critic_fallback")
+            return unavailable
+        if not isinstance(data, dict):
+            self.metrics.increment("workflow_critic_fallbacks")
+            return unavailable
+        verdict = data.get("verdict")
+        if verdict not in ("ready", "revise", "unknown"):
+            verdict = "unknown"
+
+        def _clean_list(value: Any) -> list[str]:
+            return [
+                str(item).strip()[:300]
+                for item in (value or [])
+                if isinstance(item, str) and str(item).strip()
+            ][:6]
+
+        return {
+            "source": "llm",
+            "verdict": verdict,
+            "summary": str(data.get("summary") or "").strip()[:600],
+            "why_this_should_work": str(data.get("why_this_should_work") or "").strip()[:600],
+            "risks": _clean_list(data.get("risks")),
+            "strategy_improvements": _clean_list(data.get("strategy_improvements")),
+            "missing_business_steps": _clean_list(data.get("missing_business_steps")),
+        }
+
     def enrich_news(self, items: list[dict[str, str]]) -> dict[str, Any]:
         """One CommAI take + verdict per headline, in a single batched call.
 
@@ -7692,6 +7816,11 @@ def detect_intent(body: IntentRequest, request: Request):
 @app.post("/understand_workflow", response_model=WorkflowUnderstandingResponse)
 def understand_workflow(body: WorkflowUnderstandingRequest, request: Request):
     return clean_payload(service(request).understand_workflow(body.goal))
+
+
+@app.post("/workflow_critic", response_model=WorkflowCriticResponse)
+def workflow_critic(body: WorkflowCriticRequest, request: Request):
+    return clean_payload(service(request).workflow_critic(body.goal, body.plan))
 
 
 @app.post("/enrich_news", response_model=NewsEnrichResponse)
