@@ -390,6 +390,49 @@ class WorkflowCriticResponse(BaseModel):
     missing_business_steps: list[str] = Field(default_factory=list)
 
 
+# The Architect designs product-independent process strategies from the full goal
+# and the baseline outline — a dedicated endpoint (like the critic) so it returns
+# reliable schema-forced JSON instead of deflecting on the /chat mode path.
+class WorkflowArchitectRequest(BaseModel):
+    goal: str = Field(..., min_length=1, max_length=MAX_WORKFLOW_GOAL_LENGTH)
+    baseline: str = Field("", max_length=MAX_WORKFLOW_PLAN_LENGTH)
+
+    @field_validator("goal")
+    @classmethod
+    def clean_goal(cls, value: str) -> str:
+        return _clean_required_text(value)
+
+
+class WorkflowArchitectStep(BaseModel):
+    label: str = ""
+    action: str = ""
+    kind: str | None = None
+    input: str = ""
+    output: str = ""
+    capability_ids: list[str] = Field(default_factory=list)
+
+
+class WorkflowArchitectJob(BaseModel):
+    label: str = ""
+    focus_goal: str = ""
+    steps: list[WorkflowArchitectStep] = Field(default_factory=list)
+
+
+class WorkflowArchitectCandidate(BaseModel):
+    id: str = ""
+    title: str = ""
+    rationale: str = ""
+    jobs: list[WorkflowArchitectJob] = Field(default_factory=list)
+
+
+class WorkflowArchitectResponse(BaseModel):
+    source: Literal["llm", "unavailable"]
+    domain: str | None = None
+    complexity: Literal["simple", "compound", "specialized"] | None = None
+    assumptions: list[str] = Field(default_factory=list)
+    candidates: list[WorkflowArchitectCandidate] = Field(default_factory=list)
+
+
 MAX_NEWS_ENRICH_ITEMS = 40
 MAX_NEWS_HEADLINE_LENGTH = 300
 
@@ -4732,6 +4775,86 @@ WORKFLOW_CRITIC_SYSTEM = (
 )
 
 
+_ARCHITECT_STEP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "label": {"type": "string"},
+        "action": {"type": "string"},
+        "kind": {
+            "type": "string",
+            "enum": [
+                "research", "create", "repurpose", "review",
+                "publish", "automate", "measure",
+            ],
+        },
+        "input": {"type": "string"},
+        "output": {"type": "string"},
+        "capability_ids": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["label", "action", "kind", "input", "output", "capability_ids"],
+    "additionalProperties": False,
+}
+
+_ARCHITECT_JOB_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "label": {"type": "string"},
+        "focus_goal": {"type": "string"},
+        "steps": {"type": "array", "items": _ARCHITECT_STEP_SCHEMA},
+    },
+    "required": ["label", "focus_goal", "steps"],
+    "additionalProperties": False,
+}
+
+_ARCHITECT_CANDIDATE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string"},
+        "title": {"type": "string"},
+        "rationale": {"type": "string"},
+        "jobs": {"type": "array", "items": _ARCHITECT_JOB_SCHEMA},
+    },
+    "required": ["id", "title", "rationale", "jobs"],
+    "additionalProperties": False,
+}
+
+WORKFLOW_ARCHITECT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "domain": {"type": "string"},
+        "complexity": {
+            "type": "string",
+            "enum": ["simple", "compound", "specialized"],
+        },
+        "assumptions": {"type": "array", "items": {"type": "string"}},
+        "candidates": {"type": "array", "items": _ARCHITECT_CANDIDATE_SCHEMA},
+    },
+    "required": ["domain", "complexity", "assumptions", "candidates"],
+    "additionalProperties": False,
+}
+
+WORKFLOW_ARCHITECT_SYSTEM = (
+    "You are an operations consultant designing a repeatable business PROCESS, not "
+    "choosing software. Given the user's full goal and a baseline step outline, "
+    "propose up to TWO genuinely distinct, product-independent operating strategies "
+    "for achieving the outcome.\n\n"
+    "Requirements:\n"
+    "- Preserve EVERY action and constraint in the goal; do not drop steps.\n"
+    "- Include human decisions (approvals/ownership) and updates to existing systems "
+    "where a real workflow needs them.\n"
+    "- Give each step a kind (research, create, repurpose, review, publish, automate, "
+    "measure), a concrete input and output, and capability_ids describing the "
+    "capability the step needs (e.g. text_generation, publishing_scheduling). Never "
+    "name a product.\n"
+    "- domain: the business domain. complexity: 'simple', 'compound', or "
+    "'specialized'. assumptions: what you assumed to fill gaps.\n"
+    "- Each candidate: a short id, a title, a one-line rationale, and jobs "
+    "(workstreams) each with a focus_goal and ordered steps.\n"
+    "- At most 2 candidates and 10 steps total. Return ONLY valid JSON matching the "
+    "schema."
+)
+
+
 NEWS_ENRICH_SCHEMA = {
     "type": "object",
     "properties": {
@@ -7208,6 +7331,105 @@ class RecommendationService:
             "missing_business_steps": _clean_list(data.get("missing_business_steps")),
         }
 
+    def workflow_architect(self, goal: str, baseline: str) -> dict[str, Any]:
+        """Product-independent process-strategy candidates for the Workflow Compiler.
+
+        A dedicated endpoint with a server-side system prompt and JSON-schema
+        forced output, so the Architect reliably returns parseable JSON with the
+        full goal + baseline (no 500-char /chat squeeze, no chat-mode deflection).
+        Returns source="unavailable" (never raises) so the client falls back.
+        """
+        unavailable = {
+            "source": "unavailable", "domain": None, "complexity": None,
+            "assumptions": [], "candidates": [],
+        }
+        try:
+            with self.metrics.timer("openai.workflow_architect_ms"):
+                user = f"Goal: {goal}"
+                if baseline:
+                    user += f"\n\nBaseline step outline:\n{baseline}"
+                resp = self._chat_create(
+                    model=self.settings.chat_model,
+                    messages=[
+                        {"role": "system", "content": WORKFLOW_ARCHITECT_SYSTEM},
+                        {"role": "user", "content": user},
+                    ],
+                    temperature=0.2,
+                    response_format=self._structured_format(
+                        "workflow_architect", WORKFLOW_ARCHITECT_SCHEMA
+                    ),
+                )
+            data = json.loads(resp.choices[0].message.content)
+        except Exception:
+            self.metrics.increment("workflow_architect_fallbacks")
+            note_degradation("workflow_architect_fallback")
+            return unavailable
+        if not isinstance(data, dict):
+            self.metrics.increment("workflow_architect_fallbacks")
+            return unavailable
+
+        def _text(value: Any, limit: int) -> str:
+            return str(value or "").strip()[:limit]
+
+        def _str_list(value: Any, count: int, limit: int) -> list[str]:
+            return [
+                str(item).strip()[:limit]
+                for item in (value or [])
+                if isinstance(item, str) and str(item).strip()
+            ][:count]
+
+        def _steps(value: Any) -> list[dict[str, Any]]:
+            steps = []
+            for raw in (value or [])[:10]:
+                if not isinstance(raw, dict):
+                    continue
+                steps.append({
+                    "label": _text(raw.get("label"), 80),
+                    "action": _text(raw.get("action"), 200),
+                    "kind": raw.get("kind") if raw.get("kind") in (
+                        "research", "create", "repurpose", "review",
+                        "publish", "automate", "measure",
+                    ) else None,
+                    "input": _text(raw.get("input"), 160),
+                    "output": _text(raw.get("output"), 160),
+                    "capability_ids": _str_list(raw.get("capability_ids"), 8, 60),
+                })
+            return steps
+
+        candidates = []
+        for index, raw in enumerate((data.get("candidates") or [])[:2]):
+            if not isinstance(raw, dict):
+                continue
+            jobs = []
+            for job in (raw.get("jobs") or [])[:6]:
+                if not isinstance(job, dict) or not str(job.get("label") or "").strip():
+                    continue
+                jobs.append({
+                    "label": _text(job.get("label"), 80),
+                    "focus_goal": _text(job.get("focus_goal"), 200),
+                    "steps": _steps(job.get("steps")),
+                })
+            if not jobs:
+                continue
+            candidates.append({
+                "id": _text(raw.get("id"), 40) or f"strategy_{index + 1}",
+                "title": _text(raw.get("title"), 100) or f"Strategy {index + 1}",
+                "rationale": _text(raw.get("rationale"), 300),
+                "jobs": jobs,
+            })
+        if not candidates:
+            return unavailable
+        complexity = data.get("complexity")
+        return {
+            "source": "llm",
+            "domain": _text(data.get("domain"), 100) or None,
+            "complexity": complexity if complexity in (
+                "simple", "compound", "specialized"
+            ) else None,
+            "assumptions": _str_list(data.get("assumptions"), 6, 180),
+            "candidates": candidates,
+        }
+
     def enrich_news(self, items: list[dict[str, str]]) -> dict[str, Any]:
         """One CommAI take + verdict per headline, in a single batched call.
 
@@ -7821,6 +8043,11 @@ def understand_workflow(body: WorkflowUnderstandingRequest, request: Request):
 @app.post("/workflow_critic", response_model=WorkflowCriticResponse)
 def workflow_critic(body: WorkflowCriticRequest, request: Request):
     return clean_payload(service(request).workflow_critic(body.goal, body.plan))
+
+
+@app.post("/workflow_architect", response_model=WorkflowArchitectResponse)
+def workflow_architect(body: WorkflowArchitectRequest, request: Request):
+    return clean_payload(service(request).workflow_architect(body.goal, body.baseline))
 
 
 @app.post("/enrich_news", response_model=NewsEnrichResponse)
