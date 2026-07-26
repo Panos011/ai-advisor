@@ -1125,6 +1125,7 @@ class ToolStore:
     claim_index: Any | None = None
     claim_meta: list[dict[str, Any]] | None = None
     claim_manifest: dict[str, Any] | None = None
+    claim_token_index: dict[str, list[int]] | None = None
 
     @property
     def ready(self) -> bool:
@@ -1202,6 +1203,29 @@ def load_tool_store(settings: Settings) -> ToolStore:
 
     manifest = _load_index_manifest(settings, len(meta), index)
     claim_index, claim_meta, claim_manifest = _load_claim_store(settings, len(meta))
+    if not claim_meta:
+        # Exact field-level claims remain useful even before the optional
+        # semantic claim index has been built. Generate them deterministically
+        # from the catalogue and use an open-vocabulary lexical inverted index
+        # as the no-secret/no-network recall path.
+        claim_meta = [
+            claim
+            for tool_id, tool in enumerate(meta)
+            for claim in extract_evidence_claims(tool, tool_id, max_claims=6)
+        ]
+        claim_manifest = {
+            "schema": 1,
+            "claims": len(claim_meta),
+            "tools": len(meta),
+            "retrieval": "lexical_fallback",
+            "verified": True,
+        }
+    claim_token_index: dict[str, list[int]] = {}
+    for claim_id, claim in enumerate(claim_meta):
+        for token in set(tokens(str(claim.get("statement") or ""))):
+            if len(token) < 3:
+                continue
+            claim_token_index.setdefault(token, []).append(claim_id)
 
     # Warm the per-tool token/flag cache once at startup so the first request does
     # not pay the full 2.2k-tool tokenization cost.
@@ -1215,6 +1239,7 @@ def load_tool_store(settings: Settings) -> ToolStore:
         claim_index=claim_index,
         claim_meta=claim_meta,
         claim_manifest=claim_manifest,
+        claim_token_index=claim_token_index,
     )
 
 
@@ -6058,7 +6083,7 @@ class RecommendationService:
             # long record. Search the optional open-vocabulary claim index with
             # the SAME query vector, then merge claim-rescued tools before MMR.
             claim_matches = self._claim_candidate_matches(
-                vec, max(50, min(pool_k * 3, 300))
+                vec, retrieval_query, max(50, min(pool_k * 3, 300))
             )
             if claim_matches:
                 by_id = {int(candidate["id"]): candidate for candidate in candidates}
@@ -7949,16 +7974,50 @@ class RecommendationService:
     def _claim_candidate_matches(
         self,
         query_vector: np.ndarray,
+        query_text: str,
         k: int,
     ) -> dict[int, list[dict[str, Any]]]:
         """Retrieve source claims and aggregate them back to catalogue tools."""
-        if self.store.claim_index is None or not self.store.claim_meta:
+        if not self.store.claim_meta:
             return {}
         limit = min(max(k, 1), len(self.store.claim_meta))
-        with self.metrics.timer("faiss.claim_search_ms"):
-            scores, ids = self.store.claim_index.search(query_vector, limit)
+        if self.store.claim_index is not None:
+            with self.metrics.timer("faiss.claim_search_ms"):
+                scores, ids = self.store.claim_index.search(query_vector, limit)
+            ranked_claims = list(zip(scores[0].tolist(), ids[0].tolist()))
+            retrieval_kind = "semantic"
+        else:
+            # Open-vocabulary lexical fallback: no category aliases and no
+            # domain-specific trigger list. The planner-expanded retrieval
+            # query and the catalogue claims meet through their actual words.
+            query_tokens = {
+                token
+                for token in tokens(query_text)
+                if len(token) >= 3
+            }
+            claim_scores: dict[int, float] = {}
+            inverted = self.store.claim_token_index or {}
+            for token in query_tokens:
+                postings = inverted.get(token) or []
+                rarity = 1.0 / max(len(postings), 1) ** 0.5
+                for claim_id in postings:
+                    claim_scores[claim_id] = claim_scores.get(claim_id, 0.0) + rarity
+            ranked_claims = sorted(
+                (
+                    (
+                        min(
+                            0.95,
+                            score / max(len(query_tokens), 1) ** 0.5,
+                        ),
+                        claim_id,
+                    )
+                    for claim_id, score in claim_scores.items()
+                ),
+                reverse=True,
+            )[:limit]
+            retrieval_kind = "lexical"
         by_tool: dict[int, list[dict[str, Any]]] = {}
-        for score, claim_index_id in zip(scores[0].tolist(), ids[0].tolist()):
+        for score, claim_index_id in ranked_claims:
             if claim_index_id < 0 or claim_index_id >= len(self.store.claim_meta):
                 continue
             claim = self.store.claim_meta[claim_index_id]
@@ -7974,6 +8033,7 @@ class RecommendationService:
                 matches.append(match)
         if by_tool:
             self.metrics.increment("claim_retrieval_requests")
+            self.metrics.increment(f"claim_retrieval_{retrieval_kind}")
         return by_tool
 
     def _candidate_for_id(self, id_: int, score: float) -> dict[str, Any]:

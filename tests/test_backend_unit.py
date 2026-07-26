@@ -3854,6 +3854,43 @@ class GroundedRequirementTests(unittest.TestCase):
             api_module.requirement_coverage_score(adjacent, self.intent),
         )
 
+    def test_claim_retrieval_has_no_secret_lexical_fallback(self):
+        service = make_service()
+        service.store.claim_index = None
+        service.store.claim_meta = [
+            {
+                "id": "tool:0:features:a",
+                "tool_id": 0,
+                "statement": "Generates working applications from natural-language prompts.",
+                "source_field": "features",
+                "source_quote": "Generates working applications from natural-language prompts.",
+            },
+            {
+                "id": "tool:1:features:b",
+                "tool_id": 1,
+                "statement": "Creates decorative images from short prompts.",
+                "source_field": "features",
+                "source_quote": "Creates decorative images from short prompts.",
+            },
+        ]
+        service.store.claim_token_index = {
+            "generates": [0],
+            "working": [0],
+            "applications": [0],
+            "natural": [0],
+            "language": [0],
+            "prompts": [0, 1],
+            "creates": [1],
+            "decorative": [1],
+            "images": [1],
+            "short": [1],
+        }
+        matches = service._claim_candidate_matches(
+            None, "natural language working application", 10
+        )
+        self.assertIn(0, matches)
+        self.assertNotIn(1, matches)
+
 
 class _RankCapturingCompletions:
     """Planner returns {} (fall through to gates); ranker returns a fixed pick and
