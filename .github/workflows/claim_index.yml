@@ -28,9 +28,11 @@ jobs:
         run: pip install "numpy<2" "faiss-cpu==1.9.0.post1" "openai>=2.2,<3" python-dotenv
 
       - name: Build source-backed capability-claim index
+        if: env.OPENAI_API_KEY != ''
         run: python Build_Claim_Index.py
 
       - name: Commit and push claim artifacts
+        if: env.OPENAI_API_KEY != ''
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -43,3 +45,7 @@ jobs:
           git fetch origin main
           git rebase origin/main
           git push origin main
+
+      - name: Explain lexical fallback
+        if: env.OPENAI_API_KEY == ''
+        run: echo "OPENAI_API_KEY is not configured for Actions; production will use the built-in lexical claim index."
