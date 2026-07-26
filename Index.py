@@ -82,3 +82,10 @@ with open(os.path.join(INDEX_DIR, "index_manifest.json"), "w", encoding="utf-8")
 print(f"Indexed {len(meta)} tools → {INDEX_DIR}/tools.faiss")
 print(f"Saved vector matrix → {INDEX_DIR}/tool_vectors.npy")
 print(f"Wrote manifest → {INDEX_DIR}/index_manifest.json")
+
+# Keep the claim index in lockstep with every catalogue refresh. It is optional
+# at runtime, so an older deployment continues to serve whole-tool retrieval
+# until these artifacts are available.
+from Build_Claim_Index import main as build_claim_index
+
+build_claim_index()

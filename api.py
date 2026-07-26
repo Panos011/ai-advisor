@@ -218,6 +218,8 @@ def emit_progress(stage: str) -> None:
 import os
 from dataclasses import dataclass
 
+from claims import extract_evidence_claims
+
 
 def _int_env(name: str, default: int) -> int:
     try:
@@ -239,6 +241,11 @@ class Settings:
     meta_path: str = os.getenv("META_PATH", "index/meta.jsonl")
     vectors_path: str = os.getenv("VECTORS_PATH", "index/tool_vectors.npy")
     index_manifest_path: str = os.getenv("INDEX_MANIFEST_PATH", "index/index_manifest.json")
+    claim_index_path: str = os.getenv("CLAIM_INDEX_PATH", "index/claims.faiss")
+    claim_meta_path: str = os.getenv("CLAIM_META_PATH", "index/claims_meta.jsonl")
+    claim_manifest_path: str = os.getenv(
+        "CLAIM_MANIFEST_PATH", "index/claims_manifest.json"
+    )
     emb_model: str = os.getenv("EMB_MODEL", "text-embedding-3-small")
     chat_model: str = os.getenv("CHAT_MODEL", "gpt-5.4-mini")
     # .strip() guards against a trailing newline/space in the env var, which makes the
@@ -590,6 +597,35 @@ class RecommendRequest(BaseModel):
         return self
 
 
+class AdvisorRequirement(BaseModel):
+    id: str
+    statement: str
+    importance: Literal["required", "preferred"] = "required"
+
+
+class AdvisorIntent(BaseModel):
+    goal: str
+    inputs: list[str] = Field(default_factory=list)
+    outputs: list[str] = Field(default_factory=list)
+    requirements: list[AdvisorRequirement] = Field(default_factory=list)
+    source: Literal["llm", "fallback"] = "llm"
+
+
+class EvidenceClaim(BaseModel):
+    id: str
+    statement: str
+    source_field: str
+    source_quote: str
+    source_url: str | None = None
+    evidence_status: Literal["catalogue_record"] = "catalogue_record"
+
+
+class RequirementAssessment(BaseModel):
+    requirement_id: str
+    status: Literal["supported", "partial", "unsupported", "unknown"]
+    evidence: list[EvidenceClaim] = Field(default_factory=list)
+
+
 class SearchHit(BaseModel):
     score: float
     meta: dict[str, Any]
@@ -600,6 +636,7 @@ class SearchHit(BaseModel):
     # Deterministic, grounded cost line (e.g. "Free tier, then from $12/mo").
     # Derived from the catalog price, never from the LLM, so it can't drift.
     cost_summary: str | None = None
+    requirement_assessments: list[RequirementAssessment] = Field(default_factory=list)
 
 
 class RecommenderContract(BaseModel):
@@ -615,6 +652,8 @@ class RecommenderContract(BaseModel):
         "tradeoff",
         "best_for",
         "fit_label",
+        "requirement_assessments",
+        "requirement_assessments.evidence",
         "meta.Name",
         "meta.Categories",
         "meta.Price",
@@ -628,6 +667,7 @@ class RecommenderContract(BaseModel):
 class RecommendResponse(BaseModel):
     hits: list[SearchHit]
     message: str | None = None
+    intent: AdvisorIntent | None = None
     contract: RecommenderContract | None = None
     # True when any LLM/embedding stage fell back to a degraded path (keyword
     # search, retrieval-order ranking, rule-based planning); reasons list the
@@ -701,6 +741,7 @@ class ChatResponse(BaseModel):
     message: str
     hits: list[SearchHit] = Field(default_factory=list)
     refined_query: str | None = None
+    intent: AdvisorIntent | None = None
     contract: RecommenderContract | None = None
     degraded: bool = False
     degradation: list[str] = Field(default_factory=list)
@@ -1081,6 +1122,9 @@ class ToolStore:
     meta: list[dict[str, Any]]
     vectors: np.ndarray | None
     manifest: dict[str, Any] | None = None
+    claim_index: Any | None = None
+    claim_meta: list[dict[str, Any]] | None = None
+    claim_manifest: dict[str, Any] | None = None
 
     @property
     def ready(self) -> bool:
@@ -1157,12 +1201,72 @@ def load_tool_store(settings: Settings) -> ToolStore:
         )
 
     manifest = _load_index_manifest(settings, len(meta), index)
+    claim_index, claim_meta, claim_manifest = _load_claim_store(settings, len(meta))
 
     # Warm the per-tool token/flag cache once at startup so the first request does
     # not pay the full 2.2k-tool tokenization cost.
     _search_index(meta)
     logger.info("Loaded %s tools from %s", len(meta), settings.index_path)
-    return ToolStore(index=index, meta=meta, vectors=vectors, manifest=manifest)
+    return ToolStore(
+        index=index,
+        meta=meta,
+        vectors=vectors,
+        manifest=manifest,
+        claim_index=claim_index,
+        claim_meta=claim_meta,
+        claim_manifest=claim_manifest,
+    )
+
+
+def _load_claim_store(
+    settings: Settings,
+    tool_rows: int,
+) -> tuple[Any | None, list[dict[str, Any]] | None, dict[str, Any] | None]:
+    """Load claim retrieval artifacts as an optional, failure-safe extension."""
+    paths = (
+        settings.claim_index_path,
+        settings.claim_meta_path,
+        settings.claim_manifest_path,
+    )
+    if not all(os.path.exists(path) for path in paths):
+        logger.info("Capability-claim index not present; serving whole-tool retrieval.")
+        return None, None, None
+    try:
+        with open(settings.claim_meta_path, "r", encoding="utf-8") as handle:
+            claim_meta = [json.loads(line) for line in handle if line.strip()]
+        claim_index = faiss.read_index(settings.claim_index_path)
+        with open(settings.claim_manifest_path, "r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        problems = []
+        if claim_index.ntotal != len(claim_meta):
+            problems.append(
+                f"claim index rows {claim_index.ntotal} != metadata rows {len(claim_meta)}"
+            )
+        if manifest.get("claims") != len(claim_meta):
+            problems.append(
+                f"claim manifest rows {manifest.get('claims')} != metadata rows {len(claim_meta)}"
+            )
+        if manifest.get("tools") != tool_rows:
+            problems.append(
+                f"claim manifest tools {manifest.get('tools')} != catalogue rows {tool_rows}"
+            )
+        if manifest.get("emb_model") != settings.emb_model:
+            problems.append(
+                f"claim embedding model {manifest.get('emb_model')!r} != {settings.emb_model!r}"
+            )
+        if manifest.get("dim") != claim_index.d:
+            problems.append(
+                f"claim manifest dim {manifest.get('dim')} != index dim {claim_index.d}"
+            )
+        for problem in problems:
+            logger.error("CLAIM INDEX MANIFEST: %s", problem)
+        if problems:
+            return None, None, {**manifest, "verified": False, "problems": problems}
+        logger.info("Loaded %s open-vocabulary capability claims", len(claim_meta))
+        return claim_index, claim_meta, {**manifest, "verified": True}
+    except Exception:
+        logger.exception("Failed to load optional capability-claim index")
+        return None, None, None
 
 
 def _load_vectors(path: str, index: Any, expected_rows: int) -> np.ndarray | None:
@@ -4139,15 +4243,41 @@ def compact_rank_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     the ranker is instructed not to use retrieval order anyway, and the id is
     what maps selections back to the catalog.
     """
+    claims = candidate.get("evidence_claims")
+    if not isinstance(claims, list):
+        claims = extract_evidence_claims(
+            {
+                "Name": candidate.get("name", ""),
+                "Source_URL": candidate.get("source_url", ""),
+                "Tool_link": candidate.get("tool_link", ""),
+                "Description": candidate.get("description", ""),
+                "Features": candidate.get("features", ""),
+                "Use_cases": candidate.get("use_cases", ""),
+                "Pros": candidate.get("pros", ""),
+            },
+            int(candidate["id"]),
+            max_claims=6,
+        )
+    compact_claims = [
+        {
+            "id": str(claim.get("id") or ""),
+            "source_field": str(claim.get("source_field") or ""),
+            "quote": truncate_field_text(
+                claim.get("source_quote") or claim.get("statement"), 280
+            ),
+        }
+        for claim in claims[:6]
+        if claim.get("id") and (claim.get("source_quote") or claim.get("statement"))
+    ]
     return {
         "id": int(candidate["id"]),
         "name": str(candidate.get("name", "")),
         "categories": str(candidate.get("categories", "")),
         "price": truncate_field_text(candidate.get("price"), 400),
-        "description": truncate_field_text(candidate.get("description"), 360),
-        "features": truncate_field_text(candidate.get("features"), 280),
-        "use_cases": truncate_field_text(candidate.get("use_cases"), 220),
-        "pros": truncate_field_text(candidate.get("pros"), 160),
+        # Keep the short promise for context; capability decisions must cite one
+        # of the exact claim IDs below rather than relying on this prose.
+        "description": truncate_field_text(candidate.get("description"), 280),
+        "evidence_claims": compact_claims,
     }
 
 
@@ -4160,6 +4290,163 @@ def compact_hit_for_prompt(hit: dict[str, Any]) -> dict[str, Any]:
         "why": hit.get("why", ""),
         "best_for": hit.get("best_for", ""),
     }
+
+
+def normalize_advisor_intent(value: Any, query: str) -> dict[str, Any] | None:
+    """Validate a model-produced, open-vocabulary functional requirement set."""
+    if not isinstance(value, dict):
+        return None
+    goal = normalize_display_text(value.get("goal"))[:240]
+    raw_requirements = value.get("requirements")
+    if not goal or not isinstance(raw_requirements, list):
+        return None
+
+    requirements: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+    for index, raw in enumerate(raw_requirements[:8]):
+        if not isinstance(raw, dict):
+            continue
+        statement = normalize_display_text(raw.get("statement"))[:220]
+        if not statement:
+            continue
+        raw_id = re.sub(
+            r"[^a-z0-9_-]+", "_", str(raw.get("id") or "").strip().lower()
+        ).strip("_")[:48]
+        requirement_id = raw_id or f"requirement_{index + 1}"
+        if requirement_id in seen_ids:
+            requirement_id = f"{requirement_id}_{index + 1}"
+        seen_ids.add(requirement_id)
+        importance = (
+            "preferred" if raw.get("importance") == "preferred" else "required"
+        )
+        requirements.append({
+            "id": requirement_id,
+            "statement": statement,
+            "importance": importance,
+        })
+    if not requirements:
+        return None
+    if not any(item["importance"] == "required" for item in requirements):
+        requirements[0]["importance"] = "required"
+
+    def clean_list(raw: Any) -> list[str]:
+        if not isinstance(raw, list):
+            return []
+        values = []
+        seen: set[str] = set()
+        for item in raw[:6]:
+            text = normalize_display_text(item)[:160]
+            key = text.casefold()
+            if text and key not in seen:
+                seen.add(key)
+                values.append(text)
+        return values
+
+    return {
+        "goal": goal or request_goal(query),
+        "inputs": clean_list(value.get("inputs")),
+        "outputs": clean_list(value.get("outputs")),
+        "requirements": requirements,
+        "source": "llm",
+    }
+
+
+def validated_requirement_assessments(
+    raw_value: Any,
+    intent: dict[str, Any] | None,
+    candidate: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Bind assessments to exact claims; invented evidence becomes Unknown."""
+    if not intent:
+        return []
+    requirements = {
+        str(item.get("id")): item
+        for item in intent.get("requirements") or []
+        if item.get("id")
+    }
+    claim_lookup = {
+        str(claim.get("id")): claim
+        for claim in candidate.get("evidence_claims") or []
+        if claim.get("id")
+    }
+    raw_by_requirement: dict[str, dict[str, Any]] = {}
+    if isinstance(raw_value, list):
+        for raw in raw_value:
+            if not isinstance(raw, dict):
+                continue
+            requirement_id = str(raw.get("requirement_id") or "")
+            if requirement_id in requirements and requirement_id not in raw_by_requirement:
+                raw_by_requirement[requirement_id] = raw
+
+    assessments = []
+    allowed_statuses = {"supported", "partial", "unsupported", "unknown"}
+    for requirement_id in requirements:
+        raw = raw_by_requirement.get(requirement_id, {})
+        status = str(raw.get("status") or "unknown")
+        if status not in allowed_statuses:
+            status = "unknown"
+        evidence_ids = raw.get("evidence_claim_ids")
+        if not isinstance(evidence_ids, list):
+            evidence_ids = []
+        evidence = []
+        seen: set[str] = set()
+        for claim_id in evidence_ids[:3]:
+            key = str(claim_id or "")
+            claim = claim_lookup.get(key)
+            if not claim or key in seen:
+                continue
+            seen.add(key)
+            evidence.append({
+                "id": key,
+                "statement": str(
+                    claim.get("statement") or claim.get("source_quote") or ""
+                ),
+                "source_field": str(claim.get("source_field") or "catalogue"),
+                "source_quote": str(
+                    claim.get("source_quote") or claim.get("statement") or ""
+                ),
+                "source_url": claim.get("source_url"),
+                "evidence_status": "catalogue_record",
+            })
+        # Positive, partial, and negative product claims all need evidence. No
+        # valid source ID means we genuinely do not know, regardless of what the
+        # model tried to assert.
+        if status != "unknown" and not evidence:
+            status = "unknown"
+        assessments.append({
+            "requirement_id": requirement_id,
+            "status": status,
+            "evidence": evidence,
+        })
+    return assessments
+
+
+def requirement_coverage_score(
+    assessments: list[dict[str, Any]],
+    intent: dict[str, Any] | None,
+) -> float | None:
+    if not intent or not assessments:
+        return None
+    importance = {
+        str(item.get("id")): str(item.get("importance") or "required")
+        for item in intent.get("requirements") or []
+    }
+    values = {"supported": 1.0, "partial": 0.5, "unsupported": 0.0, "unknown": 0.0}
+    required = [
+        values.get(str(item.get("status")), 0.0)
+        for item in assessments
+        if importance.get(str(item.get("requirement_id"))) == "required"
+    ]
+    preferred = [
+        values.get(str(item.get("status")), 0.0)
+        for item in assessments
+        if importance.get(str(item.get("requirement_id"))) == "preferred"
+    ]
+    if not required:
+        return None
+    required_score = sum(required) / len(required)
+    preferred_score = sum(preferred) / len(preferred) if preferred else 0.0
+    return required_score * 0.9 + preferred_score * 0.1
 
 
 def sanitize_reason(reason: Any, name: str = "This tool", query: str = "") -> str:
@@ -4624,6 +4911,38 @@ PLANNER_DECISION_SCHEMA = {
 RANK_SELECTION_SCHEMA = {
     "type": "object",
     "properties": {
+        "intent": {
+            "type": "object",
+            "properties": {
+                "goal": {"type": "string"},
+                "inputs": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                "outputs": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                "requirements": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "statement": {"type": "string"},
+                            "importance": {
+                                "type": "string",
+                                "enum": ["required", "preferred"],
+                            },
+                        },
+                        "required": ["id", "statement", "importance"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["goal", "inputs", "outputs", "requirements"],
+            "additionalProperties": False,
+        },
         "selected": {
             "type": "array",
             "items": {
@@ -4633,13 +4952,41 @@ RANK_SELECTION_SCHEMA = {
                     "reason": {"type": "string"},
                     "tradeoff": {"type": "string"},
                     "best_for": {"type": "string"},
+                    "requirement_assessments": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "requirement_id": {"type": "string"},
+                                "status": {
+                                    "type": "string",
+                                    "enum": [
+                                        "supported", "partial",
+                                        "unsupported", "unknown",
+                                    ],
+                                },
+                                "evidence_claim_ids": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                            "required": [
+                                "requirement_id", "status",
+                                "evidence_claim_ids",
+                            ],
+                            "additionalProperties": False,
+                        },
+                    },
                 },
-                "required": ["id", "reason", "tradeoff", "best_for"],
+                "required": [
+                    "id", "reason", "tradeoff", "best_for",
+                    "requirement_assessments",
+                ],
                 "additionalProperties": False,
             },
         },
     },
-    "required": ["selected"],
+    "required": ["intent", "selected"],
     "additionalProperties": False,
 }
 
@@ -5081,6 +5428,11 @@ class RecommendationService:
             # Present when index/index_manifest.json exists; verified=False means
             # the index artifacts drifted from each other or from EMB_MODEL.
             "index_manifest": self.store.manifest,
+            "claim_index": {
+                "loaded": self.store.claim_index is not None,
+                "claims": len(self.store.claim_meta or []),
+                "manifest": self.store.claim_manifest,
+            },
         }
 
     def embed(self, texts: list[str]) -> np.ndarray:
@@ -5538,13 +5890,26 @@ class RecommendationService:
         cached = self.recommend_cache.get(cache_key)
         if cached is not None:
             self.metrics.increment("recommend_cache_hit")
+            if isinstance(cached, dict):
+                cached_hits = cached.get("hits") or []
+                cached_intent = cached.get("intent")
+            else:
+                # Backwards compatibility with entries written before grounded
+                # intent became part of the recommendation result.
+                cached_hits = cached
+                cached_intent = None
             if conversation_id:
-                self.shortlists[conversation_id] = cached
+                self.shortlists[conversation_id] = cached_hits
                 self.shortlist_pointers[conversation_id] = 0
-                self._record_shown(conversation_id, cached)
-            message = recommendation_message(cached, q, mode, pick_best=pick_best)
+                self._record_shown(conversation_id, cached_hits)
+            message = recommendation_message(cached_hits, q, mode, pick_best=pick_best)
             self.conversations.append(conversation_id, "assistant", message)
-            return {"hits": cached, "message": message, "personalized": bool(personalization)}
+            return {
+                "hits": cached_hits,
+                "message": message,
+                "intent": cached_intent,
+                "personalized": bool(personalization),
+            }
 
         emit_progress("retrieving")
         try:
@@ -5689,6 +6054,45 @@ class RecommendationService:
                 ids[0].tolist(),
                 pool_k,
             )
+            # Whole-tool embeddings can dilute one decisive feature inside a
+            # long record. Search the optional open-vocabulary claim index with
+            # the SAME query vector, then merge claim-rescued tools before MMR.
+            claim_matches = self._claim_candidate_matches(
+                vec, max(50, min(pool_k * 3, 300))
+            )
+            if claim_matches:
+                by_id = {int(candidate["id"]): candidate for candidate in candidates}
+                for tool_id, matches in claim_matches.items():
+                    claim_score = max(
+                        (float(match.get("similarity", 0.0)) for match in matches),
+                        default=0.0,
+                    )
+                    candidate = by_id.get(tool_id)
+                    if candidate is None:
+                        candidate = self._candidate_for_id(tool_id, claim_score)
+                        candidate["retrieval_source"] = "capability_claim"
+                        by_id[tool_id] = candidate
+                    else:
+                        candidate["score"] = max(
+                            float(candidate.get("score", 0.0)), claim_score
+                        )
+                        candidate["retrieval_source"] = (
+                            f"{candidate.get('retrieval_source', 'faiss')}+capability_claim"
+                        )
+                    combined_claims = [
+                        *matches,
+                        *(candidate.get("evidence_claims") or []),
+                    ]
+                    seen_claims: set[str] = set()
+                    unique_claims: list[dict[str, Any]] = []
+                    for claim in combined_claims:
+                        claim_id = str(claim.get("id") or "")
+                        if not claim_id or claim_id in seen_claims:
+                            continue
+                        seen_claims.add(claim_id)
+                        unique_claims.append(claim)
+                    candidate["evidence_claims"] = unique_claims[:6]
+                candidates = list(by_id.values())
             if coding_intent:
                 by_id = {int(candidate["id"]): candidate for candidate in candidates}
                 for score, id_ in coding_rescue_scores(retrieval_query, pool_k, self.store.meta):
@@ -5876,7 +6280,7 @@ class RecommendationService:
             )
 
         emit_progress("ranking")
-        selected = self._rank_with_llm(
+        selected, advisor_intent = self._rank_with_llm(
             retrieval_query, candidates, effective_final_k, mode=mode, personalization=personalization
         )
         final_hits = self._selected_hits(
@@ -5960,14 +6364,22 @@ class RecommendationService:
         if coding_intent and final_hits:
             final_hits = prioritize_coding_hits(final_hits)
 
-        self.recommend_cache.set(cache_key, final_hits)
+        self.recommend_cache.set(
+            cache_key,
+            {"hits": final_hits, "intent": advisor_intent},
+        )
         if conversation_id:
             self.shortlists[conversation_id] = final_hits
             self.shortlist_pointers[conversation_id] = 0
             self._record_shown(conversation_id, final_hits)
         message = recommendation_message(final_hits, q, mode, pick_best=pick_best)
         self.conversations.append(conversation_id, "assistant", message)
-        return {"hits": final_hits, "message": message, "personalized": bool(personalization)}
+        return {
+            "hits": final_hits,
+            "message": message,
+            "intent": advisor_intent,
+            "personalized": bool(personalization),
+        }
 
     def chat(
         self,
@@ -7534,6 +7946,36 @@ class RecommendationService:
         merged.sort(key=lambda candidate: float(candidate.get("score", 0.0)), reverse=True)
         return merged[: min(len(merged), max(retrieve_k * 2, retrieve_k + 10))]
 
+    def _claim_candidate_matches(
+        self,
+        query_vector: np.ndarray,
+        k: int,
+    ) -> dict[int, list[dict[str, Any]]]:
+        """Retrieve source claims and aggregate them back to catalogue tools."""
+        if self.store.claim_index is None or not self.store.claim_meta:
+            return {}
+        limit = min(max(k, 1), len(self.store.claim_meta))
+        with self.metrics.timer("faiss.claim_search_ms"):
+            scores, ids = self.store.claim_index.search(query_vector, limit)
+        by_tool: dict[int, list[dict[str, Any]]] = {}
+        for score, claim_index_id in zip(scores[0].tolist(), ids[0].tolist()):
+            if claim_index_id < 0 or claim_index_id >= len(self.store.claim_meta):
+                continue
+            claim = self.store.claim_meta[claim_index_id]
+            try:
+                tool_id = int(claim.get("tool_id"))
+            except (TypeError, ValueError):
+                continue
+            if tool_id < 0 or tool_id >= len(self.store.meta):
+                continue
+            match = {**claim, "similarity": float(score)}
+            matches = by_tool.setdefault(tool_id, [])
+            if len(matches) < 3:
+                matches.append(match)
+        if by_tool:
+            self.metrics.increment("claim_retrieval_requests")
+        return by_tool
+
     def _candidate_for_id(self, id_: int, score: float) -> dict[str, Any]:
         m = self.store.meta[id_]
         return {
@@ -7547,6 +7989,9 @@ class RecommendationService:
             "features": m.get("Features", ""),
             "use_cases": m.get("Use_cases", ""),
             "pros": m.get("Pros", ""),
+            "source_url": m.get("Source_URL", ""),
+            "tool_link": m.get("Tool_link", ""),
+            "evidence_claims": extract_evidence_claims(m, id_, max_claims=6),
         }
 
     def _find_hit_by_name(self, hits: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
@@ -7594,7 +8039,7 @@ class RecommendationService:
         final_k: int,
         mode: str = "balanced",
         personalization: dict[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
         mode = normalize_mode(mode)
         personalization_block = personalization_prompt_block(personalization)
         mode_rules = {
@@ -7627,23 +8072,38 @@ class RecommendationService:
                             "content": (
                                 "You are an AI tool recommender. You will receive a user's needs and a numbered list of candidate tools.\n"
                                 "Critical Evaluation Rules:\n"
-                                "1. Evaluate only based on how well each tool's described features match the user's stated needs.\n"
-                                "2. Do not favour tools based on popularity, brand recognition or how often you have seen them in training data.\n"
-                                "3. A lesser-known tool that matches the user's needs perfectly is better than a well-known partial match.\n"
-                                "4. Consider budget constraints. If unspecified, include at least 1 free option when candidates support it.\n"
-                                "4a. If the user asks for free tools, select only candidates with a free tier, free trial, no-cost plan, or open-source access.\n"
-                                "5. Treat every candidate tool as equally credible regardless of whether you recognise the name.\n"
-                                "6. Do not favour tools based on their position in the list.\n"
-                                "7. Do not select a tool unless categories, description, features, use cases, or price clearly support the request. "
+                                "1. First translate the request into its actual functional job, inputs, outputs, and a short list of observable requirements. "
+                                "Requirements are open-vocabulary natural-language claims; never round them into a preset product category or capability ID.\n"
+                                "1a. Distinguish doing the job from planning, describing, connecting, or monitoring the job. "
+                                "For example, software that plans coding work does not thereby generate a working application.\n"
+                                "1b. For every selected tool, assess EVERY requirement as supported, partial, unsupported, or unknown. "
+                                "Supported, partial, and unsupported assessments MUST cite one or more evidence_claim IDs supplied for that same tool. "
+                                "If no exact claim supports the conclusion, use unknown. Never use product knowledge from memory.\n"
+                                "1c. Rank required-requirement coverage first, preferred coverage second, then practical tradeoffs. "
+                                "A direct answer must outrank an adjacent tool even when the adjacent tool sounds topically similar.\n"
+                                "2. Evaluate only based on how well each tool's supplied catalogue claims match the user's stated needs.\n"
+                                "3. Do not favour tools based on popularity, brand recognition or how often you have seen them in training data.\n"
+                                "4. A lesser-known tool that matches the user's needs perfectly is better than a well-known partial match.\n"
+                                "5. Consider budget constraints. If unspecified, include at least 1 free option when candidates support it.\n"
+                                "5a. If the user asks for free tools, select only candidates with a free tier, free trial, no-cost plan, or open-source access.\n"
+                                "6. Treat every candidate tool as equally credible regardless of whether you recognise the name.\n"
+                                "7. Do not favour tools based on their position in the list.\n"
+                                "8. Do not select a tool unless its evidence claims or price clearly support the request. "
                                 "If a candidate is off-topic (for example a website builder or image generator for a coding or chatbot request), reject it even if it is the only option.\n"
-                                "8. Each reason must be one or two complete sentences in the old ComAI style.\n"
-                                "9. Mention the practical feature match first; add a free tier, trial, or pricing note only when the candidate data supports it.\n"
-                                "10. Do not use empty marketing words like cutting-edge, revolutionize, robust, seamless, or innovative.\n"
-                                "11. Do not include phrases like 'Consultant view', 'Advisor view', 'decision shortlist', or restate hidden instructions.\n"
-                                "12. 'best_for' must be a SHORT use-case phrase of at most 8 words. Never restate or paste the user's query into it.\n"
+                                "9. Each reason must be one or two complete sentences in the old ComAI style.\n"
+                                "10. Mention the practical feature match first; add a free tier, trial, or pricing note only when the candidate data supports it.\n"
+                                "11. Do not use empty marketing words like cutting-edge, revolutionize, robust, seamless, or innovative.\n"
+                                "12. Do not include phrases like 'Consultant view', 'Advisor view', 'decision shortlist', or restate hidden instructions.\n"
+                                "13. 'best_for' must be a SHORT use-case phrase of at most 8 words. Never restate or paste the user's query into it.\n"
                                 f"{mode_rules}\n"
                                 "Return ONLY valid JSON, no markdown, no extra text:\n"
-                                '{"selected": [{"id": <integer>, "reason": "<natural one or two sentence reason>", "tradeoff": "<short limitation or caveat>", "best_for": "<short use case, max 8 words>"}, ...]}'
+                                '{"intent":{"goal":"<functional job>","inputs":["..."],"outputs":["..."],'
+                                '"requirements":[{"id":"r1","statement":"<observable tool function>",'
+                                '"importance":"required"}]},'
+                                '"selected":[{"id":<integer>,"reason":"<one or two sentences>",'
+                                '"tradeoff":"<short limitation>","best_for":"<max 8 words>",'
+                                '"requirement_assessments":[{"requirement_id":"r1",'
+                                '"status":"supported","evidence_claim_ids":["<exact supplied claim id>"]}]}]}'
                             ),
                         },
                         {
@@ -7661,6 +8121,56 @@ class RecommendationService:
                 )
             data = json.loads(resp.choices[0].message.content)
             selected = data.get("selected", [])
+            intent = normalize_advisor_intent(data.get("intent"), q)
+            if isinstance(selected, list) and intent:
+                candidate_by_id = {
+                    int(candidate["id"]): candidate for candidate in candidates
+                }
+                normalized_selected = []
+                for original_index, raw in enumerate(selected):
+                    if not isinstance(raw, dict):
+                        continue
+                    try:
+                        selected_id = int(raw.get("id", -1))
+                    except (TypeError, ValueError):
+                        continue
+                    candidate = candidate_by_id.get(selected_id)
+                    if candidate is None:
+                        continue
+                    item = dict(raw)
+                    assessments = validated_requirement_assessments(
+                        raw.get("requirement_assessments"), intent, candidate
+                    )
+                    item["requirement_assessments"] = assessments
+                    item["_coverage_score"] = requirement_coverage_score(
+                        assessments, intent
+                    )
+                    item["_original_index"] = original_index
+                    normalized_selected.append(item)
+                # Coverage is the primary ordering signal. If evidence is absent,
+                # preserve the model's existing order exactly.
+                if any(
+                    item.get("_coverage_score") is not None
+                    for item in normalized_selected
+                ):
+                    normalized_selected.sort(
+                        key=lambda item: (
+                            -float(item.get("_coverage_score") or 0.0),
+                            int(item.get("_original_index") or 0),
+                        )
+                    )
+                selected = normalized_selected
+                self.metrics.increment("grounded_rank_responses")
+                self.metrics.increment(
+                    "grounded_rank_requirements",
+                    len(intent.get("requirements") or []),
+                )
+                for item in normalized_selected:
+                    for assessment in item.get("requirement_assessments") or []:
+                        status = str(assessment.get("status") or "unknown")
+                        self.metrics.increment(f"grounded_assessment_{status}")
+                        if assessment.get("evidence"):
+                            self.metrics.increment("grounded_assessments_with_evidence")
             logger.info(
                 "TIMING rank LLM call: %.0f ms (%d candidates in, %d selected, model=%s)",
                 (time.perf_counter() - _rank_started) * 1000.0,
@@ -7668,7 +8178,7 @@ class RecommendationService:
                 len(selected) if isinstance(selected, list) else 0,
                 self.settings.chat_model,
             )
-            return selected if isinstance(selected, list) else []
+            return (selected if isinstance(selected, list) else []), intent
         except Exception as exc:
             logger.warning(
                 "OpenAI ranking failed (%s): %s; returning FAISS fallback recommendations",
@@ -7677,7 +8187,7 @@ class RecommendationService:
             )
             self.metrics.increment("openai_rank_errors")
             note_degradation("llm_rank_failed")
-            return []
+            return [], None
 
     def _selected_hits(
         self,
@@ -7728,6 +8238,11 @@ class RecommendationService:
                     "why": sanitize_reason(reason, name=str(meta.get("Name", "This tool")), query=q),
                     "tradeoff": normalize_display_text(item.get("tradeoff", "")) or build_tradeoff(meta),
                     "best_for": clean_best_for(item.get("best_for", ""), q, meta),
+                    "requirement_assessments": (
+                        item.get("requirement_assessments")
+                        if isinstance(item.get("requirement_assessments"), list)
+                        else []
+                    ),
                 }, q))
                 seen_ids.add(id_int)
         return final_hits

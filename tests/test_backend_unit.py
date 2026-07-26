@@ -3730,8 +3730,12 @@ class CompactRankCandidateTests(unittest.TestCase):
         self.assertEqual(compact["id"], 3)
         self.assertEqual(compact["name"], "Writerly")
         self.assertEqual(compact["categories"], "writing | copywriting")
-        for field in ("price", "description", "features", "use_cases", "pros"):
+        for field in ("price", "description", "evidence_claims"):
             self.assertIn(field, compact)
+        self.assertEqual(
+            {claim["source_field"] for claim in compact["evidence_claims"]},
+            {"description", "features", "use_cases", "pros"},
+        )
 
     def test_drops_retrieval_bookkeeping(self):
         compact = api_module.compact_rank_candidate(self._candidate())
@@ -3770,6 +3774,85 @@ class CompactRankCandidateTests(unittest.TestCase):
         self.assertLessEqual(len(sent[0]["description"]), 362)
         # The original candidate dicts stay untouched for downstream filtering.
         self.assertIn("score", candidates[0])
+
+
+class GroundedRequirementTests(unittest.TestCase):
+    def setUp(self):
+        self.intent = api_module.normalize_advisor_intent(
+            {
+                "goal": "Turn natural-language prompts into a working application",
+                "inputs": ["natural-language product description"],
+                "outputs": ["working web application"],
+                "requirements": [
+                    {
+                        "id": "build_app",
+                        "statement": "Generates a working application from natural language",
+                        "importance": "required",
+                    },
+                    {
+                        "id": "export_code",
+                        "statement": "Exports editable source code",
+                        "importance": "preferred",
+                    },
+                ],
+            },
+            "best vibe coding tool",
+        )
+        self.claim = {
+            "id": "tool:7:features:abc",
+            "statement": "Build production-ready web apps from a text prompt.",
+            "source_field": "features",
+            "source_quote": "Build production-ready web apps from a text prompt.",
+            "source_url": "https://example.com",
+        }
+        self.candidate = {"id": 7, "evidence_claims": [self.claim]}
+
+    def test_invented_claim_id_cannot_become_supported(self):
+        assessments = api_module.validated_requirement_assessments(
+            [{
+                "requirement_id": "build_app",
+                "status": "supported",
+                "evidence_claim_ids": ["invented-claim"],
+            }],
+            self.intent,
+            self.candidate,
+        )
+        self.assertEqual(assessments[0]["status"], "unknown")
+        self.assertEqual(assessments[0]["evidence"], [])
+
+    def test_exact_claim_id_preserves_source_quote(self):
+        assessments = api_module.validated_requirement_assessments(
+            [{
+                "requirement_id": "build_app",
+                "status": "supported",
+                "evidence_claim_ids": [self.claim["id"]],
+            }],
+            self.intent,
+            self.candidate,
+        )
+        self.assertEqual(assessments[0]["status"], "supported")
+        self.assertEqual(
+            assessments[0]["evidence"][0]["source_quote"],
+            self.claim["source_quote"],
+        )
+        # Every dynamic requirement is represented; missing model assessments
+        # are honest unknowns rather than silently treated as matches.
+        self.assertEqual(assessments[1]["requirement_id"], "export_code")
+        self.assertEqual(assessments[1]["status"], "unknown")
+
+    def test_required_coverage_outweighs_preferred_coverage(self):
+        direct = [
+            {"requirement_id": "build_app", "status": "supported"},
+            {"requirement_id": "export_code", "status": "unknown"},
+        ]
+        adjacent = [
+            {"requirement_id": "build_app", "status": "partial"},
+            {"requirement_id": "export_code", "status": "supported"},
+        ]
+        self.assertGreater(
+            api_module.requirement_coverage_score(direct, self.intent),
+            api_module.requirement_coverage_score(adjacent, self.intent),
+        )
 
 
 class _RankCapturingCompletions:

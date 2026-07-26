@@ -1,0 +1,45 @@
+name: Build advisor capability-claim index
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: advisor-dataset-writes
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install index dependencies
+        run: pip install "numpy<2" "faiss-cpu==1.9.0.post1" "openai>=2.2,<3" python-dotenv
+
+      - name: Build source-backed capability-claim index
+        run: python Build_Claim_Index.py
+
+      - name: Commit and push claim artifacts
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index/claims.faiss index/claims_meta.jsonl index/claims_manifest.json
+          if git diff --cached --quiet; then
+            echo "Claim index is already current."
+            exit 0
+          fi
+          git commit -m "Build open-vocabulary advisor claim index"
+          git fetch origin main
+          git rebase origin/main
+          git push origin main
