@@ -3542,7 +3542,7 @@ def specific_tool_message(hit: dict[str, Any], query: str) -> str:
     name = str(meta.get("Name", "This tool")).strip() or "This tool"
     goal = request_goal(query)
     categories = str(meta.get("Categories", ""))
-    if off_topic_for_query(query, categories):
+    if off_topic_for_query(query, categories, meta):
         cats = category_list(meta, limit=2)
         focus = f" It looks more focused on {human_join(cats)}." if cats else ""
         return f"{name} is not my strongest pick for {goal}.{focus} I would only choose it if that side task matters."
@@ -3711,7 +3711,44 @@ def default_clarifying_question(q: str) -> str:
     return "What exact task should the tool help with?"
 
 
-def off_topic_for_query(q: str, categories: str) -> bool:
+def off_topic_for_query(
+    q: str,
+    categories: str,
+    meta: dict[str, Any] | None = None,
+) -> bool:
+    """Is this tool off-topic for the query?
+
+    The category verdict is a coarse first pass. Categories is a short taxonomy
+    label rather than a description, so a domain's vocabulary is often absent
+    from it even when the tool is an exact fit. Judging on categories alone
+    silently discarded whole domains: for "invoice OCR" it ruled all 2225
+    catalogue rows off-topic, because the invoice branch looks for
+    ocr/invoice/accounting/quickbooks in Categories while the categories of the
+    right tools actually read "research", "personal assistant" and
+    "finance | spreadsheets". Zero survivors means "I could not find a strong
+    match" no matter the phrasing, the embeddings or the ranking.
+
+    So when the category pass says off-topic, the tool gets a second look at its
+    full record through matches_query_domain, which applies the same domain
+    rules to name/description/features/use-cases. That can only ADD tools back,
+    never remove one the category pass accepted, so it cannot starve a query
+    that works today.
+    """
+    off_topic = _off_topic_by_categories(q, categories)
+    if not off_topic or not meta:
+        return off_topic
+    tool_rule = active_domain_rule(q)
+    if tool_rule is None:
+        # No domain rule covers this query, so nothing can vouch for the tool on
+        # its full text. Keep the category verdict rather than treating absent
+        # evidence as approval — otherwise queries with a category branch but no
+        # domain rule (presentations, coding, chatbots) would lose their filter
+        # entirely.
+        return True
+    return not tool_rule(meta)
+
+
+def _off_topic_by_categories(q: str, categories: str) -> bool:
     category_tokens = set(tokens(categories))
     text = categories.lower()
     if is_marketing_query(q):
@@ -4623,7 +4660,7 @@ def keyword_scores(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[tupl
         if active_domain_tool is not None:
             if not active_domain_tool(meta):
                 continue
-        elif off_topic_for_query(q, categories):
+        elif off_topic_for_query(q, categories, meta):
             continue
 
         score = 0.0
@@ -4679,34 +4716,39 @@ def keyword_search(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[dict
     ]
 
 
+# Query classifier paired with the tool classifier that vouches for that domain.
+# Order is significant — the first matching query rule wins — and matches the
+# cascade this replaced.
+DOMAIN_RULES = (
+    (is_security_training_query, is_security_training_tool),
+    (is_healthcare_notes_query, is_healthcare_notes_tool),
+    (is_legal_contract_query, is_legal_contract_tool),
+    (is_private_document_chat_query, is_private_document_chat_tool),
+    (is_support_chatbot_query, is_support_chatbot_tool),
+    (is_local_chatbot_ui_query, is_local_chatbot_ui_tool),
+    (is_invoice_workflow_query, is_invoice_workflow_tool),
+    (is_general_workflow_query, is_general_workflow_tool),
+    (is_privacy_compliance_query, is_privacy_compliance_tool),
+    (is_child_education_query, is_child_education_tool),
+    (is_video_query, is_video_tool),
+    (is_marketing_query, is_marketing_tool),
+    (is_note_or_transcription_query, is_note_or_transcription_tool),
+)
+
+
+def active_domain_rule(q: str):
+    """The tool classifier for this query's domain, or None if it matches no
+    domain. None matters: it means no rule can vouch for a tool on its full
+    text, so callers must not treat 'no domain' as 'anything goes'."""
+    for query_rule, tool_rule in DOMAIN_RULES:
+        if query_rule(q):
+            return tool_rule
+    return None
+
+
 def matches_query_domain(q: str, meta: dict[str, Any]) -> bool:
-    if is_security_training_query(q):
-        return is_security_training_tool(meta)
-    if is_healthcare_notes_query(q):
-        return is_healthcare_notes_tool(meta)
-    if is_legal_contract_query(q):
-        return is_legal_contract_tool(meta)
-    if is_private_document_chat_query(q):
-        return is_private_document_chat_tool(meta)
-    if is_support_chatbot_query(q):
-        return is_support_chatbot_tool(meta)
-    if is_local_chatbot_ui_query(q):
-        return is_local_chatbot_ui_tool(meta)
-    if is_invoice_workflow_query(q):
-        return is_invoice_workflow_tool(meta)
-    if is_general_workflow_query(q):
-        return is_general_workflow_tool(meta)
-    if is_privacy_compliance_query(q):
-        return is_privacy_compliance_tool(meta)
-    if is_child_education_query(q):
-        return is_child_education_tool(meta)
-    if is_video_query(q):
-        return is_video_tool(meta)
-    if is_marketing_query(q):
-        return is_marketing_tool(meta)
-    if is_note_or_transcription_query(q):
-        return is_note_or_transcription_tool(meta)
-    return True
+    tool_rule = active_domain_rule(q)
+    return True if tool_rule is None else tool_rule(meta)
 
 
 def filter_hits_for_query_domain(hits: list[dict[str, Any]], q: str) -> list[dict[str, Any]]:
@@ -6147,7 +6189,11 @@ class RecommendationService:
             ):
                 candidates = [
                     candidate for candidate in candidates
-                    if not off_topic_for_query(retrieval_query, str(candidate.get("categories", "")))
+                    if not off_topic_for_query(
+                        retrieval_query,
+                        str(candidate.get("categories", "")),
+                        candidate_meta(candidate, self.store.meta),
+                    )
                 ]
             if coding_intent:
                 coding_candidates = [
@@ -7233,7 +7279,7 @@ class RecommendationService:
                 name = str(meta.get("Name", "")).strip().lower()
                 if not name or name in prior_names:
                     continue
-                if off_topic_for_query(reason_query, str(meta.get("Categories", ""))):
+                if off_topic_for_query(reason_query, str(meta.get("Categories", "")), meta):
                     continue
                 return enrich_hit(dict(hit), reason_query)
 
@@ -7266,7 +7312,7 @@ class RecommendationService:
             name = str(meta.get("Name", "")).strip().lower()
             if not name or name in prior_names:
                 continue
-            if off_topic_for_query(reason_query, str(meta.get("Categories", ""))):
+            if off_topic_for_query(reason_query, str(meta.get("Categories", "")), meta):
                 continue
             return enrich_hit(dict(hit), reason_query)
         return None

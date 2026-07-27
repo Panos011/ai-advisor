@@ -6,6 +6,15 @@ __pycache__
 .env
 .env.*
 
+# Virtualenvs. .gcloudignore includes this file, so without these a manual
+# `gcloud run deploy --source .` uploads every local venv — ~254MB here, enough
+# to time the upload out before the build starts. The Cloud Build trigger clones
+# from git and never saw them, so this only ever bit hand-run deploys.
+.venv
+.venv-test
+venv
+env
+
 AI_tools.csv
 Clean_AI_tools.csv
 Embeddings_AI_tools.csv
