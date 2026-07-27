@@ -46,6 +46,14 @@ jobs:
           git rebase origin/main
           git push origin main
 
-      - name: Explain lexical fallback
+      # This workflow is workflow_dispatch only, so a run is always an explicit
+      # request to build the index. Skipping every real step and still reporting
+      # success made that request look honoured when nothing had been produced:
+      # two dispatches on 2026-07-26 went green while the semantic index was
+      # never built, and production stayed on the lexical fallback unnoticed.
+      # Fail instead — a request that could not be carried out is not a success.
+      - name: Fail when the claim index cannot be built
         if: env.OPENAI_API_KEY == ''
-        run: echo "OPENAI_API_KEY is not configured for Actions; production will use the built-in lexical claim index."
+        run: |
+          echo "::error title=Claim index not built::OPENAI_API_KEY is not configured in this repository's Actions secrets, so no semantic claim index was produced. The advisor keeps serving the built-in lexical claim fallback. Add the secret, then re-run this workflow."
+          exit 1
