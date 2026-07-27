@@ -112,6 +112,23 @@ Local unit tests do not require an OpenAI key:
 Live API checks:
 'python -m unittest Testing.py'
 
+CI and Cloud Build both run the suite on **Python 3.11**, matching the
+Dockerfile. '.venv' is 3.12 and carries the full 'requirements.txt' (crawlee and
+the rest of the data-collection stack), so it is not a faithful stand-in for
+what production runs. '.venv-test' is a 3.11 environment with only
+'requirements.runtime.txt' plus pytest — use it to reproduce what CI sees:
+
+    .venv-test/bin/python -m pytest tests/ -q
+
+Recreate it with:
+
+    /opt/homebrew/opt/python@3.11/bin/python3.11 -m venv .venv-test
+    .venv-test/bin/python -m pip install -r requirements.runtime.txt pytest
+
+A first import of a large package on macOS can stall for minutes while the
+system scans it; that is not a broken environment. Let it finish once rather
+than killing and retrying, or the scan restarts each time.
+
 ### Routing eval
 Chat routing (search / refine / explain / alternative / chat) is the part that
 breaks most when guards are added. 'routing_golden.jsonl' captures that contract
