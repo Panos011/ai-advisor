@@ -1,0 +1,37 @@
+name: Tests
+
+# Pushing to main deploys straight to Cloud Run, so this is the only thing
+# standing between a bad commit and production. It deliberately runs on push as
+# well as pull_request: work here lands directly on main more often than not.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    # The suite is pure unit tests with no network, so anything approaching this
+    # means something is wedged rather than slow. Without a cap a hung import
+    # burns the default six-hour timeout.
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # The serving dependency set, which is what tests/test_backend_unit.py
+      # needs to import api. The other three test modules are stdlib-only.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.runtime.txt pytest
+
+      - name: Run tests
+        run: pytest tests/ -q --durations=10
