@@ -18,6 +18,21 @@ substitutions:
   _IMAGE: us-central1-docker.pkg.dev/ai-discovery-platform/cloud-run-source-deploy/commai-advisor
 
 steps:
+  # Runs before anything is built. GitHub Actions runs the same suite, but
+  # Actions cannot stop this pipeline — a red check and a deployed regression
+  # would happen in parallel. Gating here is what actually protects production.
+  # The whole suite takes ~2s; the pip install dominates, and that is still a
+  # cheap insurance premium on an automatic push-to-production path.
+  - id: test
+    name: python:3.11-slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        pip install --quiet --no-cache-dir -r requirements.runtime.txt pytest
+        pytest tests/ -q
+
   - id: build
     name: gcr.io/cloud-builders/docker
     args:
