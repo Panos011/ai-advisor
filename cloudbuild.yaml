@@ -77,6 +77,23 @@ steps:
       - -c
       - |
         set -euo pipefail
+        # A service that has ever been deployed with --no-traffic stops routing
+        # to LATEST and stays pinned to whichever revision was current. Every
+        # later deploy then creates a revision serving 0% while the build, the
+        # deploy step and the health check below all still pass, because they
+        # inspect the service URL — which is answering from the pinned old
+        # revision. That is a deploy pipeline that reports success and ships
+        # nothing, so check the invariant rather than trusting it.
+        # Tagged revisions add their own traffic entries, so this is a list
+        # ("True;;" with two tags present) rather than a single value — match
+        # any entry routing to LATEST instead of comparing the whole string.
+        if ! gcloud run services describe ${_SERVICE} --region ${_REGION} \
+          --format='value(spec.traffic.latestRevision)' | grep -q True; then
+          echo "Service is pinned to a specific revision and is NOT serving LATEST." >&2
+          echo "This build deployed a revision that no user will reach. Fix with:" >&2
+          echo "  gcloud run services update-traffic ${_SERVICE} --region ${_REGION} --to-latest" >&2
+          exit 1
+        fi
         url=$(gcloud run services describe ${_SERVICE} --region ${_REGION} \
           --format='value(status.url)')
         echo "Verifying $${url}/health"
