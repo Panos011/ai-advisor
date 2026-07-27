@@ -138,5 +138,33 @@ degradation state so the extra planner call can't flip the 'degraded' flag. It i
 off by default because it adds a second LLM round-trip; enable it for a measurement
 window, not in steady state.
 
+## Deployment
+
+The API runs on Cloud Run as `commai-advisor` (project `ai-discovery-platform`,
+region `us-central1`), fronted for web traffic by the Firebase callable
+`proxyAdvisorRequest` in the mobile repo.
+
+**Pushing to `main` deploys to production.** The Cloud Build trigger
+`commai-advisor-deploy` builds `Dockerfile`, tags the image with the commit SHA
+and `latest`, deploys it, then polls `/health` and fails the build unless the new
+revision reports `ok` with a loaded catalogue and tool vectors. Cloud Run keeps
+the previous revision serving if a new one never becomes ready, so a bad build
+degrades to "no change" rather than an outage — but it will not catch a change
+that is healthy and wrong.
+
+To deploy by hand, build from a clean checkout rather than the working tree:
+
+    git archive origin/main | tar -x -C /tmp/advisor-deploy
+    gcloud run deploy commai-advisor --source /tmp/advisor-deploy \
+      --region us-central1 --project ai-discovery-platform
+
+`--source .` on a stale checkout silently ships whatever the working tree holds.
+
+Rollback:
+
+    gcloud run revisions list --service commai-advisor --region us-central1
+    gcloud run services update-traffic commai-advisor --region us-central1 \
+      --to-revisions=REVISION=100
+
 ## Notes
 '.env' is git-ignored.
