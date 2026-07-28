@@ -2390,8 +2390,14 @@ def is_video_tool(meta: dict[str, Any]) -> bool:
 
 
 def is_note_or_transcription_query(q: str) -> bool:
+    # "transcrib" is a prefix, so it needs \w* — the group is closed by \b, and
+    # a bare stem there can never match "transcribe"/"transcribing"/"transcribed"
+    # because there is no word boundary after "transcrib". The domain's most
+    # literal phrasing therefore missed its own classifier, and the query fell
+    # through to the category gate, which kept 9 of the 92 tools that mention
+    # transcription and dropped Otter.ai and Fireflies.ai outright.
     return bool(re.search(
-        r"\b(meeting|meetings|notetaker|note\s+taker|note[- ]?taking|notes?|transcrib|"
+        r"\b(meeting|meetings|notetaker|note\s+taker|note[- ]?taking|notes?|transcrib\w*|"
         r"transcription|dictation|voice\s+typing|speech\s+to\s+text|audio\s+notes?)\b",
         q.lower(),
     ))

@@ -10,6 +10,7 @@ question was phrased.
 
 import json
 import os
+import re
 import unittest
 
 import api
@@ -109,6 +110,44 @@ class DomainRuleTableTests(unittest.TestCase):
     def test_query_matching_no_domain_is_always_in_domain(self):
         self.assertIsNone(api.active_domain_rule("make slides for a deck"))
         self.assertTrue(api.matches_query_domain("make slides for a deck", {"Name": "Anything"}))
+
+
+class TranscriptionClassifierTests(unittest.TestCase):
+    """A bare stem inside a \\b-terminated group cannot match its inflections.
+
+    `\\b(...|transcrib|...)\\b` requires a word boundary immediately after
+    "transcrib", which "transcribe" does not have. The stem was written as a
+    prefix but behaved as an exact word, so the domain's most literal phrasing
+    missed its own classifier. The query then fell through to the category gate,
+    which kept 9 of the 92 tools mentioning transcription and dropped Otter.ai
+    and Fireflies.ai outright.
+    """
+
+    def test_classifier_matches_its_own_inflections(self):
+        for phrasing in (
+            "transcribe audio",
+            "transcribing a call",
+            "transcribed my meeting",
+            "transcription service",
+            "meeting notes",
+        ):
+            self.assertTrue(
+                api.is_note_or_transcription_query(phrasing),
+                f"{phrasing!r} should be recognised as a transcription query",
+            )
+
+    def test_transcription_tools_survive_a_transcription_query(self):
+        meta = load_meta()
+        relevant = [
+            row for row in meta
+            if re.search(r"\btranscri(be|bes|bing|ption|pt)\b", api.metadata_blob(row))
+        ]
+        self.assertGreater(len(relevant), 50)
+        rule = api.active_domain_rule("transcribe audio")
+        self.assertIsNotNone(rule, "transcribe audio must route to a domain rule")
+        kept = [row for row in relevant if rule(row)]
+        # 9/92 before the stem was fixed.
+        self.assertGreater(len(kept) / len(relevant), 0.75)
 
 
 if __name__ == "__main__":
