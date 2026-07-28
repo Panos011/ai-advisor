@@ -144,6 +144,27 @@ Add a case whenever you fix a routing bug: it turns a one-off regex patch into a
 permanent regression check, which is the safe way to migrate routing off the
 regex gates and onto the planner over time.
 
+### A/B experiments ('experiment.sh')
+'./experiment.sh' deploys the current working tree — uncommitted changes and all
+— to a **separate** Cloud Run service, 'commai-advisor-exp', then scores it
+against production on the semantic eval. '--no-deploy' re-scores whatever is
+already there, and 'RUNS=3' does more passes.
+
+Use it instead of deploying a '--no-traffic' revision on the production service.
+A '--no-traffic' deploy stops production routing to LATEST and pins it to the
+current revision; every later deploy then creates a revision serving 0% while
+the build, the deploy and the health check all still report success. That
+silently shipped nothing three times on 2026-07-27 before the verify step in
+'cloudbuild.yaml' started asserting the traffic invariant. The experiment
+service cannot cause it, because nothing points users at it.
+
+**The eval is noisy — size your conclusions accordingly.** One case is worth 10
+points out of 100, and individual cases swing between runs: 'vibe_coding' has
+scored both 85 and 70 on identical production code. Aggregate scores cluster in
+a ~93-98 band. Two runs per side is enough to spot a case that returns nothing,
+and nowhere near enough to justify a 2-3 point difference. When a change looks
+marginal, it is marginal.
+
 ### Planner shadow mode (regex→planner migration, Stage 1)
 Set 'PLANNER_SHADOW=1' to make every '/chat' request also ask the planner what it
 would route to and log whether that matches what the gate logic shipped
