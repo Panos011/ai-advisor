@@ -158,12 +158,35 @@ silently shipped nothing three times on 2026-07-27 before the verify step in
 'cloudbuild.yaml' started asserting the traffic invariant. The experiment
 service cannot cause it, because nothing points users at it.
 
-**The eval is noisy — size your conclusions accordingly.** One case is worth 10
-points out of 100, and individual cases swing between runs: 'vibe_coding' has
-scored both 85 and 70 on identical production code. Aggregate scores cluster in
-a ~93-98 band. Two runs per side is enough to spot a case that returns nothing,
-and nowhere near enough to justify a 2-3 point difference. When a change looks
+**The eval is noisy — size your conclusions accordingly.** Individual cases swing
+between runs: 'vibe_coding' has scored both 85 and 70 on identical production
+code. Two runs per side is enough to spot a case that returns nothing, and
+nowhere near enough to justify a 2-3 point difference. When a change looks
 marginal, it is marginal.
+
+### Retrieval fitness ('hit_evidence' and friends)
+Everything above scores the *intent*, not the results, so a shortlist of the
+wrong products used to score exactly like the right one. Cases may therefore
+also declare, as regexes matched against the returned tools' catalogue records:
+
+- 'hit_evidence' — at least one result must match
+- 'top_hit_evidence' — the first result must match
+- 'reject_evidence' — no result may match
+
+Regexes over evidence, not product names, so a new catalogue tool can improve an
+answer without a benchmark rewrite. Cases declaring none of these score exactly
+as they did before the dimension existed.
+
+It is reported on its own line rather than folded into the headline: averaged in,
+one broken case moves the total by about a point, which is under the noise floor
+— which is how a wrong shortlist stayed invisible. Measured 2026-07-28, the
+pre-fix commit 4820849 against current main:
+
+    pre-fix   80.7/100   retrieval fitness 6/8
+    current   98.2/100   retrieval fitness 7/8
+
+The old 10-case file separated those two by 9 points, inside the range noise can
+produce. It is now 17.5.
 
 ### Planner shadow mode (regex→planner migration, Stage 1)
 Set 'PLANNER_SHADOW=1' to make every '/chat' request also ask the planner what it
