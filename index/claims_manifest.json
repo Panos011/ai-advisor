@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "emb_model": "text-embedding-3-small",
+  "claims": 13344,
+  "tools": 2225,
+  "dim": 1536,
+  "max_claims_per_tool": 6,
+  "source_meta": "index/meta.jsonl",
+  "built_at": "2026-07-28T10:29:04+00:00"
+}
