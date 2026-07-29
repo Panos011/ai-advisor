@@ -1580,7 +1580,7 @@ def expand_common_language_terms(value: Any) -> str:
         hints.append("local open-source chatbot personal assistant private documents pdf document chat offline")
     if re.search(r"\b(?:invoice|invoices|quickbooks|gmail\s+attachments?|ocr|drive)\b", lowered):
         hints.append("no-code automation workflow invoices email attachments drive ocr accounting quickbooks")
-    if re.search(r"\b(?:marketing|email\s+marketing|campaigns?|ads?|advertis(?:ing|ements?)|seo|lead\s+gen(?:eration)?|newsletter|social\s+media|outreach)\b", lowered):
+    if re.search(r"\b(?:marketing|email\s+marketing|campaigns?|ads?|advertis(?:e|es|ed|ing|ements?)|seo|lead\s+gen(?:eration)?|newsletter|social\s+media|outreach)\b", lowered):
         hints.append("marketing campaign email marketing social media seo advertising lead generation outreach newsletter")
     if re.search(r"\b(?:tutor|student|child|school|10[- ]year[- ]old|kids?)\b", lowered):
         hints.append("education tutor students children school classroom privacy safe no ads")
@@ -2338,7 +2338,7 @@ def is_marketing_tool(meta: dict[str, Any]) -> bool:
     blob = metadata_blob(meta)
     categories = str(meta.get("Categories", "")).lower()
     signal = bool(re.search(
-        r"\b(?:marketing|email\s+marketing|campaigns?|advertis(?:ing|ements?)|ads?|"
+        r"\b(?:marketing|email\s+marketing|campaigns?|advertis(?:e|es|ed|ing|ements?)|ads?|"
         r"seo|growth\s+marketing|lead\s+gen(?:eration)?|lead\s+capture|leads?|crm|"
         r"newsletter|social\s+media|outreach|copywriting|content\s+marketing|brand\s+awareness|"
         r"customer\s+acquisition|sales\s+enablement)\b",

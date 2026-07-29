@@ -209,6 +209,21 @@ class MarketingVerbTests(unittest.TestCase):
         for phrasing in ("video editing", "transcribe audio", "invoice OCR"):
             self.assertFalse(api.is_marketing_query(phrasing), phrasing)
 
+    def test_tool_classifier_matches_the_verb(self):
+        """is_marketing_tool had the same noun-only spelling."""
+        tool = {
+            "Name": "Example Promo",
+            "Categories": "productivity",
+            "Description": "Helps small shops advertise to local customers.",
+        }
+        self.assertTrue(api.is_marketing_tool(tool))
+
+    def test_query_expansion_fires_for_the_verb(self):
+        """expand_common_language_terms carried the noun-only spelling too, so
+        the verb form got no marketing hints before retrieval."""
+        self.assertIn("marketing", api.expand_common_language_terms("advertise my product"))
+        self.assertNotIn("marketing", api.expand_common_language_terms("transcribe audio"))
+
 
 if __name__ == "__main__":
     unittest.main()
