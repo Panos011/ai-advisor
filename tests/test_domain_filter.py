@@ -10,6 +10,7 @@ question was phrased.
 
 import json
 import os
+import pathlib
 import re
 import unittest
 
@@ -148,6 +149,42 @@ class TranscriptionClassifierTests(unittest.TestCase):
         kept = [row for row in relevant if rule(row)]
         # 9/92 before the stem was fixed.
         self.assertGreater(len(kept) / len(relevant), 0.75)
+
+
+class StemInflectionCoverageTests(unittest.TestCase):
+    """Prefix stems must carry \\w*, but only where measurement supports it.
+
+    Eleven sites wrote a stem as a bare alternative inside a \\b-terminated
+    group, where it can never match its own inflections. Fixing all eleven
+    together measured WORSE on advisor_semantic_cases — 96.9/96.5/96.9 against
+    a 98.7 baseline — and the loss was reproducibly two cases: internal_tool
+    100 -> 90 and paper_citations 100 -> 70.
+
+    Isolating showed "summar" was solely responsible. Reverting just those three
+    sites restored both cases to 100 and scored 99.2/98.7, at or above baseline.
+    So transcrib and advertis are fixed and summar is deliberately left bare:
+    widening it pulls summarisation-flavoured queries such as the literature
+    review case into a domain filter that costs them their evidence-backed top
+    result.
+    """
+
+    def test_transcrib_stem_matches_inflections_everywhere(self):
+        for phrasing in ("transcribe audio", "transcribing calls", "transcribed notes"):
+            self.assertTrue(api.is_note_or_transcription_query(phrasing), phrasing)
+            self.assertTrue(
+                api.is_note_or_transcription_tool(
+                    {"Name": "X", "Description": f"We {phrasing} for teams."}
+                ),
+                phrasing,
+            )
+
+    def test_summar_is_deliberately_not_widened(self):
+        """Guards the measured decision, so a future tidy-up has to re-measure."""
+        source = pathlib.Path(api.__file__).read_text()
+        self.assertNotIn(r"summar\w*|", source,
+                         "widening 'summar' regressed internal_tool and "
+                         "paper_citations by a reproducible 2.5 points; "
+                         "re-run ./experiment.sh before changing this")
 
 
 if __name__ == "__main__":

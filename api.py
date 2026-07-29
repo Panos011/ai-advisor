@@ -2260,7 +2260,7 @@ def query_terms(text: str) -> list[str]:
         expanded += " writing writers blog article posts copywriting content seo marketing"
     if is_marketing_query(normalized):
         expanded += " marketing campaign email marketing social media seo advertising lead generation crm outreach newsletter copywriting content marketing"
-    if re.search(r"\b(meeting|meetings|notetaker|note\s+taker|notes|transcrib|summar)\w*\b", normalized):
+    if re.search(r"\b(meeting|meetings|notetaker|note\s+taker|notes|transcrib\w*|summar)\w*\b", normalized):
         expanded += " meeting notes notetaker transcriber transcription summarizer summary recording"
     if re.search(r"\b(presentation|presentations|slides?|deck)\b", normalized):
         expanded += " presentations slides deck powerpoint pitch"
@@ -2345,7 +2345,7 @@ def is_marketing_tool(meta: dict[str, Any]) -> bool:
         return False
     dev_only = bool(re.search(r"\b(?:developer|coding|code\s+assistant|software\s+engineering|ide)\b", categories))
     security_only = bool(re.search(r"\b(?:security|cybersecurity|phishing|dmarc|malware)\b", categories))
-    if (dev_only or security_only) and not re.search(r"\b(?:marketing|sales|lead|crm|seo|advertis|campaign|social\s+media)\b", blob):
+    if (dev_only or security_only) and not re.search(r"\b(?:marketing|sales|lead|crm|seo|advertis\w*|campaign|social\s+media)\b", blob):
         return False
     return True
 
@@ -2629,7 +2629,7 @@ def financial_profit_guard_message() -> str:
 def is_note_or_transcription_tool(meta: dict[str, Any]) -> bool:
     blob = metadata_blob(meta)
     return bool(re.search(
-        r"\b(meeting|meetings|notetaker|note\s+taker|note[- ]?taking|transcrib|"
+        r"\b(meeting|meetings|notetaker|note\s+taker|note[- ]?taking|transcrib\w*|"
         r"transcription|dictation|voice\s+typing|speech\s+to\s+text|speech[- ]to[- ]text|"
         r"audio\s+(?:record|recording|note|notes|transcription)|voice\s+data)\b",
         blob,
@@ -3759,9 +3759,9 @@ def _off_topic_by_categories(q: str, categories: str) -> bool:
     text = categories.lower()
     if is_marketing_query(q):
         blocked = {"coding", "developer", "code", "security", "cybersecurity", "health", "fitness", "travel", "dating", "music", "video", "image"}
-        if category_tokens & blocked and not re.search(r"\b(marketing|sales|lead|crm|seo|advertis|campaign|social|copywriting)\b", text):
+        if category_tokens & blocked and not re.search(r"\b(marketing|sales|lead|crm|seo|advertis\w*|campaign|social|copywriting)\b", text):
             return True
-        return not bool(re.search(r"\b(marketing|sales|lead|crm|seo|advertis|campaign|social|copywriting|newsletter|outreach|brand)\b", text))
+        return not bool(re.search(r"\b(marketing|sales|lead|crm|seo|advertis\w*|campaign|social|copywriting|newsletter|outreach|brand)\b", text))
     if is_writing_query(q):
         allowed = {"writing", "generators", "copywriting", "seo", "marketing", "social", "media"}
         blocked = {"fitness", "health", "travel", "dating", "music", "finance", "stock", "trading"}
@@ -3772,7 +3772,7 @@ def _off_topic_by_categories(q: str, categories: str) -> bool:
         blocked = {"travel", "image", "images", "logo", "website", "dating", "fitness", "health"}
         if category_tokens & blocked:
             return True
-        return not bool(re.search(r"\b(meeting|transcrib|transcription|summar|notetaker|note|audio|record)\b", text))
+        return not bool(re.search(r"\b(meeting|transcrib\w*|transcription|summar|notetaker|note|audio|record)\b", text))
     if re.search(r"\b(presentation|presentations|slides?|deck|powerpoint)\b", q.lower()):
         blocked = {"image", "images", "logo", "video", "audio", "music", "dating", "travel"}
         if category_tokens & blocked and "present" not in text and "slide" not in text:
@@ -3794,9 +3794,9 @@ def _off_topic_by_categories(q: str, categories: str) -> bool:
         return not bool(re.search(r"\b(legal|contract|contracts|clause|agreement|compliance|lawyer)\b", text))
     if is_healthcare_notes_query(q):
         blocked = {"marketing", "sales", "social", "media", "image", "video", "music", "travel", "dating"}
-        if category_tokens & blocked and not re.search(r"\b(health|medical|clinical|transcrib|summar|note)\b", text):
+        if category_tokens & blocked and not re.search(r"\b(health|medical|clinical|transcrib\w*|summar|note)\b", text):
             return True
-        return not bool(re.search(r"\b(health|medical|clinical|hipaa|patient|doctor|transcrib|summar|notetaker|note)\b", text))
+        return not bool(re.search(r"\b(health|medical|clinical|hipaa|patient|doctor|transcrib\w*|summar|notetaker|note)\b", text))
     if is_security_training_query(q):
         blocked = {"3d", "health", "stock", "finance", "image", "video", "music", "dating"}
         if category_tokens & blocked and not re.search(r"\b(security|cyber|email|training|phishing|dmarc|malware|soc)\b", text):
