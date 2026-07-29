@@ -2323,8 +2323,11 @@ def is_writing_query(q: str) -> bool:
 
 
 def is_marketing_query(q: str) -> bool:
+    # advertis(?:e|es|ed|ing|ements?) covers the verb as well as the noun. The
+    # original spelled out only the noun forms, so "advertise my product" — a
+    # plain way to phrase the request — did not read as a marketing query.
     return bool(re.search(
-        r"\b(?:marketing|email\s+marketing|campaigns?|ads?|advertis(?:ing|ements?)|"
+        r"\b(?:marketing|email\s+marketing|campaigns?|ads?|advertis(?:e|es|ed|ing|ements?)|"
         r"seo|growth\s+marketing|lead\s+gen(?:eration)?|lead\s+capture|newsletter|"
         r"social\s+media|outreach|brand\s+(?:awareness|campaign)|customer\s+acquisition)\b",
         q.lower(),

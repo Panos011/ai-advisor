@@ -187,5 +187,28 @@ class StemInflectionCoverageTests(unittest.TestCase):
                          "re-run ./experiment.sh before changing this")
 
 
+class MarketingVerbTests(unittest.TestCase):
+    """is_marketing_query spelled out only the noun forms of "advertise".
+
+    `advertis(?:ing|ements?)` matches "advertising" and "advertisement", but not
+    the verb, so "advertise my product" — an ordinary way to phrase the request
+    — did not read as a marketing query at all.
+    """
+
+    def test_verb_and_noun_forms_both_match(self):
+        for phrasing in (
+            "advertise my product",
+            "advertises to customers",
+            "advertised campaign",
+            "advertising campaign",
+            "advertisements for my shop",
+        ):
+            self.assertTrue(api.is_marketing_query(phrasing), phrasing)
+
+    def test_unrelated_queries_are_still_excluded(self):
+        for phrasing in ("video editing", "transcribe audio", "invoice OCR"):
+            self.assertFalse(api.is_marketing_query(phrasing), phrasing)
+
+
 if __name__ == "__main__":
     unittest.main()
