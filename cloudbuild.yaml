@@ -106,7 +106,17 @@ steps:
         assert d.get('ok') is True, 'health not ok'
         assert d.get('items',0) > 0, 'no catalogue items loaded'
         assert d.get('vectors_loaded') is True, 'tool vectors did not load'
-        print('health OK: %s items' % d['items'])
+        # _load_claim_store degrades to the lexical fallback on a missing file,
+        # a row-count mismatch or a changed embedding model, and keeps serving
+        # with ok:true. That state is not harmless: measured on the widened
+        # eval it costs ~19 points (99.6 -> 80.7), drops retrieval fitness to
+        # 6/8, and returns ZERO results for terse invoice queries that work
+        # with the index loaded. Fail the deploy rather than ship it quietly.
+        ci=d.get('claim_index') or {}
+        assert ci.get('loaded') is True, (
+            'semantic claim index did not load (serving the lexical fallback); '
+            'manifest=%r' % (ci.get('manifest'),))
+        print('health OK: %s items, %s claims' % (d['items'], ci.get('claims')))
         "
             exit 0
           fi
