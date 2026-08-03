@@ -12,6 +12,7 @@ substitutions:
   _SERVICE: commai-advisor
   _REGION: us-central1
   _RUNTIME_SA: commai-advisor-runtime@ai-discovery-platform.iam.gserviceaccount.com
+  _BUILD_SA: 528649682379-compute@developer.gserviceaccount.com
   # Literal rather than ${PROJECT_ID}: nested substitution inside a
   # substitution value fails at build time, not at trigger-creation time, which
   # is the worst place to discover it.
@@ -98,10 +99,12 @@ steps:
           --format='value(status.url)')
         echo "Verifying $${url}/health"
         for attempt in 1 2 3 4 5; do
-          # Cloud Build runs as a service account, so gcloud can mint a
-          # Google-signed OIDC token for the private service audience without
-          # storing a key or depending on the Compute metadata identity path.
-          token=$(gcloud auth print-identity-token --audiences="$${url}")
+          # Cloud Build's credential is intentionally not exportable as an ID
+          # token. Impersonating the build service account makes the audience
+          # explicit and avoids storing a service-account key.
+          token=$(gcloud auth print-identity-token \
+            --impersonate-service-account=${_BUILD_SA} \
+            --audiences="$${url}")
           if curl -fsS --max-time 60 \
             -H "Authorization: Bearer $${token}" \
             "$${url}/health" -o /tmp/health.json; then
