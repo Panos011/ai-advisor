@@ -98,10 +98,10 @@ steps:
           --format='value(status.url)')
         echo "Verifying $${url}/health"
         for attempt in 1 2 3 4 5; do
-          token=$(curl -fsS -G \
-            -H 'Metadata-Flavor: Google' \
-            --data-urlencode "audience=$${url}" \
-            'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity')
+          # Cloud Build runs as a service account, so gcloud can mint a
+          # Google-signed OIDC token for the private service audience without
+          # storing a key or depending on the Compute metadata identity path.
+          token=$(gcloud auth print-identity-token --audiences="$${url}")
           if curl -fsS --max-time 60 \
             -H "Authorization: Bearer $${token}" \
             "$${url}/health" -o /tmp/health.json; then
