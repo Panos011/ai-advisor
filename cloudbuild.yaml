@@ -100,11 +100,17 @@ steps:
         echo "Verifying $${url}/health"
         for attempt in 1 2 3 4 5; do
           # Cloud Build's credential is intentionally not exportable as an ID
-          # token. Impersonating the build service account makes the audience
-          # explicit and avoids storing a service-account key.
-          token=$(gcloud auth print-identity-token \
-            --impersonate-service-account=${_BUILD_SA} \
-            --audiences="$${url}")
+          # token. Ask IAM Credentials for an audience-bound OpenID token
+          # instead. The build account has only the narrow getOpenIdToken
+          # permission on itself; it cannot mint general access tokens.
+          access_token=$(gcloud auth print-access-token)
+          curl -fsS \
+            -H "Authorization: Bearer $${access_token}" \
+            -H "Content-Type: application/json" \
+            -d "{\"audience\":\"$${url}\",\"includeEmail\":true}" \
+            "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${_BUILD_SA}:generateIdToken" \
+            -o /tmp/id-token.json
+          token=$(python3 -c "import json; print(json.load(open('/tmp/id-token.json'))['token'])")
           if curl -fsS --max-time 60 \
             -H "Authorization: Bearer $${token}" \
             "$${url}/health" -o /tmp/health.json; then
