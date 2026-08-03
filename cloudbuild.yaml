@@ -59,7 +59,7 @@ steps:
       - --image=${_IMAGE}:${SHORT_SHA}
       - --region=${_REGION}
       - --service-account=${_RUNTIME_SA}
-      - --allow-unauthenticated
+      - --no-allow-unauthenticated
       - --memory=2Gi
       - --cpu=1
       - --timeout=300
@@ -98,7 +98,13 @@ steps:
           --format='value(status.url)')
         echo "Verifying $${url}/health"
         for attempt in 1 2 3 4 5; do
-          if curl -fsS --max-time 60 "$${url}/health" -o /tmp/health.json; then
+          token=$(curl -fsS -G \
+            -H 'Metadata-Flavor: Google' \
+            --data-urlencode "audience=$${url}" \
+            'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity')
+          if curl -fsS --max-time 60 \
+            -H "Authorization: Bearer $${token}" \
+            "$${url}/health" -o /tmp/health.json; then
             cat /tmp/health.json
             python3 -c "
         import json,sys
