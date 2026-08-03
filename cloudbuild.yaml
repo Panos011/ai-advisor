@@ -65,7 +65,7 @@ steps:
       - --timeout=300
       - --concurrency=40
       - --set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest
-      - --set-env-vars=CHAT_MODEL=gpt-5.4-mini,EMB_MODEL=text-embedding-3-small
+      - --set-env-vars=CHAT_MODEL=gpt-5.4-mini,LIGHT_CHAT_MODEL=gpt-5.4-nano,EMB_MODEL=text-embedding-3-small
 
   # Fail the build if the deployed revision cannot serve, so a broken image is
   # visible in Cloud Build rather than only in user-facing errors. Cloud Run

@@ -9,7 +9,7 @@ from __future__ import annotations
 import time
 from collections import OrderedDict
 from threading import Lock
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 T = TypeVar("T")
 
@@ -166,7 +166,7 @@ class RuntimeMetrics:
             }
 
 
-# === Per-request degradation and progress context ===
+# === Per-request usage, degradation and progress context ===
 
 import contextvars
 from collections.abc import Callable
@@ -182,6 +182,105 @@ _degradation_reasons: contextvars.ContextVar[list[str] | None] = contextvars.Con
 _progress_callback: contextvars.ContextVar[Callable[[str], None] | None] = contextvars.ContextVar(
     "progress_callback", default=None
 )
+
+# A mutable object is intentional: FastAPI copies ContextVars when it runs a
+# synchronous route in its threadpool, but both contexts still reference this
+# same request-local dictionary. Model calls can therefore add usage in the
+# worker thread and the HTTP middleware can safely emit the final totals as
+# response headers without logging or returning any prompt text.
+_request_usage: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "request_usage", default=None
+)
+
+# Pricing checked 2026-08-03. Values are USD per one million tokens. Unknown
+# model names are still counted, but deliberately receive no guessed cost.
+MODEL_TOKEN_PRICES_USD: dict[str, dict[str, float]] = {
+    "gpt-5.4-mini": {"input": 0.75, "cached_input": 0.075, "output": 4.50},
+    "gpt-5.4-nano": {"input": 0.20, "cached_input": 0.020, "output": 1.25},
+    "text-embedding-3-small": {"input": 0.02, "cached_input": 0.0, "output": 0.0},
+}
+
+
+def begin_request_usage() -> None:
+    _request_usage.set({
+        "input_tokens": 0,
+        "cached_input_tokens": 0,
+        "output_tokens": 0,
+        "estimated_micro_usd": 0,
+        "model_calls": 0,
+        "models": set(),
+    })
+
+
+def current_request_usage() -> dict[str, Any]:
+    usage = _request_usage.get() or {}
+    return {
+        "input_tokens": int(usage.get("input_tokens") or 0),
+        "cached_input_tokens": int(usage.get("cached_input_tokens") or 0),
+        "output_tokens": int(usage.get("output_tokens") or 0),
+        "estimated_micro_usd": int(usage.get("estimated_micro_usd") or 0),
+        "model_calls": int(usage.get("model_calls") or 0),
+        "models": sorted(str(model) for model in (usage.get("models") or set())),
+    }
+
+
+def _usage_value(usage: Any, name: str) -> int:
+    value = getattr(usage, name, 0) if usage is not None else 0
+    try:
+        return max(int(value or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def record_openai_usage(
+    metrics: RuntimeMetrics,
+    model: str,
+    usage: Any,
+    operation: str,
+) -> None:
+    """Record aggregate token/cost data only; prompts are never persisted."""
+    if usage is None:
+        metrics.increment("openai_usage_missing")
+        return
+    input_tokens = _usage_value(usage, "prompt_tokens")
+    if not input_tokens:
+        input_tokens = _usage_value(usage, "input_tokens")
+    output_tokens = _usage_value(usage, "completion_tokens")
+    if not output_tokens:
+        output_tokens = _usage_value(usage, "output_tokens")
+    details = getattr(usage, "prompt_tokens_details", None)
+    cached_tokens = min(_usage_value(details, "cached_tokens"), input_tokens)
+    uncached_tokens = max(input_tokens - cached_tokens, 0)
+
+    price = MODEL_TOKEN_PRICES_USD.get(model)
+    if price:
+        cost_usd = (
+            uncached_tokens * price["input"] +
+            cached_tokens * price["cached_input"] +
+            output_tokens * price["output"]
+        ) / 1_000_000
+        estimated_micro_usd = int(round(cost_usd * 1_000_000))
+    else:
+        estimated_micro_usd = 0
+        metrics.increment("openai_cost_unknown_model")
+
+    safe_operation = operation if operation.replace("_", "").isalnum() else "unknown"
+    metrics.increment("openai_model_calls")
+    metrics.increment(f"openai_model_calls_{safe_operation}")
+    metrics.increment("openai_input_tokens", input_tokens)
+    metrics.increment("openai_cached_input_tokens", cached_tokens)
+    metrics.increment("openai_output_tokens", output_tokens)
+    metrics.increment("openai_estimated_micro_usd", estimated_micro_usd)
+    metrics.increment(f"openai_estimated_micro_usd_{safe_operation}", estimated_micro_usd)
+
+    request_usage = _request_usage.get()
+    if request_usage is not None:
+        request_usage["input_tokens"] += input_tokens
+        request_usage["cached_input_tokens"] += cached_tokens
+        request_usage["output_tokens"] += output_tokens
+        request_usage["estimated_micro_usd"] += estimated_micro_usd
+        request_usage["model_calls"] += 1
+        request_usage["models"].add(model)
 
 
 def begin_degradation_tracking() -> None:
@@ -248,6 +347,10 @@ class Settings:
     )
     emb_model: str = os.getenv("EMB_MODEL", "text-embedding-3-small")
     chat_model: str = os.getenv("CHAT_MODEL", "gpt-5.4-mini")
+    # Only low-risk classification/enrichment work uses the cheaper model.
+    # Recommendation ranking, workflow understanding, architecture and critique
+    # remain on chat_model so cost routing cannot lower decision quality.
+    light_chat_model: str = os.getenv("LIGHT_CHAT_MODEL", "gpt-5.4-nano")
     # .strip() guards against a trailing newline/space in the env var, which makes the
     # Authorization header illegal and causes httpx to fail every call with APIConnectionError.
     openai_api_key: str | None = (os.getenv("OPENAI_API_KEY") or "").strip() or None
@@ -5411,17 +5514,27 @@ class RecommendationService:
         call never hard-fails on an unsupported model.
         """
         started = time.perf_counter()
+        operation = str(kwargs.pop("_operation", "unknown"))
+        model = str(kwargs.get("model") or self.settings.chat_model)
         messages = kwargs.get("messages") or []
         label = (
             str((messages[0] or {}).get("content", ""))[:45].replace("\n", " ")
             if messages else ""
         )
+        def finish(response: Any) -> Any:
+            record_openai_usage(
+                self.metrics,
+                model,
+                getattr(response, "usage", None),
+                operation,
+            )
+            return response
         try:
             if self._reasoning_supported:
                 try:
-                    return self._create_with_format_fallback(
+                    return finish(self._create_with_format_fallback(
                         reasoning_effort=self.settings.reasoning_effort, **kwargs
-                    )
+                    ))
                 except Exception as exc:  # noqa: BLE001 - classified below
                     message = str(exc).lower()
                     # Treat parameter-incompatibility (the param itself, or a clash with
@@ -5446,7 +5559,7 @@ class RecommendationService:
                     )
                     self.metrics.increment("reasoning_effort_unsupported")
                     self._reasoning_supported = False
-            return self._create_with_format_fallback(**kwargs)
+            return finish(self._create_with_format_fallback(**kwargs))
         finally:
             logger.info(
                 "TIMING llm call %.0f ms [%s]",
@@ -5522,6 +5635,12 @@ class RecommendationService:
         _emb_started = time.perf_counter()
         with self.metrics.timer("openai.embeddings_ms"):
             resp = self.client.embeddings.create(model=self.settings.emb_model, input=texts)
+        record_openai_usage(
+            self.metrics,
+            self.settings.emb_model,
+            getattr(resp, "usage", None),
+            "embedding",
+        )
         logger.info("TIMING embedding call %.0f ms (%d input)",
                     (time.perf_counter() - _emb_started) * 1000.0, len(texts))
         vecs = np.array([d.embedding for d in resp.data], dtype="float32")
@@ -7174,6 +7293,7 @@ class RecommendationService:
         try:
             with self.metrics.timer("openai.tool_question_ms"):
                 resp = self._chat_create(
+                    _operation="tool_question",
                     model=self.settings.chat_model,
                     messages=[
                         {"role": "system", "content": system},
@@ -7223,6 +7343,7 @@ class RecommendationService:
         try:
             with self.metrics.timer("openai.chat_only_ms"):
                 resp = self._chat_create(
+                    _operation="chat_only",
                     model=self.settings.chat_model,
                     messages=chat_messages,
                     temperature=0.4,
@@ -7472,6 +7593,7 @@ class RecommendationService:
         try:
             with self.metrics.timer("openai.chat_decision_ms"):
                 resp = self._chat_create(
+                    _operation="chat_decision",
                     model=self.settings.chat_model,
                     messages=[
                         {"role": "system", "content": system},
@@ -7600,6 +7722,7 @@ class RecommendationService:
         try:
             with self.metrics.timer("openai.clarify_ms"):
                 resp = self._chat_create(
+                    _operation="clarify",
                     model=self.settings.chat_model,
                     messages=[
                         {"role": "system", "content": system},
@@ -7685,7 +7808,8 @@ class RecommendationService:
         try:
             with self.metrics.timer("openai.detect_intent_ms"):
                 resp = self._chat_create(
-                    model=self.settings.chat_model,
+                    _operation="detect_intent",
+                    model=self.settings.light_chat_model,
                     messages=[
                         {"role": "system", "content": system},
                         {
@@ -7721,6 +7845,7 @@ class RecommendationService:
         try:
             with self.metrics.timer("openai.understand_workflow_ms"):
                 resp = self._chat_create(
+                    _operation="understand_workflow",
                     model=self.settings.chat_model,
                     messages=[
                         {"role": "system", "content": WORKFLOW_UNDERSTANDING_SYSTEM},
@@ -7781,6 +7906,7 @@ class RecommendationService:
         try:
             with self.metrics.timer("openai.workflow_critic_ms"):
                 resp = self._chat_create(
+                    _operation="workflow_critic",
                     model=self.settings.chat_model,
                     messages=[
                         {"role": "system", "content": WORKFLOW_CRITIC_SYSTEM},
@@ -7841,6 +7967,7 @@ class RecommendationService:
                 if baseline:
                     user += f"\n\nBaseline step outline:\n{baseline}"
                 resp = self._chat_create(
+                    _operation="workflow_architect",
                     model=self.settings.chat_model,
                     messages=[
                         {"role": "system", "content": WORKFLOW_ARCHITECT_SYSTEM},
@@ -7942,7 +8069,8 @@ class RecommendationService:
         try:
             with self.metrics.timer("openai.enrich_news_ms"):
                 resp = self._chat_create(
-                    model=self.settings.chat_model,
+                    _operation="enrich_news",
+                    model=self.settings.light_chat_model,
                     messages=[
                         {"role": "system", "content": NEWS_ENRICH_SYSTEM},
                         {
@@ -8180,6 +8308,7 @@ class RecommendationService:
             _rank_started = time.perf_counter()
             with self.metrics.timer("openai.rank_ms"):
                 resp = self._chat_create(
+                    _operation="rank",
                     model=self.settings.chat_model,
                     messages=[
                         {
@@ -8414,8 +8543,20 @@ async def log_request_timing(request: Request, call_next):
     message triggers and how long each takes — the LLM round-trips dominate latency,
     so this pinpoints whether the cost is one call or several stacked."""
     start = time.perf_counter()
+    begin_request_usage()
     response = await call_next(request)
     elapsed_ms = (time.perf_counter() - start) * 1000.0
+    usage = current_request_usage()
+    response.headers["X-CommAI-Usage-Input-Tokens"] = str(usage["input_tokens"])
+    response.headers["X-CommAI-Usage-Cached-Input-Tokens"] = str(
+        usage["cached_input_tokens"]
+    )
+    response.headers["X-CommAI-Usage-Output-Tokens"] = str(usage["output_tokens"])
+    response.headers["X-CommAI-Usage-Estimated-Micro-USD"] = str(
+        usage["estimated_micro_usd"]
+    )
+    response.headers["X-CommAI-Usage-Model-Calls"] = str(usage["model_calls"])
+    response.headers["X-CommAI-Usage-Models"] = ",".join(usage["models"])
     if request.url.path not in ("/health", "/", "/metrics"):
         logger.info("TIMING %s %s -> %s in %.0f ms",
                     request.method, request.url.path, response.status_code, elapsed_ms)
@@ -8525,6 +8666,15 @@ def metrics(request: Request):
     return {
         **request.app.state.metrics.snapshot(),
         "cache": recommender.cache_stats(),
+        "cost_estimation": {
+            "currency": "USD",
+            "unit": "per_million_tokens",
+            "checked_at": "2026-08-03",
+            "prices": MODEL_TOKEN_PRICES_USD,
+            "core_model": recommender.settings.chat_model,
+            "light_model": recommender.settings.light_chat_model,
+            "embedding_model": recommender.settings.emb_model,
+        },
     }
 
 

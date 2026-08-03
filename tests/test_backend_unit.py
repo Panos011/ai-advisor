@@ -24,8 +24,10 @@ from api import (
     UserContext,
     alternative_requests_new_search,
     begin_degradation_tracking,
+    begin_request_usage,
     build_retrieval_query,
     current_degradation_reasons,
+    current_request_usage,
     note_degradation,
     clean_assistant_message,
     clean_best_for,
@@ -48,12 +50,49 @@ from api import (
     off_topic_for_query,
     recommendation_message,
     recent_dialogue_turns,
+    record_openai_usage,
     referenced_similar_tool,
     requested_monthly_price_cap,
     requires_no_cloud_data,
     request_goal,
     sanitize_reason,
 )
+
+
+class OpenAIUsageTelemetryTests(unittest.TestCase):
+    def test_records_cached_tokens_and_exact_estimated_cost_without_prompt_text(self):
+        metrics = RuntimeMetrics()
+        begin_request_usage()
+        usage = SimpleNamespace(
+            prompt_tokens=1_000,
+            completion_tokens=200,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=400),
+        )
+
+        record_openai_usage(metrics, "gpt-5.4-mini", usage, "rank")
+
+        request_usage = current_request_usage()
+        self.assertEqual(request_usage["input_tokens"], 1_000)
+        self.assertEqual(request_usage["cached_input_tokens"], 400)
+        self.assertEqual(request_usage["output_tokens"], 200)
+        self.assertEqual(request_usage["estimated_micro_usd"], 1_380)
+        self.assertEqual(request_usage["models"], ["gpt-5.4-mini"])
+        counters = metrics.snapshot()["counters"]
+        self.assertEqual(counters["openai_model_calls_rank"], 1)
+        self.assertEqual(counters["openai_estimated_micro_usd_rank"], 1_380)
+        self.assertNotIn("prompt", request_usage)
+
+    def test_unknown_model_counts_tokens_without_guessing_a_price(self):
+        metrics = RuntimeMetrics()
+        begin_request_usage()
+        record_openai_usage(
+            metrics,
+            "future-model",
+            SimpleNamespace(prompt_tokens=10, completion_tokens=3),
+            "rank",
+        )
+        self.assertEqual(current_request_usage()["estimated_micro_usd"], 0)
+        self.assertEqual(metrics.snapshot()["counters"]["openai_cost_unknown_model"], 1)
 
 
 class FakeIndex:
@@ -4836,9 +4875,11 @@ class WorkflowUnderstandingChatCompletions:
         self.payload = payload or {}
         self.fail = fail
         self.calls = 0
+        self.last_model = None
 
-    def create(self, **_kwargs):
+    def create(self, **kwargs):
         self.calls += 1
+        self.last_model = kwargs.get("model")
         if self.fail:
             raise RuntimeError("model unavailable")
         content = json.dumps(self.payload)
@@ -4880,6 +4921,10 @@ class WorkflowUnderstandingTests(unittest.TestCase):
         self.assertEqual(result["destination"], "Email newsletter")
         self.assertTrue(result["approval_required"])
         self.assertTrue(result["sensitive_data"])
+        self.assertEqual(
+            service.client.chat.completions.last_model,
+            service.settings.chat_model,
+        )
 
     def test_defaults_to_create_when_model_returns_no_valid_stage(self):
         service = make_service(client=WorkflowUnderstandingClient(payload={
@@ -4910,9 +4955,11 @@ class NewsEnrichChatCompletions:
         self.payload = payload or {}
         self.fail = fail
         self.calls = 0
+        self.last_model = None
 
-    def create(self, **_kwargs):
+    def create(self, **kwargs):
         self.calls += 1
+        self.last_model = kwargs.get("model")
         if self.fail:
             raise RuntimeError("model unavailable")
         return SimpleNamespace(choices=[SimpleNamespace(
@@ -4943,6 +4990,10 @@ class NewsEnrichmentTests(unittest.TestCase):
         self.assertEqual(result["source"], "llm")
         self.assertEqual([e["id"] for e in result["enrichments"]], ["a", "b"])
         self.assertEqual(result["enrichments"][0]["verdict"], "major_release")
+        self.assertEqual(
+            service.client.chat.completions.last_model,
+            service.settings.light_chat_model,
+        )
 
     def test_drops_duplicate_ids_and_bad_verdicts(self):
         service = make_service(client=NewsEnrichClient(payload={"enrichments": [
