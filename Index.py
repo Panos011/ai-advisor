@@ -18,6 +18,7 @@ df = df[df["doc"].str.len() > 5].reset_index(drop=True)
 meta = []
 for _, r in df.iterrows():
     meta.append({
+        "Tool_ID": r.get("Tool_ID", ""),
         "Name": r.get("Name", ""),
         "Logo_URL": r.get("Logo_URL", ""),
         "Logo_File": r.get("Logo_File", ""),
