@@ -11,6 +11,8 @@ import gzip
 import json
 import os
 import re
+from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 
@@ -24,6 +26,7 @@ FIELDNAMES = [
     "Tool_link", "Categories", "Unique_Value", "Tool_ID",
 ]
 MAX_CATALOG_BYTES = 64 * 1024 * 1024
+CATALOG_STATE = "index/catalog_publication.json"
 
 
 def clean(value):
@@ -161,13 +164,36 @@ def download_catalog(url):
 def apply_backfill(backfill, path=DATASET):
     catalog = download_catalog(clean(backfill.get("catalogDownloadUrl")))
     expected_version = clean(backfill.get("catalogVersion"))
-    if clean(catalog.get("catalogVersion")) != expected_version:
+    artifact_version = clean(catalog.get("catalogVersion"))
+    legacy_unversioned = (
+        not artifact_version
+        and backfill.get("allowLegacyUnversioned") is True
+    )
+    if not legacy_unversioned and artifact_version != expected_version:
         raise ValueError("Downloaded catalogue version does not match the dispatch.")
     expected_count = int(backfill.get("toolCount") or 0)
     if expected_count and len(catalog["tools"]) != expected_count:
         raise ValueError("Downloaded catalogue count does not match the dispatch.")
     blocked = build_match_keys(load_blocklist())
+    existing_rows = read_rows(path)
+    by_id = {}
+    by_name = {}
+    by_domain = {}
+    for index, existing in enumerate(existing_rows):
+        tool_id = clean(existing.get("Tool_ID"))
+        name = clean(existing.get("Name")).lower()
+        domain = website_domain(
+            existing.get("Tool_link") or existing.get("Source_URL")
+        )
+        if tool_id:
+            by_id.setdefault(tool_id, []).append(index)
+        if name:
+            by_name.setdefault(name, []).append(index)
+        if domain:
+            by_domain.setdefault(domain, []).append(index)
+
     rows = []
+    consumed_existing = set()
     seen_ids = set()
     for tool in catalog["tools"]:
         if not isinstance(tool, dict):
@@ -183,11 +209,50 @@ def apply_backfill(backfill, path=DATASET):
         if not row["Tool_ID"] or row["Tool_ID"] in seen_ids:
             raise ValueError("Published catalogue has a missing or duplicate tool id.")
         seen_ids.add(row["Tool_ID"])
+        matches = set(by_id.get(row["Tool_ID"], []))
+        matches.update(by_name.get(row["Name"].lower(), []))
+        domain = website_domain(row.get("Tool_link") or row.get("Source_URL"))
+        if domain:
+            matches.update(by_domain.get(domain, []))
+        if matches:
+            original = existing_rows[min(matches)]
+            row = {
+                field: row.get(field) or clean(original.get(field))
+                for field in FIELDNAMES
+            }
+            consumed_existing.update(matches)
         rows.append(row)
-    if len(rows) != len(catalog["tools"]):
+    published_count = len(rows)
+    if published_count != len(catalog["tools"]):
         raise ValueError("Not every published tool was converted for Advisor.")
+
+    # Rows without Tool_ID predate catalogue sync and remain valid long-tail
+    # Advisor options. Preserve them unless a published row matched them. Rows
+    # with Tool_ID are catalogue-managed, so an absent ID means the tool was
+    # archived and must disappear from Advisor on this rebuild.
+    rows.extend(
+        existing for index, existing in enumerate(existing_rows)
+        if index not in consumed_existing and not clean(existing.get("Tool_ID"))
+    )
     write_rows(rows, path)
     return len(rows)
+
+
+def write_catalog_state(backfill, row_count, path=CATALOG_STATE):
+    """Record which full catalogue version the committed index represents."""
+    version = clean(backfill.get("catalogVersion"))
+    if not version:
+        raise ValueError("Backfill catalogue version is required for state.")
+    state = {
+        "schema": 1,
+        "catalogVersion": version,
+        "catalogGeneratedAt": clean(backfill.get("catalogGeneratedAt")),
+        "rows": int(row_count),
+        "appliedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 
 
 def parse_payload(path):
@@ -208,11 +273,11 @@ def main():
     parser.add_argument("--dataset", default=DATASET)
     args = parser.parse_args()
     kind, data = parse_payload(args.payload)
-    count = (
-        apply_upsert(data, args.dataset)
-        if kind == "upsert"
-        else apply_backfill(data, args.dataset)
-    )
+    if kind == "upsert":
+        count = apply_upsert(data, args.dataset)
+    else:
+        count = apply_backfill(data, args.dataset)
+        write_catalog_state(data, count)
     print(f"Applied Advisor {kind}; canonical dataset now has {count} tools.")
 
 

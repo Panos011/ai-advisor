@@ -77,6 +77,14 @@ manifest = {
     "source_csv": CSV_IN,
     "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
 }
+catalog_state_path = os.path.join(INDEX_DIR, "catalog_publication.json")
+if os.path.exists(catalog_state_path):
+    with open(catalog_state_path, encoding="utf-8") as state_file:
+        catalog_state = json.load(state_file)
+    if catalog_state.get("catalogVersion"):
+        manifest["catalog_version"] = catalog_state["catalogVersion"]
+    if catalog_state.get("catalogGeneratedAt"):
+        manifest["catalog_generated_at"] = catalog_state["catalogGeneratedAt"]
 with open(os.path.join(INDEX_DIR, "index_manifest.json"), "w", encoding="utf-8") as f:
     json.dump(manifest, f, indent=2)
 

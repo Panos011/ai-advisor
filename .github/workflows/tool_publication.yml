@@ -3,6 +3,9 @@ name: Advisor tool publication sync
 on:
   repository_dispatch:
     types: [advisor-tool-upserted, advisor-catalog-backfill-requested]
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -22,32 +25,42 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          lfs: true
-
-      - name: Git LFS install
-        run: git lfs install
+          lfs: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      - name: Prepare the newest catalogue publication
+        id: payload
+        env:
+          CLIENT_PAYLOAD: ${{ github.event_name == 'repository_dispatch' && toJson(github.event.client_payload) || '' }}
+        run: |
+          python Catalog_Publication_Poll.py \
+            --payload /tmp/publication_payload.json \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Download the canonical dataset
+        if: steps.payload.outputs.needs_sync == 'true'
+        run: |
+          git lfs install
+          git lfs pull
+
       - name: Install publication dependencies
+        if: steps.payload.outputs.needs_sync == 'true'
         run: |
           pip install -r requirements.runtime.txt pandas firebase-admin
 
-      - name: Write bounded dispatch payload
-        env:
-          CLIENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
-        run: printf '%s' "$CLIENT_PAYLOAD" > /tmp/publication_payload.json
-
       - name: Apply publication and rebuild retrieval indexes
+        if: steps.payload.outputs.needs_sync == 'true'
         run: |
           python Apply_Publications.py --payload /tmp/publication_payload.json
           python Data_Cleaning.py
           python Index.py
 
       - name: Commit and push the rebuilt dataset
+        if: steps.payload.outputs.needs_sync == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -63,6 +76,7 @@ jobs:
 
       - name: Verify the rebuilt index reached production
         id: production
+        if: steps.payload.outputs.needs_sync == 'true'
         run: |
           python Wait_For_Advisor_Deploy.py \
             --manifest index/index_manifest.json \
@@ -70,8 +84,9 @@ jobs:
             --initial-delay 60
 
       - name: Settle CommAI publication readiness
-        if: always()
+        if: always() && steps.payload.outputs.needs_sync == 'true'
         run: |
+          pip install firebase-admin
           python Advisor_Publication_Callback.py \
             --payload /tmp/publication_payload.json \
             --outcome "${{ steps.production.outcome }}" \
