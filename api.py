@@ -370,6 +370,11 @@ class Settings:
     # latency lever: the rank prompt scales linearly with this. Set RANK_K >=
     # retrieve_k to restore the previous "rank everything retrieved" behavior.
     rank_k: int = _int_env("RANK_K", 15)
+    # Upper bound for the evidence-balanced shortlist. Retrieval still searches
+    # the complete FAISS/keyword/claim indexes; this only limits the compact set
+    # sent to the LLM. A separate ceiling keeps long-tail recall improvements
+    # from turning into unbounded prompt cost or latency.
+    max_rank_k: int = _int_env("MAX_RANK_K", 24)
     # Reasoning effort for the chat model. Only relevant for reasoning models;
     # gpt-5.4-mini is a fast non-reasoning model, so this is off by default and the
     # parameter is omitted entirely. Opt in with REASONING_EFFORT=low/medium/high
@@ -4874,8 +4879,59 @@ def filter_candidates_for_query_domain(
 ) -> list[dict[str, Any]]:
     return [
         candidate for candidate in candidates
-        if matches_query_domain(q, meta_rows[int(candidate["id"])])
+        if (
+            matches_query_domain(q, meta_rows[int(candidate["id"])])
+            or direct_claim_supports_query(q, candidate)
+        )
     ]
+
+
+def direct_claim_supports_query(q: str, candidate: dict[str, Any]) -> bool:
+    """Allow a strong open-vocabulary claim to rescue a new specialist.
+
+    Domain classifiers remain useful coarse guards, but they cannot know the
+    vocabulary of every future product. Only claims actually retrieved for this
+    query (they carry ``similarity``) may bypass that coarse classifier.
+    """
+    if "capability_claim" not in candidate_retrieval_scores(candidate):
+        return False
+    raw_query_tokens = {
+        token for token in tokens(strip_instruction_text(q))
+        if len(token) >= 3 and token not in {
+            "the", "and", "for", "with", "from", "that", "this", "tool",
+            "tools", "software", "best", "need", "want", "find", "using",
+        }
+    }
+    for claim in candidate.get("evidence_claims") or []:
+        try:
+            similarity = float(claim.get("similarity"))
+        except (TypeError, ValueError):
+            continue
+        statement_tokens = set(tokens(
+            str(claim.get("source_quote") or claim.get("statement") or "")
+        ))
+        overlap = raw_query_tokens & statement_tokens
+        retrieval_kind = str(claim.get("retrieval_kind") or "semantic")
+        if retrieval_kind == "lexical":
+            needed = 1 if len(raw_query_tokens) <= 2 else 2
+            if len(overlap) >= needed and similarity >= 0.25:
+                return True
+        elif similarity >= 0.62 or (similarity >= 0.42 and overlap):
+            return True
+    return False
+
+
+def candidate_is_on_topic(
+    q: str,
+    candidate: dict[str, Any],
+    meta: dict[str, Any],
+) -> bool:
+    """Use the known-domain guard, with a grounded route for novel tools."""
+    categories = str(candidate.get("categories") or meta.get("Categories") or "")
+    return (
+        not off_topic_for_query(q, categories, meta)
+        or direct_claim_supports_query(q, candidate)
+    )
 
 
 def coding_rescue_scores(q: str, k: int, meta_rows: list[dict[str, Any]]) -> list[tuple[float, int]]:
@@ -5038,6 +5094,183 @@ def mmr_rerank(
             have_selection = True
 
     return [candidates[i] for i in selected_indices]
+
+
+RETRIEVAL_CHANNELS = (
+    "capability_claim",
+    "keyword",
+    "semantic",
+    "coding_rescue",
+)
+
+
+def candidate_retrieval_scores(candidate: dict[str, Any]) -> dict[str, float]:
+    """Return comparable per-channel retrieval evidence for a candidate.
+
+    Older cached/test candidates have only ``score`` and ``retrieval_source``;
+    keep accepting those so this rollout does not invalidate existing data.
+    """
+    raw = candidate.get("retrieval_scores")
+    if isinstance(raw, dict):
+        scores: dict[str, float] = {}
+        for channel, value in raw.items():
+            if channel not in RETRIEVAL_CHANNELS:
+                continue
+            try:
+                scores[channel] = float(value)
+            except (TypeError, ValueError):
+                continue
+        if scores:
+            return scores
+
+    source = str(candidate.get("retrieval_source") or "faiss").lower()
+    try:
+        score = float(candidate.get("score", 0.0))
+    except (TypeError, ValueError):
+        score = 0.0
+    scores = {}
+    if "claim" in source:
+        scores["capability_claim"] = score
+    if "keyword" in source or "hybrid" in source:
+        scores["keyword"] = score
+    if "coding_rescue" in source:
+        scores["coding_rescue"] = score
+    if "faiss" in source or "hybrid" in source or not scores:
+        scores["semantic"] = score
+    return scores
+
+
+def fuse_retrieval_channels(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Fuse retrieval channels without comparing incompatible raw scores.
+
+    FAISS cosine scores, keyword points and claim similarities use different
+    numeric scales. Taking their raw maximum made a keyword score such as 8.0
+    dominate a strong 0.9 semantic/claim match. Rank fusion makes the best tool
+    from each channel comparable, while giving a small bonus to tools confirmed
+    by more than one independent path.
+    """
+    if not candidates:
+        return []
+
+    channel_ranks: dict[str, dict[int, int]] = {}
+    for channel in RETRIEVAL_CHANNELS:
+        ranked = [
+            (candidate_retrieval_scores(candidate).get(channel), index)
+            for index, candidate in enumerate(candidates)
+        ]
+        ranked = [item for item in ranked if item[0] is not None]
+        ranked.sort(key=lambda item: float(item[0]), reverse=True)
+        channel_ranks[channel] = {
+            index: rank for rank, (_, index) in enumerate(ranked, start=1)
+        }
+
+    fused: list[dict[str, Any]] = []
+    for index, original in enumerate(candidates):
+        candidate = dict(original)
+        scores = candidate_retrieval_scores(candidate)
+        contributions = [
+            1.0 / (2.0 + channel_ranks[channel][index])
+            for channel in scores
+            if index in channel_ranks.get(channel, {})
+        ]
+        # The best independent route supplies the main relevance signal. Extra
+        # routes corroborate it, but cannot overwhelm a single exact specialist.
+        best = max(contributions, default=0.0)
+        corroboration = sum(contributions) - best
+        candidate["retrieval_scores"] = scores
+        candidate["score"] = best + (0.20 * corroboration)
+        fused.append(candidate)
+
+    fused.sort(key=lambda candidate: float(candidate.get("score", 0.0)), reverse=True)
+    return fused
+
+
+def retrieval_channel_champions(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return the strongest distinct candidate from every available route."""
+    champions: list[dict[str, Any]] = []
+    seen_ids: set[int] = set()
+    for channel in RETRIEVAL_CHANNELS:
+        eligible = [
+            candidate for candidate in candidates
+            if channel in candidate_retrieval_scores(candidate)
+        ]
+        if not eligible:
+            continue
+        champion = max(
+            eligible,
+            key=lambda candidate: candidate_retrieval_scores(candidate)[channel],
+        )
+        candidate_id = int(champion["id"])
+        if candidate_id not in seen_ids:
+            seen_ids.add(candidate_id)
+            champions.append(champion)
+    champions.sort(key=lambda candidate: float(candidate.get("score", 0.0)), reverse=True)
+    return champions
+
+
+def evidence_balanced_mmr_rerank(
+    candidates: list[dict[str, Any]],
+    embeddings: np.ndarray,
+    lambda_: float = 0.7,
+    top_k: int = 30,
+) -> list[dict[str, Any]]:
+    """Diversify while keeping each retrieval route represented.
+
+    This is the long-tail guardrail: a tool rescued by an exact feature claim
+    cannot be silently removed merely because broad semantic candidates are
+    numerous. The LLM still decides whether that specialist actually wins.
+    """
+    if not candidates or top_k <= 0:
+        return []
+    fused = fuse_retrieval_channels(candidates)
+    embedding_by_id = {
+        int(candidate["id"]): embeddings[index]
+        for index, candidate in enumerate(candidates)
+    }
+    fused_embeddings = np.asarray(
+        [embedding_by_id[int(candidate["id"])] for candidate in fused],
+        dtype="float32",
+    )
+    diversified = mmr_rerank(
+        fused,
+        fused_embeddings,
+        lambda_=lambda_,
+        top_k=min(top_k, len(fused)),
+    )
+
+    champions = retrieval_channel_champions(fused)
+    if len(champions) > top_k:
+        champions = champions[:top_k]
+    champion_ids = {int(candidate["id"]) for candidate in champions}
+    result = [*champions]
+    result.extend(
+        candidate for candidate in diversified
+        if int(candidate["id"]) not in champion_ids
+    )
+    return result[: min(top_k, len(result))]
+
+
+def rank_candidate_budget(
+    configured_rank_k: int,
+    max_rank_k: int,
+    final_k: int,
+    candidates: list[dict[str, Any]],
+) -> int:
+    """Bound prompt size while allowing multiple retrieval routes to compete."""
+    if not candidates:
+        return 0
+    channel_count = len({
+        channel
+        for candidate in candidates
+        for channel in candidate_retrieval_scores(candidate)
+    })
+    evidence_floor = final_k * (4 if channel_count >= 3 else 3)
+    desired = max(configured_rank_k, final_k, evidence_floor)
+    return min(len(candidates), max(max_rank_k, final_k), desired)
 
 
 # === Structured output schemas ===
@@ -6266,11 +6499,17 @@ class RecommendationService:
                     if candidate is None:
                         candidate = self._candidate_for_id(tool_id, claim_score)
                         candidate["retrieval_source"] = "capability_claim"
+                        candidate["retrieval_scores"] = {
+                            "capability_claim": claim_score
+                        }
                         by_id[tool_id] = candidate
                     else:
                         candidate["score"] = max(
                             float(candidate.get("score", 0.0)), claim_score
                         )
+                        candidate.setdefault("retrieval_scores", {})[
+                            "capability_claim"
+                        ] = claim_score
                         candidate["retrieval_source"] = (
                             f"{candidate.get('retrieval_source', 'faiss')}+capability_claim"
                         )
@@ -6295,9 +6534,15 @@ class RecommendationService:
                     if candidate is None:
                         candidate = self._candidate_for_id(id_, score)
                         candidate["retrieval_source"] = "coding_rescue"
+                        candidate["retrieval_scores"] = {
+                            "coding_rescue": float(score)
+                        }
                         by_id[id_] = candidate
                     else:
                         candidate["score"] = max(float(candidate.get("score", 0.0)), float(score))
+                        candidate.setdefault("retrieval_scores", {})[
+                            "coding_rescue"
+                        ] = float(score)
                         candidate["retrieval_source"] = "hybrid_coding_rescue"
                 candidates = list(by_id.values())
             if (
@@ -6317,9 +6562,9 @@ class RecommendationService:
             ):
                 candidates = [
                     candidate for candidate in candidates
-                    if not off_topic_for_query(
+                    if candidate_is_on_topic(
                         retrieval_query,
-                        str(candidate.get("categories", "")),
+                        candidate,
                         candidate_meta(candidate, self.store.meta),
                     )
                 ]
@@ -6466,12 +6711,26 @@ class RecommendationService:
         if not candidates:
             return {"hits": [], "message": recommendation_message([], q, mode, pick_best=pick_best)}
 
-        # Diversify, then hand the LLM ranker only a trimmed shortlist. Never go below
-        # the number of tools we intend to return, and never above what we retrieved.
-        rank_k = max(min(self.settings.rank_k, retrieve_k), effective_final_k)
+        # Diversify, then hand the LLM a bounded evidence-balanced shortlist.
+        # The complete indexes were searched above; this stage must not turn one
+        # retrieval route (or the caller's initial retrieve_k) into a hidden
+        # whitelist that removes strong long-tail specialists before evaluation.
+        rank_k = rank_candidate_budget(
+            self.settings.rank_k,
+            self.settings.max_rank_k,
+            effective_final_k,
+            candidates,
+        )
+        self.metrics.increment("recommend_candidates_before_rank", len(candidates))
+        for channel in {
+            channel
+            for candidate in candidates
+            for channel in candidate_retrieval_scores(candidate)
+        }:
+            self.metrics.increment(f"recommend_candidate_channel_{channel}")
         candidate_embeddings = self._candidate_embeddings([int(c["id"]) for c in candidates])
         with self.metrics.timer("rerank.mmr_ms"):
-            candidates = mmr_rerank(
+            candidates = evidence_balanced_mmr_rerank(
                 candidates,
                 candidate_embeddings,
                 lambda_=self.settings.mmr_lambda,
@@ -8146,8 +8405,14 @@ class RecommendationService:
             if candidate is None:
                 by_id[id_] = self._candidate_for_id(id_, keyword_score)
                 by_id[id_]["retrieval_source"] = "keyword"
+                by_id[id_]["retrieval_scores"] = {
+                    "keyword": float(keyword_score)
+                }
             else:
                 candidate["score"] = max(float(candidate.get("score", 0.0)), float(keyword_score))
+                candidate.setdefault("retrieval_scores", {})[
+                    "keyword"
+                ] = float(keyword_score)
                 candidate["retrieval_source"] = "hybrid"
 
         merged = list(by_id.values())
@@ -8210,7 +8475,11 @@ class RecommendationService:
                 continue
             if tool_id < 0 or tool_id >= len(self.store.meta):
                 continue
-            match = {**claim, "similarity": float(score)}
+            match = {
+                **claim,
+                "similarity": float(score),
+                "retrieval_kind": retrieval_kind,
+            }
             matches = by_tool.setdefault(tool_id, [])
             if len(matches) < 3:
                 matches.append(match)
@@ -8225,6 +8494,7 @@ class RecommendationService:
             "id": id_,
             "score": float(score),
             "retrieval_source": "faiss",
+            "retrieval_scores": {"semantic": float(score)},
             "name": m.get("Name", ""),
             "categories": m.get("Categories", ""),
             "price": m.get("Price", ""),
