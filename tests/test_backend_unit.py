@@ -3931,6 +3931,134 @@ class GroundedRequirementTests(unittest.TestCase):
         self.assertNotIn(1, matches)
 
 
+class CatalogueWideRetrievalTests(unittest.TestCase):
+    """Every active tool can compete; no retrieval path is a hidden whitelist."""
+
+    def _candidate(self, id_, score, source, channel, channel_score):
+        return {
+            "id": id_,
+            "score": score,
+            "retrieval_source": source,
+            "retrieval_scores": {channel: channel_score},
+            "name": f"Tool {id_}",
+            "categories": "general",
+        }
+
+    def test_incompatible_raw_score_scales_are_rank_fused(self):
+        candidates = [
+            self._candidate(1, 24.0, "keyword", "keyword", 24.0),
+            self._candidate(
+                2, 0.92, "capability_claim", "capability_claim", 0.92
+            ),
+        ]
+
+        fused = api_module.fuse_retrieval_channels(candidates)
+        by_id = {candidate["id"]: candidate for candidate in fused}
+
+        # Both are the best result from an independent retrieval route. The
+        # arbitrary 24-vs-0.92 units must not decide which one the LLM sees.
+        self.assertAlmostEqual(by_id[1]["score"], by_id[2]["score"])
+
+    def test_claim_specialist_survives_broad_semantic_crowd(self):
+        candidates = [
+            self._candidate(index, 0.99 - index * 0.01, "faiss", "semantic", 0.99 - index * 0.01)
+            for index in range(10)
+        ]
+        candidates.append(
+            self._candidate(
+                99,
+                0.61,
+                "capability_claim",
+                "capability_claim",
+                0.61,
+            )
+        )
+        embeddings = np.asarray(
+            [[1.0, 0.0] for _ in range(10)] + [[0.0, 1.0]],
+            dtype="float32",
+        )
+
+        shortlisted = api_module.evidence_balanced_mmr_rerank(
+            candidates,
+            embeddings,
+            top_k=5,
+        )
+
+        self.assertIn(99, [candidate["id"] for candidate in shortlisted])
+
+    def test_rank_budget_is_not_capped_by_initial_retrieve_k(self):
+        candidates = [
+            {
+                "id": index,
+                "score": 1.0 - index / 100.0,
+                "retrieval_scores": {
+                    "semantic": 1.0 - index / 100.0,
+                    **({"keyword": 10.0 - index} if index < 5 else {}),
+                    **({"capability_claim": 0.9 - index / 100.0} if index >= 10 else {}),
+                },
+            }
+            for index in range(20)
+        ]
+
+        self.assertEqual(
+            api_module.rank_candidate_budget(15, 24, 5, candidates),
+            20,
+        )
+
+    def test_direct_retrieved_claim_can_rescue_unknown_specialist(self):
+        candidate = {
+            "id": 7,
+            "score": 0.74,
+            "retrieval_source": "capability_claim",
+            "retrieval_scores": {"capability_claim": 0.74},
+            "categories": "developer tools",
+            "evidence_claims": [{
+                "id": "tool:7:features:1",
+                "source_quote": (
+                    "Measures marketing campaign attribution and advertising ROI."
+                ),
+                "similarity": 0.74,
+                "retrieval_kind": "semantic",
+            }],
+        }
+        meta = {
+            "Name": "NicheMetric",
+            "Categories": "developer tools",
+            "Description": "Specialist analytics product.",
+        }
+
+        self.assertTrue(api_module._off_topic_by_categories(
+            "measure marketing campaign attribution", "developer tools"
+        ))
+        self.assertTrue(api_module.candidate_is_on_topic(
+            "measure marketing campaign attribution", candidate, meta
+        ))
+
+    def test_unrelated_claim_cannot_bypass_domain_guard(self):
+        candidate = {
+            "id": 8,
+            "score": 0.31,
+            "retrieval_source": "capability_claim",
+            "retrieval_scores": {"capability_claim": 0.31},
+            "categories": "image generation",
+            "evidence_claims": [{
+                "id": "tool:8:features:1",
+                "source_quote": "Creates decorative images from prompts.",
+                "similarity": 0.31,
+                "retrieval_kind": "semantic",
+            }],
+        }
+        meta = {
+            "Name": "Painter",
+            "Categories": "image generation",
+            "Description": "Creates decorative images from prompts.",
+        }
+
+        self.assertFalse(api_module.candidate_is_on_topic(
+            "measure marketing campaign attribution", candidate, meta
+        ))
+
+
 class _RankCapturingCompletions:
     """Planner returns {} (fall through to gates); ranker returns a fixed pick and
     records the user message so tests can inspect the personalization block."""

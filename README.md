@@ -53,6 +53,18 @@ Recommended chat flow:
 Behind 'POST /chat', the recommender uses:
 'FAISS' for vector retrieval, 'MMR' for candidate diversity, and a RAG ranking step where the chat model chooses from retrieved catalogue records only.
 
+Every active catalogue tool is eligible for recommendation. There is no
+"top tools" allow-list: the semantic index compares the request with the full
+catalogue, keyword retrieval scans every record, and the claim index can rescue
+a specialist from one exact feature or use-case statement. Before the LLM sees
+the bounded shortlist, reciprocal-rank fusion makes the independent retrieval
+score scales comparable and evidence-balanced MMR preserves the strongest
+candidate from each route. `RANK_K` controls the normal shortlist size and
+`MAX_RANK_K` (default 24) caps expansion, so broader coverage cannot create an
+unbounded latency or prompt-cost increase. Budget, privacy, hosting and platform
+requirements remain hard eligibility checks; popularity and catalogue position
+are never ranking inputs.
+
 Each response includes a 'contract' object that names this pipeline and the expected tool-card fields. Each recommendation hit contains:
 'score', 'why', 'tradeoff', 'best_for', 'fit_label', 'cost_summary', and 'meta'. The mobile card can use 'meta.Name', 'meta.Categories', 'meta.Price', 'meta.Description', 'meta.Tool_link', 'meta.Logo_URL', and 'meta.Logo_File'.
 
