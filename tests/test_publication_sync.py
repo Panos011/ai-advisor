@@ -19,9 +19,20 @@ from Catalog_Publication_Poll import (
     parse_catalog_metadata,
     read_applied_version,
 )
+from Normalise_Workflow_Key import normalise_secret
 
 
 class PublicationSyncTests(unittest.TestCase):
+    def test_workflow_key_normalisation_removes_paste_artifacts(self):
+        self.assertEqual(
+            normalise_secret('  "sk-project-key\n"  '),
+            "sk-project-key",
+        )
+        self.assertEqual(
+            normalise_secret("OPENAI_API_KEY='sk-project-key\r\n'"),
+            "sk-project-key",
+        )
+
     def test_incremental_upsert_updates_by_tool_id_without_duplicates(self):
         with tempfile.TemporaryDirectory() as folder:
             dataset = Path(folder) / "tools.csv"

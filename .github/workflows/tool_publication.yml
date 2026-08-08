@@ -41,6 +41,10 @@ jobs:
             --payload /tmp/publication_payload.json \
             --github-output "$GITHUB_OUTPUT"
 
+      - name: Normalise the private embedding credential
+        if: steps.payload.outputs.needs_sync == 'true'
+        run: python Normalise_Workflow_Key.py
+
       - name: Download the canonical dataset
         if: steps.payload.outputs.needs_sync == 'true'
         run: |
