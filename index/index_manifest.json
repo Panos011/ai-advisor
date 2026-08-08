@@ -1,9 +1,10 @@
 {
   "schema": 1,
   "emb_model": "text-embedding-3-small",
-  "rows": 2225,
+  "rows": 2248,
   "dim": 1536,
   "source_csv": "Embeddings_AI_tools.csv",
-  "built_at": "2026-07-08T12:03:26+00:00",
-  "note": "backfilled from existing artifacts on 2026-07-08"
+  "built_at": "2026-08-08T16:03:24+00:00",
+  "catalog_version": "756555bbafe7d00e",
+  "catalog_generated_at": "2026-08-07T22:47:03.248Z"
 }
