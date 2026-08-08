@@ -1672,12 +1672,23 @@ def expand_common_language_terms(value: Any) -> str:
             hints.append("code review python coding assistant")
         if re.search(r"\bgratis\b", lowered):
             hints.append("free")
-    if re.search(r"\b(?:busco|necesito|notas?|reuniones?|reuni[oó]n|nube|sube|audio)\b", lowered):
+    # Shared technical words such as "audio" also occur in ordinary English.
+    # Require an actual Spanish-language signal before applying Spanish hints;
+    # otherwise an English dubbing request silently becomes "local-only".
+    if re.search(
+        r"[áéíóúñü¿¡]|\b(?:busco|necesito|notas?|reuniones?|reuni[oó]n|nube|sube|sin)\b",
+        lowered,
+    ):
         if re.search(r"\b(?:notas?|reuniones?|reuni[oó]n)\b", lowered):
             hints.append("meeting notes notetaker transcription summarizer")
         if re.search(r"\b(?:sin\s+nube|no\s+se\s+sube|no\s+sube|local|audio)\b", lowered):
             hints.append("local-only on-device offline no cloud audio stays on device never uploads recordings")
-    if re.search(r"\b(?:cherche|preneur|r[ée]union|notes?|hors\s+ligne|sans\s+cloud|jamais\s+upload[ée]|audio)\b", lowered):
+    # "notes" and "audio" are also English words, so they cannot by
+    # themselves identify a French request either.
+    if re.search(
+        r"[àâçéèêëîïôûùüÿœæ]|\b(?:cherche|preneur|r[ée]union|hors\s+ligne|sans\s+cloud|jamais\s+upload[ée])\b",
+        lowered,
+    ):
         if re.search(r"\b(?:preneur|r[ée]union|notes?)\b", lowered):
             hints.append("meeting notes notetaker transcription summarizer")
         if re.search(r"\b(?:hors\s+ligne|sans\s+cloud|jamais\s+upload[ée]|local|audio)\b", lowered):

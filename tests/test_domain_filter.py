@@ -225,5 +225,35 @@ class MarketingVerbTests(unittest.TestCase):
         self.assertNotIn("marketing", api.expand_common_language_terms("transcribe audio"))
 
 
+class LanguageHintIsolationTests(unittest.TestCase):
+    """Shared English words must not activate foreign-language constraints."""
+
+    def test_english_audio_request_does_not_become_local_only(self):
+        query = (
+            "Translate training videos into Spanish, preserve the speaker voice, "
+            "lip-sync the new audio, and export caption files."
+        )
+        expanded = api.expand_common_language_terms(query)
+
+        self.assertFalse(api.requires_local_only(expanded))
+        self.assertNotIn("no cloud", expanded.lower())
+
+    def test_real_spanish_no_cloud_request_keeps_privacy_hint(self):
+        expanded = api.expand_common_language_terms(
+            "Necesito notas de reuniones; el audio no se sube a la nube."
+        )
+
+        self.assertTrue(api.requires_local_only(expanded))
+        self.assertIn("no cloud", expanded.lower())
+
+    def test_real_french_offline_request_keeps_privacy_hint(self):
+        expanded = api.expand_common_language_terms(
+            "Je cherche un preneur de notes audio hors ligne."
+        )
+
+        self.assertTrue(api.requires_local_only(expanded))
+        self.assertIn("no cloud", expanded.lower())
+
+
 if __name__ == "__main__":
     unittest.main()
