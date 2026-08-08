@@ -1,0 +1,78 @@
+name: Advisor tool publication sync
+
+on:
+  repository_dispatch:
+    types: [advisor-tool-upserted, advisor-catalog-backfill-requested]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: advisor-dataset-writes
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Git LFS install
+        run: git lfs install
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install publication dependencies
+        run: |
+          pip install -r requirements.runtime.txt pandas firebase-admin
+
+      - name: Write bounded dispatch payload
+        env:
+          CLIENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
+        run: printf '%s' "$CLIENT_PAYLOAD" > /tmp/publication_payload.json
+
+      - name: Apply publication and rebuild retrieval indexes
+        run: |
+          python Apply_Publications.py --payload /tmp/publication_payload.json
+          python Data_Cleaning.py
+          python Index.py
+
+      - name: Commit and push the rebuilt dataset
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add AI_tools.csv Clean_AI_tools.csv Embeddings_AI_tools.csv index/
+          if ! git diff --cached --quiet; then
+            git commit -m "Publish CommAI catalogue to Advisor"
+            git fetch origin main
+            git rebase origin/main || git rebase --abort
+            git push origin main
+          else
+            echo "Advisor dataset already matches this publication."
+          fi
+
+      - name: Verify the rebuilt index reached production
+        id: production
+        run: |
+          python Wait_For_Advisor_Deploy.py \
+            --manifest index/index_manifest.json \
+            --timeout 1200 \
+            --initial-delay 60
+
+      - name: Settle CommAI publication readiness
+        if: always()
+        run: |
+          python Advisor_Publication_Callback.py \
+            --payload /tmp/publication_payload.json \
+            --outcome "${{ steps.production.outcome }}" \
+            --error "Advisor dataset rebuild or production verification failed. Inspect GitHub run ${{ github.run_id }}."
