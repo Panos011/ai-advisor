@@ -65,6 +65,12 @@ steps:
       - --cpu=1
       - --timeout=300
       - --concurrency=40
+      # Keep the idle development-stage service at zero cost, while bounding a
+      # genuine traffic spike to two concurrently running instances. These
+      # flags are explicit so a future deploy cannot silently restore an old
+      # console setting.
+      - --min-instances=0
+      - --max-instances=2
       - --set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest
       - --set-env-vars=CHAT_MODEL=gpt-5.4-mini,LIGHT_CHAT_MODEL=gpt-5.4-nano,EMB_MODEL=text-embedding-3-small
 

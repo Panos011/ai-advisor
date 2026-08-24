@@ -158,9 +158,11 @@ regex gates and onto the planner over time.
 
 ### A/B experiments ('experiment.sh')
 './experiment.sh' deploys the current working tree — uncommitted changes and all
-— to a **separate** Cloud Run service, 'commai-advisor-exp', then scores it
-against production on the semantic eval. '--no-deploy' re-scores whatever is
-already there, and 'RUNS=3' does more passes.
+— to a **separate**, scale-to-zero Cloud Run service, 'commai-advisor-exp', then
+scores that isolated service on the semantic eval. '--no-deploy' re-scores
+whatever is already there, and 'RUNS=3' does more passes. Production comparison
+is deliberately opt-in with 'COMPARE_PRODUCTION=1 ./experiment.sh'; ordinary
+development must not turn the customer service into a benchmark target.
 
 Use it instead of deploying a '--no-traffic' revision on the production service.
 A '--no-traffic' deploy stops production routing to LATEST and pins it to the
